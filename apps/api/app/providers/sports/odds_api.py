@@ -1,0 +1,731 @@
+"""The Odds API — odds across all active game sports (soccer, tennis, US leagues, etc.)."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+import httpx
+
+from app import config
+from app.services.freshness import filter_upcoming_events, hours_until_event
+
+logger = logging.getLogger(__name__)
+
+ODDS_API_BASE = "https://api.the-odds-api.com/v4"
+PARALLEL_FETCHES = 10
+MAX_CACHE_HORIZON_HOURS = 168
+
+# Cache the last successful odds pull so repeated scans don't burn API credits,
+# and so an exhausted quota degrades to last-known odds instead of nothing.
+_CACHE_PATH = Path(__file__).resolve().parents[3] / ".odds_cache.json"
+
+# Legacy fallback when API key missing or /sports fails.
+DEFAULT_SPORT_KEYS = (
+    "americanfootball_nfl",
+    "basketball_nba",
+    "baseball_mlb",
+    "icehockey_nhl",
+    "soccer_fifa_world_cup",
+    "tennis_atp_wimbledon",
+    "tennis_wta_wimbledon",
+)
+
+# Prefer fetching these first (ordering only — all active game sports are included).
+PRIORITY_SPORT_KEYS = (
+    "americanfootball_nfl",
+    "americanfootball_nfl_preseason",
+    "basketball_nba",
+    "basketball_wnba",
+    "baseball_mlb",
+    "icehockey_nhl",
+    "soccer_fifa_world_cup",
+    "soccer_epl",
+    "soccer_uefa_champs_league",
+    "soccer_usa_mls",
+    "tennis_atp_wimbledon",
+    "tennis_wta_wimbledon",
+    "tennis_atp_us_open",
+    "tennis_wta_us_open",
+    "mma_mixed_martial_arts",
+    "boxing_boxing",
+    "americanfootball_ncaaf",
+    "golf_pga_championship",
+    "cricket_international_t20",
+)
+
+SUMMER_PRIORITY_KEYS = (
+    "baseball_mlb",
+    "basketball_wnba",
+    "soccer_usa_mls",
+    "soccer_fifa_world_cup",
+    "soccer_epl",
+    "soccer_uefa_champs_league",
+    "tennis_atp_wimbledon",
+    "tennis_wta_wimbledon",
+    "mma_mixed_martial_arts",
+    "boxing_boxing",
+    "americanfootball_nfl_preseason",
+    "americanfootball_ncaaf",
+    "cricket_international_t20",
+)
+
+WINTER_PRIORITY_KEYS = (
+    "basketball_nba",
+    "icehockey_nhl",
+    "americanfootball_nfl",
+    "baseball_mlb",
+    "soccer_epl",
+    "soccer_uefa_champs_league",
+    "mma_mixed_martial_arts",
+    "boxing_boxing",
+)
+
+OFF_SEASON_SKIP_BY_MONTH: dict[tuple[int, ...], frozenset[str]] = {
+    (3, 4, 5, 6, 7): frozenset({"americanfootball_nfl"}),
+    (7, 8, 9): frozenset({"basketball_nba"}),
+    (6, 7, 8): frozenset({"icehockey_nhl"}),
+}
+
+IN_SEASON_RETRY_KEYS = frozenset(
+    {"baseball_mlb", "basketball_wnba", "basketball_nba", "icehockey_nhl", "americanfootball_nfl"}
+)
+
+SPORT_LABELS = {
+    "americanfootball_nfl": "NFL",
+    "americanfootball_nfl_preseason": "NFL Preseason",
+    "basketball_nba": "NBA",
+    "basketball_wnba": "WNBA",
+    "baseball_mlb": "MLB",
+    "icehockey_nhl": "NHL",
+    "americanfootball_ncaaf": "NCAAF",
+    "soccer_usa_mls": "MLS",
+    "americanfootball_cfl": "CFL",
+    "soccer_fifa_world_cup": "FIFA World Cup",
+    "soccer_epl": "EPL",
+    "mma_mixed_martial_arts": "MMA",
+    "boxing_boxing": "Boxing",
+}
+
+
+def _is_game_sport(sport: dict[str, Any]) -> bool:
+    """Exclude futures/outrights and inactive entries — keep matchups books post."""
+    if not sport.get("active"):
+        return False
+    key = str(sport.get("key") or "")
+    if not key:
+        return False
+    if key.startswith("politics_"):
+        return False
+    lowered = key.lower()
+    if "_winner" in lowered or lowered.endswith("_winner"):
+        return False
+    if "championship_winner" in lowered or "world_series_winner" in lowered:
+        return False
+    return True
+
+
+def _sport_label(key: str, sport_title: str | None = None) -> str:
+    if key in SPORT_LABELS:
+        return SPORT_LABELS[key]
+    if sport_title:
+        return sport_title
+    # soccer_epl -> EPL, tennis_atp_wimbledon -> ATP Wimbledon
+    parts = key.split("_")
+    if len(parts) >= 2:
+        return " ".join(p.upper() if len(p) <= 4 else p.title() for p in parts[1:])
+    return key.replace("_", " ").title()
+
+
+def _to_int(value: str | None) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _event_sport_key(event: dict[str, Any]) -> str:
+    return str(event.get("_sport_key") or event.get("sport_key") or "")
+
+
+def _near_term_cache_events(
+    events: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Upcoming games within the cache horizon — drops far-future slates (e.g. full NFL season)."""
+    raw_count = len(events)
+    filtered = filter_upcoming_events(list(events))
+    filtered = filter_events_within_horizon(filtered)
+    near_keys = {_event_sport_key(e) for e in filtered if _event_sport_key(e)}
+    meta = {
+        "raw_count": raw_count,
+        "near_term_count": len(filtered),
+        "dropped_far_out": max(0, raw_count - len(filtered)),
+        "near_term_league_keys": sorted(near_keys),
+        "near_term_leagues": sorted(
+            {str(e.get("_sport_label") or e.get("sport_title") or _sport_label(_event_sport_key(e))) for e in filtered}
+        ),
+    }
+    return filtered, meta
+
+
+def _cache_needs_live_refresh(near_term_keys: frozenset[str]) -> bool:
+    """True when cached odds omit in-season leagues (e.g. MLB in July) — rescore alone cannot fix."""
+    if not near_term_keys:
+        return True
+    month = datetime.now(UTC).month
+    skip = _off_season_skip_keys()
+    if month in (4, 5, 6, 7, 8, 9):
+        core_in_season = frozenset({"baseball_mlb", "basketball_wnba"}) - skip
+    else:
+        core_in_season = frozenset({"basketball_nba", "icehockey_nhl", "americanfootball_nfl"}) - skip
+    if core_in_season and not (near_term_keys & core_in_season):
+        return True
+    preferred = SUMMER_PRIORITY_KEYS if month in (4, 5, 6, 7, 8, 9) else WINTER_PRIORITY_KEYS
+    expected = {k for k in preferred[:8] if k not in skip}
+    return len(near_term_keys & expected) < 2 and len(near_term_keys) <= 3
+
+
+def _maybe_compact_cache(cache: dict[str, Any]) -> dict[str, Any]:
+    """Rewrite disk cache when it holds mostly far-future noise — no API credits spent."""
+    events = list(cache.get("events") or [])
+    if not events:
+        return cache
+    filtered, meta = _near_term_cache_events(events)
+    if meta["dropped_far_out"] <= 0:
+        return cache
+    logger.info(
+        "Compacting odds cache: %d -> %d events (dropped %d far-future)",
+        meta["raw_count"],
+        meta["near_term_count"],
+        meta["dropped_far_out"],
+    )
+    stats = dict(cache.get("stats") or {})
+    stats.update(
+        {
+            "events_dropped_far_out": meta["dropped_far_out"],
+            "leagues_with_near_term_games": meta["near_term_leagues"],
+            "cache_compacted": True,
+        }
+    )
+    _write_cache(filtered, stats)
+    return {
+        "fetched_at": cache.get("fetched_at"),
+        "events": filtered,
+        "stats": stats,
+    }
+
+
+def _read_cache() -> dict[str, Any] | None:
+    try:
+        if not _CACHE_PATH.exists():
+            return None
+        with _CACHE_PATH.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict) and isinstance(data.get("events"), list):
+            return _maybe_compact_cache(data)
+    except (OSError, ValueError) as exc:
+        logger.info("Odds cache read failed: %s", exc)
+    return None
+
+
+def _write_cache(events: list[dict[str, Any]], stats: dict[str, Any]) -> None:
+    try:
+        payload = {
+            "fetched_at": datetime.now(UTC).isoformat(),
+            "events": events,
+            "stats": {k: v for k, v in stats.items() if k != "cached"},
+        }
+        with _CACHE_PATH.open("w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+    except (OSError, TypeError) as exc:
+        logger.info("Odds cache write failed: %s", exc)
+
+
+def _invalidate_cache() -> None:
+    try:
+        _CACHE_PATH.unlink(missing_ok=True)
+    except OSError as exc:
+        logger.info("Odds cache delete failed: %s", exc)
+
+
+def _cache_age_minutes(fetched_at: str | None) -> float | None:
+    if not fetched_at:
+        return None
+    try:
+        ts = datetime.fromisoformat(fetched_at)
+        return (datetime.now(UTC) - ts).total_seconds() / 60
+    except ValueError:
+        return None
+
+
+def odds_cache_status() -> dict[str, Any]:
+    """Disk cache state — no API credits spent."""
+    cache = _read_cache()
+    age = _cache_age_minutes(cache.get("fetched_at")) if cache else None
+    ttl = max(0, config.settings.odds_cache_ttl_minutes)
+    raw_events = list(cache.get("events") or []) if cache else []
+    near_term, near_meta = _near_term_cache_events(raw_events) if raw_events else ([], {})
+    near_keys = frozenset(near_meta.get("near_term_league_keys") or [])
+    needs_live = _cache_needs_live_refresh(near_keys) if near_term else bool(raw_events)
+    has_data = bool(near_term)
+    within_ttl = age is not None and age <= ttl
+    fresh = has_data and within_ttl and not needs_live
+    return {
+        "has_data": has_data,
+        "age_minutes": round(age, 1) if age is not None else None,
+        "fresh": fresh,
+        "cache_needs_live_refresh": needs_live,
+        "near_term_event_count": len(near_term),
+        "near_term_leagues": near_meta.get("near_term_leagues") or [],
+        "ttl_minutes": ttl,
+        "minutes_until_stale": round(max(0.0, ttl - age), 1) if age is not None and within_ttl else 0.0,
+        "event_count": len(raw_events),
+        "fetched_at": cache.get("fetched_at") if cache else None,
+        "stats": dict(cache.get("stats") or {}) if cache else {},
+    }
+
+
+def estimate_live_scan_credits(sport_count: int | None = None) -> int:
+    """Rough credits for a live pull: list_sports (1) + one odds call per sport."""
+    if sport_count is None:
+        max_sports = config.settings.odds_max_sports_per_scan
+        if config.settings.odds_scan_scope == "full" or max_sports == 0:
+            sport_count = len(PRIORITY_SPORT_KEYS) + 20
+        else:
+            sport_count = max_sports if max_sports > 0 else len(PRIORITY_SPORT_KEYS)
+    return sport_count + 1
+
+
+def _off_season_skip_keys() -> frozenset[str]:
+    month = datetime.now(UTC).month
+    skip: set[str] = set()
+    for months, sport_keys in OFF_SEASON_SKIP_BY_MONTH.items():
+        if month in months:
+            skip.update(sport_keys)
+    return frozenset(skip)
+
+
+def _limit_sport_keys(keys: tuple[str, ...], *, force_refresh: bool = False) -> tuple[str, ...]:
+    """Apply scan scope / max-sports settings to conserve API credits."""
+    scope = (config.settings.odds_scan_scope or "priority").lower()
+    max_sports = int(config.settings.odds_max_sports_per_scan or 0)
+
+    if scope == "priority":
+        priority = {k for k in PRIORITY_SPORT_KEYS}
+        filtered = tuple(k for k in keys if k in priority)
+        if filtered:
+            keys = filtered
+
+    if not force_refresh:
+        skip = _off_season_skip_keys()
+        if skip:
+            keys = tuple(k for k in keys if k not in skip)
+
+    keys = _seasonal_key_order(keys)
+
+    if max_sports > 0:
+        keys = keys[:max_sports]
+
+    return keys
+
+
+def _seasonal_key_order(keys: tuple[str, ...]) -> tuple[str, ...]:
+    month = datetime.now(UTC).month
+    preferred = SUMMER_PRIORITY_KEYS if month in (4, 5, 6, 7, 8, 9) else WINTER_PRIORITY_KEYS
+    rank = {k: i for i, k in enumerate(preferred)}
+    return tuple(sorted(keys, key=lambda k: (rank.get(k, 999), k)))
+
+
+def filter_events_within_horizon(
+    events: list[dict[str, Any]],
+    *,
+    max_hours: float = MAX_CACHE_HORIZON_HOURS,
+) -> list[dict[str, Any]]:
+    """Drop far-future lines (e.g. full NFL season) — saves cache noise and bad rescans."""
+    out: list[dict[str, Any]] = []
+    for event in events:
+        hours = hours_until_event(event.get("commence_time"))
+        if hours is None or hours <= 0:
+            continue
+        if hours <= max_hours:
+            out.append(event)
+    return out
+
+
+class OddsApiError(Exception):
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class OddsApiClient:
+    def __init__(self, api_key: str | None = None) -> None:
+        keys = config.settings.odds_api_keys
+        self.api_key = api_key or (keys[0] if keys else "")
+        if not self.api_key:
+            raise OddsApiError("ODDS_API_KEY is not configured")
+        self.requests_remaining: str | None = None
+        self.requests_used: str | None = None
+        self.quota_exhausted: bool = False
+
+    async def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        query = {"apiKey": self.api_key, **(params or {})}
+        try:
+            async with httpx.AsyncClient(timeout=45.0) as client:
+                response = await client.get(f"{ODDS_API_BASE}{path}", params=query)
+        except (httpx.HTTPError, OSError) as exc:
+            raise OddsApiError(
+                f"Cannot reach The Odds API (network/DNS): {exc}",
+            ) from exc
+
+        remaining = response.headers.get("x-requests-remaining")
+        if remaining is not None:
+            self.requests_remaining = remaining
+            try:
+                if int(remaining) <= 0:
+                    self.quota_exhausted = True
+            except ValueError:
+                pass
+        used = response.headers.get("x-requests-used")
+        if used is not None:
+            self.requests_used = used
+
+        if response.status_code != 200:
+            # 401/402 with a zero-remaining quota means the monthly plan is used up.
+            if response.status_code in (401, 402) and "usage" in response.text.lower():
+                self.quota_exhausted = True
+            raise OddsApiError(
+                f"Odds API {path} failed: {response.status_code} {response.text[:200]}",
+                status_code=response.status_code,
+            )
+        return response.json()
+
+    async def list_sports(self) -> list[dict[str, Any]]:
+        data = await self._get("/sports")
+        return data if isinstance(data, list) else []
+
+    async def fetch_odds(
+        self,
+        sport_key: str,
+        *,
+        markets: str = "h2h,spreads,totals",
+        regions: str = "us",
+    ) -> list[dict[str, Any]]:
+        data = await self._get(
+            f"/sports/{sport_key}/odds",
+            {
+                "regions": regions,
+                "markets": markets,
+                "oddsFormat": "american",
+            },
+        )
+        return data if isinstance(data, list) else []
+
+    async def fetch_scores(
+        self,
+        sport_key: str,
+        *,
+        days_from: int = 7,
+    ) -> list[dict[str, Any]]:
+        """Completed games with scores — 1 API credit per sport."""
+        data = await self._get(
+            f"/sports/{sport_key}/scores",
+            {"daysFrom": max(1, min(days_from, 3))},
+        )
+        return data if isinstance(data, list) else []
+
+
+def _mask_odds_key(key: str) -> str:
+    if len(key) <= 8:
+        return "••••"
+    return f"{key[:4]}…{key[-4:]}"
+
+
+async def probe_all_odds_keys() -> dict[str, Any]:
+    """Probe every configured key via free /sports — sum credits across all keys."""
+    keys = config.settings.odds_api_keys
+    entries: list[dict[str, Any]] = []
+    total_remaining = 0
+    have_remaining = False
+    active_index: int | None = None
+    active_client: OddsApiClient | None = None
+    active_sports: list[dict[str, Any]] = []
+    last_error: str | None = None
+    exhausted_valid = 0
+    valid_count = 0
+
+    for idx, key in enumerate(keys):
+        client = OddsApiClient(key)
+        entry: dict[str, Any] = {
+            "index": idx + 1,
+            "masked": _mask_odds_key(key),
+            "remaining": None,
+            "used": None,
+            "exhausted": False,
+            "valid": False,
+        }
+        try:
+            sports = await client.list_sports()
+            entry["valid"] = True
+            valid_count += 1
+            rem = _to_int(client.requests_remaining)
+            used = _to_int(client.requests_used)
+            if rem is not None:
+                entry["remaining"] = rem
+                have_remaining = True
+                total_remaining += max(0, rem)
+            if used is not None:
+                entry["used"] = used
+            entry["exhausted"] = client.quota_exhausted
+            if client.quota_exhausted:
+                exhausted_valid += 1
+            if active_index is None and not client.quota_exhausted and sports:
+                active_index = idx
+                active_client = client
+                active_sports = sports
+        except OddsApiError as exc:
+            last_error = str(exc)
+            entry["error"] = last_error[:120]
+            if "INVALID_KEY" in last_error:
+                logger.info("Odds key #%d rejected (invalid)", idx + 1)
+            else:
+                logger.info("Odds key #%d error: %s", idx + 1, exc)
+        entries.append(entry)
+
+    quota_exhausted = bool(keys) and valid_count > 0 and exhausted_valid == valid_count and active_index is None
+
+    return {
+        "key_count": len(keys),
+        "keys": entries,
+        "total_remaining": total_remaining if have_remaining else None,
+        "active_key_index": active_index,
+        "active_client": active_client,
+        "active_sports": active_sports,
+        "quota_exhausted": quota_exhausted,
+        "error": last_error,
+    }
+
+
+async def _select_active_client() -> tuple[OddsApiClient | None, list[dict[str, Any]], dict[str, Any]]:
+    """Probe each configured key; use the first with quota. Sums credits across all keys."""
+    probe = await probe_all_odds_keys()
+    client = probe.get("active_client")
+    sports = probe.get("active_sports") or []
+    info: dict[str, Any] = {
+        "key_count": probe["key_count"],
+        "active_key_index": probe["active_key_index"],
+        "total_remaining": probe["total_remaining"],
+        "quota_exhausted": probe["quota_exhausted"],
+        "error": probe.get("error"),
+        "keys": probe["keys"],
+    }
+    if client is not None:
+        info["requests_remaining"] = client.requests_remaining
+        info["requests_used"] = client.requests_used
+    return client, sports, info
+
+
+async def resolve_sport_keys() -> tuple[str, ...]:
+    """All active game sports from The Odds API (soccer, tennis, US leagues, etc.)."""
+    if not config.settings.odds_api_keys:
+        return DEFAULT_SPORT_KEYS
+    client, sports, _ = await _select_active_client()
+    if client is None or not sports:
+        return DEFAULT_SPORT_KEYS
+
+    active_game = [s for s in sports if _is_game_sport(s)]
+    if not active_game:
+        return DEFAULT_SPORT_KEYS
+
+    priority_index = {k: i for i, k in enumerate(PRIORITY_SPORT_KEYS)}
+    active_game.sort(
+        key=lambda s: (priority_index.get(s["key"], 999), str(s.get("title") or s["key"])),
+    )
+    return tuple(s["key"] for s in active_game)
+
+
+async def _fetch_sport_odds(
+    client: OddsApiClient,
+    key: str,
+    sport_title: str | None,
+    sem: asyncio.Semaphore,
+) -> tuple[str, list[dict[str, Any]]]:
+    async with sem:
+        label = _sport_label(key, sport_title)
+        for markets in ("h2h,spreads,totals", "h2h"):
+            try:
+                rows = await client.fetch_odds(key, markets=markets)
+                for row in rows:
+                    row["_sport_label"] = label
+                    row["_sport_key"] = key
+                if not rows and key in IN_SEASON_RETRY_KEYS:
+                    await asyncio.sleep(0.75)
+                    rows = await client.fetch_odds(key, markets=markets)
+                    for row in rows:
+                        row["_sport_label"] = label
+                        row["_sport_key"] = key
+                return key, rows
+            except OddsApiError as exc:
+                if markets == "h2h":
+                    logger.info("Odds skip %s: %s", key, exc)
+                    return key, []
+        return key, []
+
+
+def _stale_cache_response(
+    cache: dict[str, Any] | None, info: dict[str, Any]
+) -> tuple[list[dict[str, Any]], dict[str, Any]] | None:
+    """Serve last-known odds when every key is spent, so scans still return data."""
+    if not cache or not cache.get("events"):
+        return None
+    age = _cache_age_minutes(cache.get("fetched_at"))
+    stats: dict[str, Any] = dict(cache.get("stats") or {})
+    stats.update(
+        {
+            "configured": True,
+            "cached": True,
+            "stale": True,
+            "cache_age_minutes": round(age, 1) if age is not None else None,
+            "events": len(cache["events"]),
+            "quota_exhausted": True,
+            "credits_used": 0,
+            "key_count": info.get("key_count"),
+            "total_remaining": info.get("total_remaining"),
+        }
+    )
+    return filter_upcoming_events(filter_events_within_horizon(list(cache["events"]))), stats
+
+
+async def fetch_all_sports_odds(
+    sport_keys: tuple[str, ...] | None = None,
+    *,
+    force_refresh: bool = False,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Fetch odds for all active game sports. Returns (events, stats).
+
+    Uses multiple API keys with automatic failover and caches results so
+    repeated scans within the TTL cost zero credits.
+    """
+    if not config.settings.odds_api_keys:
+        return [], {"configured": False, "error": "ODDS_API_KEY is not configured"}
+
+    cache = _read_cache()
+
+    # Serve fresh cache without spending any credits.
+    if not force_refresh and cache:
+        age = _cache_age_minutes(cache.get("fetched_at"))
+        ttl = max(0, config.settings.odds_cache_ttl_minutes)
+        if age is not None and age <= ttl:
+            raw_events = list(cache.get("events") or [])
+            events, near_meta = _near_term_cache_events(raw_events)
+            near_keys = frozenset(near_meta.get("near_term_league_keys") or [])
+            needs_live = _cache_needs_live_refresh(near_keys) if events else bool(raw_events)
+            if not events and raw_events:
+                logger.info(
+                    "Odds cache has %d events but none upcoming — invalidating cache",
+                    len(raw_events),
+                )
+                _invalidate_cache()
+            stats = dict(cache.get("stats") or {})
+            stats.update(
+                {
+                    "configured": True,
+                    "cached": True,
+                    "stale": False,
+                    "cache_age_minutes": round(age, 1),
+                    "events": len(events),
+                    "events_dropped_past": len(raw_events) - len(events),
+                    "events_dropped_far_out": near_meta.get("dropped_far_out", 0),
+                    "leagues_with_near_term_games": near_meta.get("near_term_leagues") or [],
+                    "cache_needs_live_refresh": needs_live,
+                    "credits_used": 0,
+                    "scan_scope": config.settings.odds_scan_scope,
+                    "max_sports_per_scan": config.settings.odds_max_sports_per_scan,
+                }
+            )
+            return events, stats
+
+    client, all_sports, info = await _select_active_client()
+
+    # Every key exhausted/invalid → fall back to last-known odds if we have them.
+    if client is None:
+        stale = _stale_cache_response(cache, info)
+        if stale is not None:
+            return stale
+        return [], {"configured": True, "events": 0, "sports": {}, **info}
+
+    if sport_keys is None:
+        title_by_key = {s["key"]: s.get("title") for s in all_sports if s.get("key")}
+        active_game = [s for s in all_sports if _is_game_sport(s)]
+        priority_index = {k: i for i, k in enumerate(PRIORITY_SPORT_KEYS)}
+        active_game.sort(
+            key=lambda s: (priority_index.get(s["key"], 999), str(s.get("title") or s["key"])),
+        )
+        keys = tuple(s["key"] for s in active_game) or DEFAULT_SPORT_KEYS
+    else:
+        keys = sport_keys
+        title_by_key = {}
+
+    keys = _limit_sport_keys(keys, force_refresh=force_refresh)
+    skip_set = _off_season_skip_keys()
+    stats_skipped = sorted(_sport_label(k) for k in skip_set)
+
+    events: list[dict[str, Any]] = []
+    stats: dict[str, Any] = {
+        "configured": True,
+        "cached": False,
+        "sports": {},
+        "events": 0,
+        "sport_keys": list(keys),
+        "sports_scanned": len(keys),
+        "key_count": info.get("key_count"),
+        "active_key_index": info.get("active_key_index"),
+        "scan_scope": config.settings.odds_scan_scope,
+        "max_sports_per_scan": config.settings.odds_max_sports_per_scan,
+        "credits_used": len(keys) + 1,
+    }
+    if info.get("total_remaining") is not None:
+        stats["total_remaining"] = info.get("total_remaining")
+
+    sem = asyncio.Semaphore(PARALLEL_FETCHES)
+    results = await asyncio.gather(
+        *[
+            _fetch_sport_odds(client, key, title_by_key.get(key), sem)
+            for key in keys
+        ]
+    )
+
+    for key, rows in results:
+        events.extend(rows)
+        stats["sports"][key] = len(rows)
+
+    if client.requests_remaining is not None:
+        stats["requests_remaining"] = client.requests_remaining
+    if client.requests_used is not None:
+        stats["requests_used"] = client.requests_used
+    if client.quota_exhausted:
+        stats["quota_exhausted"] = True
+
+    raw_count = len(events)
+    events = filter_upcoming_events(events)
+    events = filter_events_within_horizon(events)
+    stats["events_before_horizon"] = raw_count
+    stats["events_dropped_far_out"] = max(0, raw_count - len(events))
+    stats["events"] = len(events)
+    stats["leagues_with_events"] = sorted(
+        {_sport_label(k, title_by_key.get(k)) for k, n in stats["sports"].items() if n > 0}
+    )
+    stats["leagues_with_near_term_games"] = sorted(
+        {str(e.get("_sport_label") or e.get("sport_title") or "Sports") for e in events}
+    )
+    stats["skipped_off_season"] = stats_skipped if not force_refresh else []
+
+    # Only cache near-term games so rescans don't resurrect far-future NFL slates.
+    if events:
+        _write_cache(events, stats)
+
+    return events, stats

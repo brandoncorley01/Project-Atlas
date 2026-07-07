@@ -1,0 +1,116 @@
+import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
+import { DEFAULT_API_BASE } from "@/lib/api-config";
+import { mergeOddsKeyProbe } from "@/lib/merge-odds-status";
+import { probeOddsKeysFromEnv } from "@/lib/odds-key-probe";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? DEFAULT_API_BASE;
+const PROXY_TIMEOUT_MS = 60_000;
+const DASHBOARD_PROXY_TIMEOUT_MS = 50_000;
+
+async function proxyRequest(request: NextRequest, pathSegments: string[]) {
+  try {
+    const supabase = await createClient();
+    const {
+      data: { session },
+      error: sessionError,
+    } = await supabase.auth.getSession();
+
+    if (sessionError || !session?.user) {
+      return NextResponse.json({ detail: "Not signed in" }, { status: 401 });
+    }
+
+    const token = session.access_token;
+    if (!token) {
+      return NextResponse.json({ detail: "No access token — sign out and sign in again" }, { status: 401 });
+    }
+
+    const subpath = pathSegments.join("/");
+    const target = `${API_BASE}/${subpath}${request.nextUrl.search}`;
+    const timeoutMs = subpath === "dashboard" ? DASHBOARD_PROXY_TIMEOUT_MS : PROXY_TIMEOUT_MS;
+
+    const hasBody = request.method !== "GET" && request.method !== "HEAD";
+    const body = hasBody ? await request.text() : undefined;
+
+    const upstream = await fetch(target, {
+      method: request.method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        Connection: "close",
+      },
+      body: body || undefined,
+      cache: "no-store",
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+
+    const text = await upstream.text();
+    if (!upstream.ok) {
+      console.error("[atlas proxy]", target, upstream.status, text.slice(0, 300));
+    }
+
+    if (upstream.ok && subpath === "providers/status") {
+      try {
+        const data = JSON.parse(text) as { odds_api?: Record<string, unknown> };
+        const probe = await probeOddsKeysFromEnv();
+        if (probe.keys.length) {
+          data.odds_api = mergeOddsKeyProbe(data.odds_api, probe);
+          return NextResponse.json(data, { status: upstream.status });
+        }
+      } catch {
+        // Fall through to raw upstream body.
+      }
+    }
+
+    return new NextResponse(text, {
+      status: upstream.status,
+      headers: {
+        "Content-Type": upstream.headers.get("Content-Type") ?? "application/json",
+      },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Proxy request failed";
+    const unreachable =
+      message.includes("fetch failed") ||
+      message.includes("ECONNREFUSED") ||
+      message.includes("timeout") ||
+      message.includes("aborted");
+    return NextResponse.json(
+      {
+        detail: unreachable
+          ? process.env.NODE_ENV === "development"
+            ? `Cannot reach API at ${API_BASE}. Tap Restart in the top-right header (~60 seconds).`
+            : "Atlas API is temporarily unavailable. Try again in a moment."
+          : message,
+      },
+      { status: unreachable ? 503 : 500 },
+    );
+  }
+}
+
+type RouteContext = { params: Promise<{ path: string[] }> };
+
+export async function GET(request: NextRequest, context: RouteContext) {
+  const { path } = await context.params;
+  return proxyRequest(request, path);
+}
+
+export async function POST(request: NextRequest, context: RouteContext) {
+  const { path } = await context.params;
+  return proxyRequest(request, path);
+}
+
+export async function PUT(request: NextRequest, context: RouteContext) {
+  const { path } = await context.params;
+  return proxyRequest(request, path);
+}
+
+export async function PATCH(request: NextRequest, context: RouteContext) {
+  const { path } = await context.params;
+  return proxyRequest(request, path);
+}
+
+export async function DELETE(request: NextRequest, context: RouteContext) {
+  const { path } = await context.params;
+  return proxyRequest(request, path);
+}

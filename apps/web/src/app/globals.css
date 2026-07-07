@@ -1,0 +1,83 @@
+@import "tailwindcss";
+
+:root {
+  --background: #0a0e14;
+  --foreground: #f1f5f9;
+  --surface: #141c28;
+  --surface-elevated: #1a2433;
+  --surface-hover: #243044;
+  --border: #2d3a4f;
+  --border-subtle: #1e293b;
+  --muted: #94a3b8;
+  --accent: #3b82f6;
+  --accent-muted: #3b82f620;
+  --success: #22c55e;
+  --warning: #eab308;
+  --danger: #ef4444;
+  --fanduel: #1493ff;
+  --fanduel-muted: #1493ff18;
+  --fanduel-text: #5eb8ff;
+  --radius-card: 0.75rem;
+  --shadow-card: 0 1px 0 rgb(255 255 255 / 0.04), 0 4px 24px rgb(0 0 0 / 0.25);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-surface-hover: var(--surface-hover);
+  --color-border: var(--border);
+  --color-border-subtle: var(--border-subtle);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-muted: var(--accent-muted);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-fanduel: var(--fanduel);
+  --color-fanduel-muted: var(--fanduel-muted);
+  --color-fanduel-text: var(--fanduel-text);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Card shell used across signal modules */
+.atlas-card {
+  border-radius: var(--radius-card);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+
+.atlas-card-interactive:hover {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
+@keyframes atlas-shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.atlas-skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--surface) 0%,
+    var(--surface-hover) 50%,
+    var(--surface) 100%
+  );
+  background-size: 200% 100%;
+  animation: atlas-shimmer 1.4s ease-in-out infinite;
+  border-radius: 0.375rem;
+}

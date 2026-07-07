@@ -1,0 +1,18 @@
+{
+  "name": "project-atlas",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Project Atlas — private AI decision intelligence platform",
+  "scripts": {
+    "dev": "powershell -ExecutionPolicy Bypass -File scripts/start-dev.ps1",
+    "dev:stop": "powershell -ExecutionPolicy Bypass -File scripts/stop-dev.ps1",
+    "dev:restart-api": "powershell -ExecutionPolicy Bypass -File scripts/restart-api.ps1",
+    "dev:tunnel": "powershell -ExecutionPolicy Bypass -File scripts/start-tunnel.ps1",
+    "dev:web": "npm run dev --workspace=apps/web",
+    "build:web": "npm run build --workspace=apps/web",
+    "lint:web": "npm run lint --workspace=apps/web"
+  },
+  "workspaces": [
+    "apps/web"
+  ]
+}
