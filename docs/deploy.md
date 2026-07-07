@@ -2,6 +2,34 @@
 
 Atlas uses a **BFF pattern**: your phone only talks to the Next.js app; the server proxies to FastAPI. You never expose port `8012` to the internet.
 
+**GitHub repo:** [github.com/brandoncorley01/project-atlas](https://github.com/brandoncorley01/project-atlas)
+
+---
+
+## Phase 0 — Push code to GitHub (one time)
+
+If the repo is not on GitHub yet:
+
+1. Create an empty repo at [github.com/new](https://github.com/new) named **project-atlas** (private recommended).
+2. From the project folder:
+
+```powershell
+cd "c:\Users\brand\OneDrive\Desktop\Project Atlas"
+
+git add .
+git commit -m "Ship v1: learning loop, deploy configs for Vercel + Render"
+git branch -M main
+git remote add origin https://github.com/brandoncorley01/project-atlas.git
+git push -u origin main
+```
+
+If `origin` already exists, update it:
+
+```powershell
+git remote set-url origin https://github.com/brandoncorley01/project-atlas.git
+git push -u origin main
+```
+
 ---
 
 ## Option A — Quick test (tunnel, ~5 minutes)
@@ -63,7 +91,7 @@ Supabase → auth + database (already cloud)
 | `SUPABASE_*` | Same as local `.env` |
 | `FINNHUB_API_KEY` | Optional |
 | `ODDS_API_KEY` | Comma-separated keys |
-| `CORS_ORIGINS` | Your Vercel URL, e.g. `https://project-atlas.vercel.app` |
+| `CORS_ORIGINS` | Your Vercel URL, e.g. `https://project-atlas-brandoncorley01.vercel.app` |
 | `ENVIRONMENT` | `production` |
 | `DEFAULT_USER_ID` | Your Supabase user UUID (for future cron jobs) |
 
@@ -85,14 +113,14 @@ Supabase → auth + database (already cloud)
 
 Do **not** set `NEXT_PUBLIC_ATLAS_DEV` in production (hides dev Restart button).
 
-4. Deploy → note URL: `https://your-app.vercel.app`
+4. Deploy → note URL: `https://project-atlas-brandoncorley01.vercel.app` (or similar — use your actual Vercel URL)
 
 ### Step 3 — Supabase production URLs
 
 | Field | Value |
 |-------|--------|
-| **Site URL** | `https://your-app.vercel.app` |
-| **Redirect URLs** | `https://your-app.vercel.app/**` |
+| **Site URL** | `https://project-atlas-brandoncorley01.vercel.app` (your real Vercel URL) |
+| **Redirect URLs** | `https://project-atlas-brandoncorley01.vercel.app/**` |
 
 Keep localhost URLs if you still develop locally.
 
