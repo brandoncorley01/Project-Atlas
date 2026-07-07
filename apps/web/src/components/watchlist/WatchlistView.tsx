@@ -45,8 +45,13 @@ function itemSubtitle(item: WatchlistItem): string {
       return typeof meta.recommendation === "string" ? meta.recommendation : "Options play";
     case "sport_bet":
       return `${meta.bet_type ?? "bet"} · ${meta.event_name ?? ""}`;
-    case "parlay":
-      return `${(meta.legs as unknown[])?.length ?? "?"} legs · ${meta.combined_odds_american != null ? `${meta.combined_odds_american > 0 ? "+" : ""}${meta.combined_odds_american}` : "odds TBD"}`;
+    case "parlay": {
+      const american =
+        typeof meta.combined_odds_american === "number" ? meta.combined_odds_american : null;
+      const oddsLabel =
+        american != null ? `${american > 0 ? "+" : ""}${american}` : "odds TBD";
+      return `${(meta.legs as unknown[])?.length ?? "?"} legs · ${oddsLabel}`;
+    }
     default:
       return item.item_type;
   }

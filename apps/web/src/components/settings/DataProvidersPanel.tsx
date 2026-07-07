@@ -142,7 +142,7 @@ export function DataProvidersPanel() {
       let oddsData = (data.odds_api ?? {}) as OddsStatus;
       if (keysRes.ok) {
         const keyProbe = (await keysRes.json()) as OddsKeyProbeResult;
-        oddsData = mergeOddsKeyProbe(oddsData, keyProbe);
+        oddsData = mergeOddsKeyProbe(oddsData as Record<string, unknown>, keyProbe) as OddsStatus;
       }
       setOdds(oddsData);
     } catch {

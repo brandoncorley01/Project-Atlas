@@ -66,7 +66,9 @@ export function DashboardView() {
   const [sportsOpportunities, setSportsOpportunities] = useState<SignalSummary[]>([]);
   const [bestParlay, setBestParlay] = useState<Parlay | null>(null);
   const [breakingNews, setBreakingNews] = useState<NewsItem[]>([]);
-  const [performanceSummary, setPerformanceSummary] = useState<DashboardResponse["performance_summary"]>(null);
+  const [performanceSummary, setPerformanceSummary] = useState<
+    DashboardResponse["performance_summary"] | undefined
+  >(undefined);
   const [freshnessMeta, setFreshnessMeta] = useState<DashboardResponse["meta"] | null>(null);
 
   const loadDashboard = useCallback(async (opts?: { background?: boolean }) => {
@@ -105,7 +107,7 @@ export function DashboardView() {
       setSportsOpportunities(dashboard.sports_opportunities ?? []);
       setBestParlay(dashboard.best_parlay ?? null);
       setBreakingNews(dashboard.breaking_news ?? []);
-      setPerformanceSummary(dashboard.performance_summary ?? null);
+      setPerformanceSummary(dashboard.performance_summary ?? undefined);
       setFreshnessMeta(dashboard.meta ?? null);
 
       const total =

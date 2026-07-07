@@ -1,15 +1,6 @@
 import type { OddsKeyProbeResult } from "@/lib/odds-key-probe";
 
-type OddsLike = {
-  key_count?: number;
-  keys?: OddsKeyProbeResult["keys"];
-  total_remaining?: number | null;
-  monthly_capacity?: number;
-  active_key_index?: number | null;
-  connected?: boolean;
-  requests_remaining?: string | number | null;
-  [key: string]: unknown;
-} | null | undefined;
+type OddsLike = Record<string, unknown> | null | undefined;
 
 /** Overlay live multi-key probe totals onto a providers/status odds_api payload. */
 export function mergeOddsKeyProbe<T extends OddsLike>(odds: T, probe: OddsKeyProbeResult): NonNullable<T> {
