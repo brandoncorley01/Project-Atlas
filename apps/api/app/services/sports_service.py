@@ -266,7 +266,9 @@ class SportsRefreshService:
 
         if saved:
             from app.services.alert_service import AlertService
+            from app.services.signal_registry_service import SignalRegistryService
 
+            await SignalRegistryService(self.db, self.user_id).register_batch("sports", saved)
             await AlertService(self.db, self.user_id).notify_high_score_signals(
                 "sports",
                 saved,

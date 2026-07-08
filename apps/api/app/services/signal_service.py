@@ -68,7 +68,12 @@ class SignalService:
         if not rows:
             return []
 
-        return await self.db.insert("options_signals", rows)
+        saved = await self.db.insert("options_signals", rows)
+        if saved:
+            from app.services.signal_registry_service import SignalRegistryService
+
+            await SignalRegistryService(self.db, self.user_id).register_batch("options", saved)
+        return saved
 
     async def list_options(
         self,

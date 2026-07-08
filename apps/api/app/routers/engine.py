@@ -91,7 +91,7 @@ async def resolve_outcomes(
     token: str = Depends(get_access_token),
     limit: int = 25,
 ) -> dict:
-    """Auto-grade finished sports picks and log outcomes for Atlas learning."""
+    """Auto-grade finished sports, stock, and options picks for Atlas learning."""
     result = await run_resolve_outcomes_job(user_id, token, limit=limit)
     set_last_job("resolve_outcomes")
     return result

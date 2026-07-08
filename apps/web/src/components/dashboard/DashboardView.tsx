@@ -22,6 +22,11 @@ import { DashboardSkeleton } from "@/components/ui/Skeleton";
 import { QuickStartGuide } from "@/components/ui/QuickStartGuide";
 import { DashboardLegend } from "@/components/dashboard/DashboardLegend";
 import { AtlasBriefingCard, type AtlasBriefing } from "@/components/dashboard/AtlasBriefingCard";
+import {
+  MarketIntelligenceCard,
+  type MarketIntelligence,
+  type TrackingStats,
+} from "@/components/dashboard/MarketIntelligenceCard";
 
 interface DashboardResponse {
   top_opportunities: SignalSummary[];
@@ -31,6 +36,7 @@ interface DashboardResponse {
   best_parlay?: Parlay | null;
   breaking_news: NewsItem[];
   atlas_briefing?: AtlasBriefing | null;
+  market_intelligence?: MarketIntelligence | null;
   performance_summary?: {
     win_rate_30d?: number | null;
     avg_return_30d?: number | null;
@@ -38,6 +44,7 @@ interface DashboardResponse {
     learning_active?: boolean;
     learning_notes?: string[];
     auto_resolved?: number;
+    tracking?: TrackingStats;
   };
   meta: {
     user_id: string;
@@ -69,6 +76,8 @@ export function DashboardView() {
   const [bestParlay, setBestParlay] = useState<Parlay | null>(null);
   const [breakingNews, setBreakingNews] = useState<NewsItem[]>([]);
   const [atlasBriefing, setAtlasBriefing] = useState<AtlasBriefing | null>(null);
+  const [marketIntelligence, setMarketIntelligence] = useState<MarketIntelligence | null>(null);
+  const [trackingStats, setTrackingStats] = useState<TrackingStats | null>(null);
   const [briefingRefreshing, setBriefingRefreshing] = useState(false);
   const [performanceSummary, setPerformanceSummary] = useState<
     DashboardResponse["performance_summary"] | undefined
@@ -112,6 +121,8 @@ export function DashboardView() {
       setBestParlay(dashboard.best_parlay ?? null);
       setBreakingNews(dashboard.breaking_news ?? []);
       setAtlasBriefing(dashboard.atlas_briefing ?? null);
+      setMarketIntelligence(dashboard.market_intelligence ?? null);
+      setTrackingStats(dashboard.performance_summary?.tracking ?? null);
       setPerformanceSummary(dashboard.performance_summary ?? undefined);
       setFreshnessMeta(dashboard.meta ?? null);
 
@@ -270,6 +281,8 @@ export function DashboardView() {
         refreshing={briefingRefreshing}
       />
 
+      <MarketIntelligenceCard intelligence={marketIntelligence} tracking={trackingStats} />
+
       {(performanceSummary?.total_logged ?? 0) > 0 || performanceSummary?.learning_active ? (
         <section className="mb-8 rounded-xl border border-violet-500/30 bg-violet-500/5 p-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
@@ -296,7 +309,8 @@ export function DashboardView() {
       ) : (
         <section className="mb-8 rounded-xl border border-dashed border-border bg-surface/40 p-4 text-sm text-muted">
           After picks settle, tap <strong className="text-foreground">Win</strong> or{" "}
-          <strong className="text-foreground">Loss</strong> on any card — Atlas uses results to improve future scans.{" "}
+          <strong className="text-foreground">Loss</strong> on any card — or let Atlas auto-grade expired picks.
+          Every scan is tracked automatically, even without watchlist.{" "}
           <Link href="/performance" className="text-accent hover:underline">
             Performance →
           </Link>

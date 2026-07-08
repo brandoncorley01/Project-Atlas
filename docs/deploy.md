@@ -158,8 +158,9 @@ Keep localhost URLs if you still develop locally.
 
 With mobile off LAN, focus shifts to:
 
-1. Scheduled auto-grade (stocks, options, sports)
-2. Parlay learning loop
-3. Richer calibration UI
+1. **Auto-tracking flywheel** — every scan registers picks; sports/stocks/options auto-grade on expiry; OpenAI analyzes the full corpus for market intelligence
+2. Scheduled auto-grade cron (Render)
+3. Parlay learning loop
+4. Richer calibration UI
 
 See `docs/08-build-roadmap.md` Milestone 10–11.

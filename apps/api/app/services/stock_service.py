@@ -119,6 +119,9 @@ class StockRefreshService:
             if saved:
                 row = saved[0]
                 persisted = True
+                from app.services.signal_registry_service import SignalRegistryService
+
+                await SignalRegistryService(self.db, self.user_id).register_batch("stock", saved)
         else:
             row["id"] = f"lookup-{sym}"
 
@@ -173,7 +176,9 @@ class StockRefreshService:
 
         if saved:
             from app.services.alert_service import AlertService
+            from app.services.signal_registry_service import SignalRegistryService
 
+            await SignalRegistryService(self.db, self.user_id).register_batch("stock", saved)
             await AlertService(self.db, self.user_id).notify_high_score_signals(
                 "stock",
                 saved,

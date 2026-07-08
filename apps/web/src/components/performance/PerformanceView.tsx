@@ -92,8 +92,8 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
       if (res.ok) {
         setMessage(
           body.resolved > 0
-            ? `Auto-graded ${body.resolved} finished sports pick(s)`
-            : "No new sports results to grade yet",
+            ? `Auto-graded ${body.resolved} pick(s) across sports, stocks & options`
+            : "No new picks to grade yet",
         );
         await refreshSummary();
       } else {
@@ -154,11 +154,11 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
     <div className="space-y-8">
       <section className="rounded-xl border border-violet-500/30 bg-violet-500/5 p-4">
         <h2 className="text-sm font-semibold text-foreground">How Atlas learns</h2>
-        <p className="mt-2 text-sm text-muted">
-          Tap <strong className="text-foreground">Win</strong> or <strong className="text-foreground">Loss</strong> on
-          any pick card after it settles. Sports picks auto-grade when final scores are available. After enough
-          results, Atlas tightens thresholds so weaker edges surface less often.
-        </p>
+          <p className="mt-2 text-sm text-muted">
+            Tap <strong className="text-foreground">Win</strong> or <strong className="text-foreground">Loss</strong> on
+            any pick card after it settles. <strong className="text-foreground">Every scan is auto-tracked</strong> — Atlas
+            also grades sports, stocks, and options when they expire. After enough results, thresholds tighten automatically.
+          </p>
         {summary.learning_active && learningNotes.length > 0 ? (
           <ul className="mt-3 space-y-1 text-sm text-violet-200">
             {learningNotes.map((note) => (
@@ -177,7 +177,7 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
             disabled={loading}
             className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
           >
-            Grade finished sports picks
+            Grade expired picks
           </button>
           <button
             type="button"
@@ -186,6 +186,30 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
             className="rounded-lg border border-sky-500/40 px-4 py-2 text-sm font-medium text-sky-200 hover:bg-sky-500/10 disabled:opacity-50"
           >
             {coachLoading ? "Thinking…" : "AI coach insight"}
+          </button>
+          <button
+            type="button"
+            onClick={async () => {
+              setLoading(true);
+              const token = await getToken();
+              try {
+                const res = await fetch(`${getApiUrl()}/ai/backfill-tracking`, {
+                  method: "POST",
+                  headers: apiRequestHeaders(token),
+                });
+                if (res.ok) {
+                  setMessage("Historical picks registered for tracking");
+                  await refreshSummary();
+                }
+              } catch {
+                setMessage("Backfill failed");
+              }
+              setLoading(false);
+            }}
+            disabled={loading}
+            className="rounded-lg border border-border px-4 py-2 text-sm text-muted hover:bg-surface-hover disabled:opacity-50"
+          >
+            Register all past picks
           </button>
           <button
             type="button"

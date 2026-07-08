@@ -160,7 +160,9 @@ async def providers_status(refresh: bool = False) -> dict:
             "model": openai_model,
             "error": openai_error,
             "features": [
+                "auto-track every scan pick",
                 "daily Atlas briefing",
+                "market intelligence narratives",
                 "coach insight narratives",
                 "deeper pick explanations",
             ],

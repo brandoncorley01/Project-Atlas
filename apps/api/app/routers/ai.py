@@ -5,7 +5,9 @@ from app.db.supabase_client import SupabaseClient
 from app.dependencies import get_access_token, get_current_user_id
 from app.services.ai_narrative_service import ai_narrative_service
 from app.services.llm_service import llm_service
+from app.services.market_intelligence_service import MarketIntelligenceService
 from app.services.performance_service import PerformanceService
+from app.services.signal_registry_service import SignalRegistryService
 from app.services.signal_service import SignalService
 
 router = APIRouter()
@@ -29,7 +31,9 @@ async def ai_status() -> dict:
         "model": llm_service.model if configured else None,
         "error": error,
         "features": [
+            "auto-track every scan pick",
             "daily briefing",
+            "market intelligence",
             "coach insight",
             "deeper pick explanations",
         ],
@@ -54,6 +58,7 @@ async def get_briefing(
         "best_parlay": dashboard.get("best_parlay"),
         "performance_summary": dashboard.get("performance_summary") or {},
         "needs_refresh": (dashboard.get("meta") or {}).get("needs_refresh") or {},
+        "market_intelligence": dashboard.get("market_intelligence") or {},
     }
     briefing = await ai_narrative_service.daily_briefing(
         user_id=user_id,
@@ -115,3 +120,37 @@ async def explain_signal(
         "title": formatted.get("title"),
         **result,
     }
+
+
+@router.get("/ai/intelligence")
+async def get_market_intelligence(
+    refresh: bool = False,
+    days: int = 30,
+    user_id: str = Depends(get_current_user_id),
+    token: str = Depends(get_access_token),
+) -> dict:
+    db = SupabaseClient(token)
+    perf = PerformanceService(db, user_id)
+    registry = SignalRegistryService(db, user_id)
+    summary = await perf.get_summary(days=days)
+    tracking = await registry.tracking_stats()
+    calibration = summary.get("calibration") or {}
+    intelligence = await MarketIntelligenceService(db, user_id).generate(
+        tracking_stats=tracking,
+        perf_summary=summary,
+        calibration=calibration,
+        refresh=refresh,
+    )
+    return {"tracking": tracking, "intelligence": intelligence}
+
+
+@router.post("/ai/backfill-tracking")
+async def backfill_tracking(
+    user_id: str = Depends(get_current_user_id),
+    token: str = Depends(get_access_token),
+) -> dict:
+    """Register historical signals that were never tracked."""
+    registry = SignalRegistryService(SupabaseClient(token), user_id)
+    result = await registry.backfill_all(limit_per_module=200)
+    tracking = await registry.tracking_stats()
+    return {"status": "ok", **result, "tracking": tracking}

@@ -128,6 +128,7 @@ class AiNarrativeService:
             "performance": ctx.get("performance_summary") or {},
             "needs_refresh": ctx.get("needs_refresh") or {},
             "parlay": (ctx.get("best_parlay") or {}).get("title") if ctx.get("best_parlay") else None,
+            "market_intelligence": ctx.get("market_intelligence") or {},
         }
 
         llm_result = await llm_service.complete_json(
