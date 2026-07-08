@@ -101,8 +101,8 @@ export function ParlayCard({ row, rank }: { row: Parlay; rank: number }) {
 
   return (
     <article className="atlas-card atlas-card-interactive p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <p className="text-xs uppercase tracking-wide text-muted">#{rank} · Parlay</p>
             <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${styleColor(row.style)}`}>
@@ -128,7 +128,7 @@ export function ParlayCard({ row, rank }: { row: Parlay; rank: number }) {
             <p className="mt-1 text-xs text-muted">{formatTimeWindow(row)}</p>
           )}
         </div>
-        <div className="grid grid-cols-3 gap-2 sm:min-w-[240px]">
+        <div className="grid w-full shrink-0 grid-cols-3 gap-2 sm:w-auto sm:min-w-[240px]">
           <ScoreBadge label="Confidence" value={row.confidence_score} variant="confidence" />
           <ScoreBadge label="Risk" value={row.risk_score} variant="risk" />
           <ScoreBadge label="Opportunity" value={row.opportunity_score} variant="opportunity" />

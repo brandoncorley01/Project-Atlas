@@ -186,7 +186,7 @@ export function OpportunityList({
                     : "View dates, ITM odds & strategies →"}
               </Link>
             </div>
-            <div className="grid grid-cols-3 gap-2 sm:min-w-[240px]">
+            <div className="grid w-full shrink-0 grid-cols-3 gap-2 sm:w-auto sm:min-w-[240px]">
               <ScoreBadge label="Confidence" value={item.scores.confidence} variant="confidence" />
               <ScoreBadge label="Risk" value={item.scores.risk} variant="risk" />
               <ScoreBadge label="Opportunity" value={item.scores.opportunity} variant="opportunity" />

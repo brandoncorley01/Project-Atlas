@@ -130,8 +130,8 @@ export function SportsSignalCard({
         isTopPick ? "border-violet-500/50 ring-2 ring-violet-500/20" : ""
       }`}
     >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex min-w-0 flex-1 gap-3">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex min-w-0 w-full gap-3 sm:flex-1">
           {onParlayToggle && (
             <ParlayLegToggle
               signalId={row.id}
@@ -139,7 +139,7 @@ export function SportsSignalCard({
               onToggle={onParlayToggle}
             />
           )}
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <p className="text-xs uppercase tracking-wide text-muted">
               #{rank} · Sports{isTopPick && " · TOP PICK"}
@@ -169,8 +169,8 @@ export function SportsSignalCard({
               </span>
             ))}
           </div>
-          <h2 className="mt-1 text-xl font-bold">{row.selection}</h2>
-          <p className="mt-1 text-sm text-muted">{row.event_name}</p>
+          <h2 className="mt-1 text-xl font-bold break-words">{row.selection}</h2>
+          <p className="mt-1 text-sm text-muted break-words">{row.event_name}</p>
           <p className="mt-0.5 text-xs text-muted">Starts {formatEventStart(row.event_start)}</p>
           {row.hours_until_start != null && row.hours_until_start > 0 && (
             <p className="mt-0.5 text-xs text-emerald-400">
@@ -184,14 +184,14 @@ export function SportsSignalCard({
           )}
           </div>
         </div>
-        <div className="grid grid-cols-3 gap-2 sm:min-w-[240px]">
+        <div className="grid w-full shrink-0 grid-cols-3 gap-2 sm:w-auto sm:min-w-[240px]">
           <ScoreBadge label="Confidence" value={row.confidence_score} variant="confidence" />
           <ScoreBadge label="Risk" value={row.risk_score} variant="risk" />
           <ScoreBadge label="Opportunity" value={row.opportunity_score} variant="opportunity" />
         </div>
       </div>
 
-      <p className="mt-3 font-medium">{row.recommendation}</p>
+      <p className="mt-3 break-words font-medium leading-snug">{row.recommendation}</p>
 
       <div className="mt-3 flex flex-wrap gap-2">
         <span className="rounded-md border border-fanduel/40 bg-fanduel-muted px-2 py-1 text-xs font-medium text-fanduel-text">

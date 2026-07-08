@@ -66,8 +66,8 @@ export function StockSignalCard({
 
   return (
     <article className="rounded-xl border border-border bg-surface p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <p className="text-xs uppercase tracking-wide text-muted">#{rank} · Stock swing</p>
             <span
@@ -93,7 +93,7 @@ export function StockSignalCard({
             {timeframeLabel(row.timeframe)} · Hold {row.expected_hold_time ?? "—"}
           </p>
         </div>
-        <div className="grid grid-cols-3 gap-2 sm:min-w-[240px]">
+        <div className="grid w-full shrink-0 grid-cols-3 gap-2 sm:w-auto sm:min-w-[240px]">
           <ScoreBadge label="Conf." value={row.confidence_score} variant="confidence" />
           <ScoreBadge label="Risk" value={row.risk_score} variant="risk" />
           <ScoreBadge label="Opp." value={row.opportunity_score} variant="opportunity" />
