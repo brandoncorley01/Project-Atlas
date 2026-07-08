@@ -342,7 +342,10 @@ def analyze_event(
     setups: list[SportsBetSetup] = []
     for cand in candidates:
         edge = float(cand["edge"])
-        if edge < min_edge or cand["book_count"] < 2:
+        has_fanduel = any(b.get("key") == PREFERRED_BOOK_KEY for b in cand.get("book_odds") or [])
+        min_books = 1 if has_fanduel else 2
+        effective_min_edge = 0.0 if has_fanduel and cand["book_count"] < 2 else min_edge
+        if edge < effective_min_edge or cand["book_count"] < min_books:
             continue
 
         bet_type = cand["bet_type"]
@@ -365,6 +368,8 @@ def analyze_event(
         # Far-out games need a stronger edge to surface — rescan later for those slates.
         if hours is not None and hours > NEAR_TERM_HOURS:
             opportunity -= min(15.0, (hours - NEAR_TERM_HOURS) * 0.12)
+        if has_fanduel and cand["book_count"] < 2:
+            opportunity = max(opportunity, min_opportunity)
         if opportunity < min_opportunity:
             continue
 
@@ -372,7 +377,6 @@ def analyze_event(
         type_label = _bet_type_label(bet_type)
 
         kickoff = _format_kickoff(event_start)
-        has_fanduel = any(b.get("key") == PREFERRED_BOOK_KEY for b in cand.get("book_odds") or [])
         book_label = PREFERRED_BOOK_TITLE if has_fanduel else "market best"
         recommendation = f"{type_label} — {selection_label} · {kickoff} ({sport})"
         explanation = (

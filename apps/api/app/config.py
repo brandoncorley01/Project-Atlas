@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     odds_cache_ttl_minutes: int = 30
 
     # Max sportsbooks leagues fetched per live scan (1 credit each). 0 = no cap.
-    odds_max_sports_per_scan: int = 12
+    odds_max_sports_per_scan: int = 18
 
     # priority = US majors + top soccer/tennis only; full = every active game sport.
     odds_scan_scope: str = "priority"

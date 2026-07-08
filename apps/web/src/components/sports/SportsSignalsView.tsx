@@ -40,7 +40,7 @@ export function SportsSignalsView({
   const [activeSport, setActiveSport] = useState<string | null>(null);
   const [sort, setSort] = useState<SportsSortKey>("soonest");
   const [filter, setFilter] = useState<SportsFilterKey>("all");
-  const [window, setWindow] = useState<SportsWindowKey>("soon");
+  const [window, setWindow] = useState<SportsWindowKey>("week");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [parlaySelection, setParlaySelection] = useState<Set<string>>(new Set());
@@ -144,8 +144,9 @@ export function SportsSignalsView({
       return;
     }
 
+    const shouldForceLive = forceRefresh || cacheNeedsLive;
     const apiUrl = getApiUrl();
-    const params = forceRefresh ? "?force_refresh=true" : "";
+    const params = shouldForceLive ? "?force_refresh=true" : "";
     try {
       const res = await fetch(`${apiUrl}/engine/refresh-sports${params}`, {
         method: "POST",
@@ -192,7 +193,7 @@ export function SportsSignalsView({
   const cacheNeedsLive = oddsStatus?.cache_needs_live_refresh ?? false;
 
   return (
-    <div>
+    <div className="w-full min-w-0 overflow-x-clip">
       <SportsHeroBanner playCount={items.length} />
 
       <SportsStatsBar
@@ -206,7 +207,7 @@ export function SportsSignalsView({
       <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="text-sm text-muted">
           <p>
-            <strong className="text-foreground">Step 1:</strong> Scan odds (next 48h focus) ·{" "}
+            <strong className="text-foreground">Step 1:</strong> Scan odds (this week) ·{" "}
             <strong className="text-foreground">Step 2:</strong> Tap <strong className="text-foreground">+</strong> to build a manual parlay or save bets ·{" "}
             <strong className="text-foreground">Step 3:</strong>{" "}
             <Link href="/parlays" className="font-semibold text-orange-400 hover:underline">
@@ -292,7 +293,7 @@ export function SportsSignalsView({
       {loading && items.length === 0 ? (
         <ListSkeleton count={3} />
       ) : displayedItems.length > 0 ? (
-        <div className="space-y-4">
+        <div className="sports-signals-list space-y-4">
           {displayedItems.map((item, index) => (
             <SportsSignalCard
               key={item.id}

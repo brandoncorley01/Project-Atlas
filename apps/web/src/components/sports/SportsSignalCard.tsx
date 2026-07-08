@@ -132,44 +132,45 @@ export function SportsSignalCard({
         isTopPick ? "border-violet-500/50 ring-2 ring-violet-500/20" : ""
       }`}
     >
-      <div className="flex w-full min-w-0 items-start gap-3">
-        {onParlayToggle && (
+      {onParlayToggle && (
+        <div className="signal-card__parlay-toggle">
           <ParlayLegToggle
             signalId={row.id}
             selected={Boolean(parlaySelected)}
             onToggle={onParlayToggle}
           />
-        )}
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="text-xs uppercase tracking-wide text-muted">
-              #{rank} · Sports{isTopPick && " · TOP PICK"}
-            </p>
-            <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${sportMeta.accentClass}`}>
-              {sportMeta.emoji} {sportMeta.label}
+        </div>
+      )}
+
+      <div className={`signal-card__meta w-full min-w-0 ${onParlayToggle ? "pr-11 sm:pr-0" : ""}`}>
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-xs uppercase tracking-wide text-muted">
+            #{rank} · Sports{isTopPick && " · TOP PICK"}
+          </p>
+          <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${sportMeta.accentClass}`}>
+            {sportMeta.emoji} {sportMeta.label}
+          </span>
+          <span className="rounded-full bg-background px-2 py-0.5 text-xs text-muted">
+            {betTypeLabel(row.bet_type)}
+          </span>
+          {soonBadge && (
+            <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${soonBadge.className}`}>
+              {soonBadge.label}
             </span>
-            <span className="rounded-full bg-background px-2 py-0.5 text-xs text-muted">
-              {betTypeLabel(row.bet_type)}
+          )}
+          {sharp && (
+            <span className="rounded-full bg-sky-500/20 px-2 py-0.5 text-xs font-medium text-sky-300">
+              {sharp === "steam" ? "Steam move" : "Value"}
             </span>
-            {soonBadge && (
-              <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${soonBadge.className}`}>
-                {soonBadge.label}
-              </span>
-            )}
-            {sharp && (
-              <span className="rounded-full bg-sky-500/20 px-2 py-0.5 text-xs font-medium text-sky-300">
-                {sharp === "steam" ? "Steam move" : "Value"}
-              </span>
-            )}
-            {categories.slice(0, 2).map((slug) => (
-              <span
-                key={slug}
-                className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-300"
-              >
-                {CATEGORY_SLUG_LABELS[slug] ?? slug}
-              </span>
-            ))}
-          </div>
+          )}
+          {categories.slice(0, 2).map((slug) => (
+            <span
+              key={slug}
+              className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-300"
+            >
+              {CATEGORY_SLUG_LABELS[slug] ?? slug}
+            </span>
+          ))}
         </div>
       </div>
 

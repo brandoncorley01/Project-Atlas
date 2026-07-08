@@ -25,7 +25,7 @@ export default async function SportsPage() {
     if (token) {
       try {
         const [listData, catData] = await Promise.all([
-          apiFetch<SportsListResponse>("/signals/sports?limit=50&window=soon", token),
+          apiFetch<SportsListResponse>("/signals/sports?limit=50&window=week", token),
           apiFetch<CategoriesResponse>("/signals/sports/categories", token),
         ]);
         items = listData.items;
@@ -46,7 +46,7 @@ export default async function SportsPage() {
             24/7 GLOBAL
           </span>
         }
-        description="Live & near-term plays (next 48h) ranked by edge and kickoff time — rescan later for mid-week slates."
+        description="Plays for the next 7 days ranked by edge and kickoff time — includes WNBA, MLB, soccer, tennis, and more."
       />
       <SportsSignalsView initialItems={items} initialCategories={categories} />
     </>

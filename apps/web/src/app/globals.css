@@ -59,18 +59,44 @@ html {
 
 /* Sports / signal cards: never squeeze readable text on narrow screens */
 .signal-card {
+  position: relative;
+  display: block;
   width: 100%;
   max-width: 100%;
   min-width: 0;
+  box-sizing: border-box;
 }
 
 .signal-card__body,
 .signal-card__title,
-.signal-card__recommendation {
+.signal-card__recommendation,
+.signal-card__scores {
+  display: block;
   width: 100%;
   max-width: 100%;
   min-width: 0;
+  box-sizing: border-box;
   overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.signal-card__parlay-toggle {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 2;
+}
+
+.sports-signals-list {
+  width: 100%;
+  min-width: 0;
+  overflow-x: clip;
+}
+
+@media (max-width: 639px) {
+  .signal-card__meta {
+    padding-right: 2.75rem;
+  }
 }
 
 /* Card shell used across signal modules */

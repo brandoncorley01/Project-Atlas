@@ -6,8 +6,9 @@
 import { chromium } from "playwright";
 
 const BASE_URL = process.env.PREVIEW_URL ?? "http://127.0.0.1:3000";
-const MIN_TITLE_WIDTH_RATIO = 0.7;
-const VIEWPORT_WIDTH = 390;
+  const MIN_TITLE_WIDTH_RATIO = 0.7;
+  const VIEWPORT_WIDTH = 390;
+  const MIN_BODY_WIDTH_RATIO = 0.7;
 
 async function main() {
   const browser = await chromium.launch({ headless: true });
@@ -68,6 +69,7 @@ async function main() {
   const widthRatio = metrics.titleWidth / metrics.viewportWidth;
   const passed =
     metrics.titleWidth >= VIEWPORT_WIDTH * MIN_TITLE_WIDTH_RATIO &&
+    metrics.bodyWidth >= VIEWPORT_WIDTH * MIN_BODY_WIDTH_RATIO &&
     metrics.singleWordLines <= 1;
 
   console.log(JSON.stringify({ passed, ...metrics, widthRatio }, null, 2));

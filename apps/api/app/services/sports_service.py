@@ -23,10 +23,10 @@ from app.services.sports_ranking import (
 
 logger = logging.getLogger(__name__)
 
-MAX_SIGNALS = 50
-MIN_OPPORTUNITY = 38.0
+MAX_SIGNALS = 80
+MIN_OPPORTUNITY = 35.0
 MIN_PER_SPORT = 1
-MAX_PER_SPORT = 3
+MAX_PER_SPORT = 6
 
 
 def _source_note(stats: dict[str, Any]) -> str:

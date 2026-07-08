@@ -28,6 +28,7 @@ _CACHE_PATH = Path(__file__).resolve().parents[3] / ".odds_cache.json"
 DEFAULT_SPORT_KEYS = (
     "americanfootball_nfl",
     "basketball_nba",
+    "basketball_wnba",
     "baseball_mlb",
     "icehockey_nhl",
     "soccer_fifa_world_cup",
@@ -41,10 +42,14 @@ PRIORITY_SPORT_KEYS = (
     "americanfootball_nfl_preseason",
     "basketball_nba",
     "basketball_wnba",
+    "basketball_ncaab",
+    "basketball_wncaab",
     "baseball_mlb",
     "icehockey_nhl",
     "soccer_fifa_world_cup",
     "soccer_epl",
+    "soccer_spain_la_liga",
+    "soccer_germany_bundesliga",
     "soccer_uefa_champs_league",
     "soccer_usa_mls",
     "tennis_atp_wimbledon",
@@ -58,9 +63,16 @@ PRIORITY_SPORT_KEYS = (
     "cricket_international_t20",
 )
 
+ESSENTIAL_SUMMER_KEYS = frozenset({"baseball_mlb", "basketball_wnba"})
+ESSENTIAL_WINTER_KEYS = frozenset(
+    {"basketball_nba", "icehockey_nhl", "americanfootball_nfl"}
+)
+
 SUMMER_PRIORITY_KEYS = (
     "baseball_mlb",
     "basketball_wnba",
+    "basketball_ncaab",
+    "basketball_wncaab",
     "soccer_usa_mls",
     "soccer_fifa_world_cup",
     "soccer_epl",
@@ -100,6 +112,8 @@ SPORT_LABELS = {
     "americanfootball_nfl_preseason": "NFL Preseason",
     "basketball_nba": "NBA",
     "basketball_wnba": "WNBA",
+    "basketball_ncaab": "NCAAB",
+    "basketball_wncaab": "NCAAW",
     "baseball_mlb": "MLB",
     "icehockey_nhl": "NHL",
     "americanfootball_ncaaf": "NCAAF",
@@ -172,21 +186,26 @@ def _near_term_cache_events(
     return filtered, meta
 
 
-def _cache_needs_live_refresh(near_term_keys: frozenset[str]) -> bool:
-    """True when cached odds omit in-season leagues (e.g. MLB in July) — rescore alone cannot fix."""
-    if not near_term_keys:
-        return True
+def _essential_keys_for_month() -> frozenset[str]:
     month = datetime.now(UTC).month
     skip = _off_season_skip_keys()
     if month in (4, 5, 6, 7, 8, 9):
-        core_in_season = frozenset({"baseball_mlb", "basketball_wnba"}) - skip
-    else:
-        core_in_season = frozenset({"basketball_nba", "icehockey_nhl", "americanfootball_nfl"}) - skip
-    if core_in_season and not (near_term_keys & core_in_season):
+        return ESSENTIAL_SUMMER_KEYS - skip
+    return ESSENTIAL_WINTER_KEYS - skip
+
+
+def _cache_needs_live_refresh(near_term_keys: frozenset[str]) -> bool:
+    """True when cached odds omit in-season leagues (e.g. WNBA missing while MLB present)."""
+    if not near_term_keys:
         return True
+    core_in_season = _essential_keys_for_month()
+    if core_in_season and not core_in_season.issubset(near_term_keys):
+        return True
+    month = datetime.now(UTC).month
+    skip = _off_season_skip_keys()
     preferred = SUMMER_PRIORITY_KEYS if month in (4, 5, 6, 7, 8, 9) else WINTER_PRIORITY_KEYS
-    expected = {k for k in preferred[:8] if k not in skip}
-    return len(near_term_keys & expected) < 2 and len(near_term_keys) <= 3
+    expected = {k for k in preferred[:10] if k not in skip}
+    return len(near_term_keys & expected) < 3 and len(near_term_keys) <= 4
 
 
 def _maybe_compact_cache(cache: dict[str, Any]) -> dict[str, Any]:
@@ -327,8 +346,15 @@ def _limit_sport_keys(keys: tuple[str, ...], *, force_refresh: bool = False) -> 
 
     keys = _seasonal_key_order(keys)
 
+    essential = _essential_keys_for_month()
+    pinned = tuple(k for k in keys if k in essential)
+    rest = tuple(k for k in keys if k not in essential)
+
     if max_sports > 0:
-        keys = keys[:max_sports]
+        remaining = max(0, max_sports - len(pinned))
+        keys = pinned + rest[:remaining]
+    else:
+        keys = pinned + rest
 
     return keys
 
