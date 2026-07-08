@@ -182,6 +182,7 @@ export function SportsSignalsView({
         refreshOddsStatus(),
       ]);
       router.refresh();
+      globalThis.dispatchEvent(new Event("atlas:dashboard-refresh"));
     } catch {
       setMessage("Backend not responding — run .\\scripts\\start-dev.ps1");
     }

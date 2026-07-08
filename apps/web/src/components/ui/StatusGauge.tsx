@@ -157,25 +157,20 @@ export function finnhubGaugeValue(connected: boolean, configured: boolean, error
   return 28;
 }
 
-/** Map combined sports API credits to 0–100 for the gauge (scales with key count). */
+/** Map combined sports API credits to 0–100 for the gauge needle. */
 export function oddsCreditsGaugeValue(
   remaining: number | null | undefined,
   configured: boolean,
   connected: boolean,
   quotaExhausted: boolean,
   keyCount = 1,
+  monthlyCapacity?: number | null,
 ): number {
   if (!configured) return 8;
   if (quotaExhausted && (remaining ?? 0) <= 0) return 10;
-  if (!connected && remaining == null) return 30;
-  if (remaining == null) return 55;
+  if (remaining == null) return connected ? 50 : 28;
 
-  const capacity = Math.max(1, keyCount) * 500;
-  const pct = (remaining / capacity) * 100;
-  if (pct >= 70) return 92;
-  if (pct >= 50) return 75;
-  if (pct >= 30) return 58;
-  if (pct >= 15) return 38;
-  if (pct >= 5) return 22;
-  return 12;
+  const capacity = monthlyCapacity ?? Math.max(1, keyCount) * 500;
+  const pct = Math.min(100, Math.max(0, (remaining / capacity) * 100));
+  return Math.round(8 + pct * 0.84);
 }

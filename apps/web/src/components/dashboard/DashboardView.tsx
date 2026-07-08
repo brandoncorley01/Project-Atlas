@@ -297,7 +297,7 @@ export function DashboardView() {
       <section className="mb-8">
         <SectionHeader
           title="Data Providers"
-          description="Live connection health for stock/news data (Finnhub) and sports odds (The Odds API). Gauges show status at a glance."
+          description="Dial gauges show live provider health. The Odds API dial tracks pooled credits across all failover keys and updates after each scan."
         />
         <DataProvidersPanel />
       </section>

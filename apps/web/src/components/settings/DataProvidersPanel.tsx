@@ -6,101 +6,63 @@ import {
   finnhubGaugeValue,
   oddsCreditsGaugeValue,
 } from "@/components/ui/StatusGauge";
-import { apiPortLabel, API_START_HINT } from "@/lib/api-config";
-import { apiRequestHeaders, getApiUrl } from "@/lib/api-url";
+import { API_START_HINT } from "@/lib/api-config";
+import { usesBffProxy } from "@/lib/api-url";
 import { resolveOddsTotalCredits } from "@/lib/odds-credits";
-import type { OddsApiStatus } from "@/lib/odds-status";
+import { fetchProvidersStatus, type OddsApiStatus } from "@/lib/odds-status";
 
 interface FinnhubStatus {
   configured?: boolean;
   connected?: boolean;
   error?: string | null;
-  features?: string[];
-}
-
-interface OddsKeyStatus {
-  index?: number;
-  masked?: string;
-  remaining?: number | null;
-  used?: number | null;
-  exhausted?: boolean;
-  valid?: boolean;
-  error?: string;
 }
 
 interface OddsStatus extends OddsApiStatus {
   features?: string[];
 }
 
-function FeatureChips({ items }: { items: string[] }) {
-  return (
-    <div className="mt-3 flex flex-wrap justify-center gap-1.5">
-      {items.slice(0, 4).map((f) => (
-        <span
-          key={f}
-          className="rounded-full border border-border bg-background/60 px-2 py-0.5 text-[10px] text-muted"
-        >
-          {f}
-        </span>
-      ))}
-    </div>
-  );
+function formatUpdatedAt(date: Date | null) {
+  if (!date) return null;
+  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
-function OddsKeysList({
-  keys,
-  total,
-  keyCount,
-  activeKeyIndex,
-}: {
-  keys: OddsKeyStatus[];
-  total: number | null;
-  keyCount: number;
-  activeKeyIndex?: number | null;
-}) {
-  if (!keys.length) return null;
+function buildOddsDescription(odds: OddsStatus | null, remaining: number | null): string {
+  if (!odds?.configured) {
+    return "Add comma-separated keys to ODDS_API_KEY in apps/api/.env (local) or Render (production). Each free account includes 500 credits per month with automatic failover.";
+  }
+  if (odds.error) return odds.error;
 
-  return (
-    <div className="mt-4 w-full max-w-sm rounded-lg border border-violet-500/25 bg-violet-500/5 p-3 text-left">
-      <p className="text-xs font-bold uppercase tracking-wider text-violet-300">
-        {keyCount} API key{keyCount === 1 ? "" : "s"} configured
-      </p>
-      <ul className="mt-2 space-y-1.5">
-        {keys.map((k, i) => (
-          <li key={k.index ?? i} className="flex items-center justify-between gap-2 text-xs">
-            <span className="font-mono text-muted">
-              Key {k.index ?? i + 1}: {k.masked ?? "••••"}
-              {activeKeyIndex === (k.index ?? i + 1) - 1 && (
-                <span className="ml-1 font-sans font-semibold text-violet-300">· active</span>
-              )}
-            </span>
-            <span
-              className={
-                k.exhausted
-                  ? "font-semibold text-danger"
-                  : k.remaining != null
-                    ? "font-semibold text-success"
-                    : "text-muted"
-              }
-            >
-              {!k.valid ? "invalid" : k.exhausted ? "exhausted" : k.remaining != null ? `${k.remaining} cr` : "—"}
-            </span>
-          </li>
-        ))}
-      </ul>
-      {total != null && (
-        <p className="mt-2 border-t border-border/60 pt-2 text-xs font-semibold text-foreground">
-          Combined pool: {total.toLocaleString()} credits
-        </p>
-      )}
-    </div>
+  const parts: string[] = [];
+  const keyCount = odds.key_count ?? odds.keys?.length ?? 1;
+  const capacity = odds.monthly_capacity ?? keyCount * 500;
+
+  parts.push(
+    `${keyCount} API key${keyCount === 1 ? "" : "s"} pooled · ${capacity.toLocaleString()} credits/month capacity.`,
   );
+
+  if (remaining != null) {
+    const used = Math.max(0, capacity - remaining);
+    parts.push(`~${used.toLocaleString()} used this cycle · ${remaining.toLocaleString()} left.`);
+  }
+
+  const active = (odds.active_key_index ?? 0) + 1;
+  parts.push(`Failover active on key #${active}.`);
+
+  if (odds.cache_rescore_free) {
+    parts.push(
+      `Cached odds (${Math.round(odds.cache_age_minutes ?? 0)}m old) — rescore costs 0 credits for ~${Math.round(odds.minutes_until_stale ?? 0)}m more.`,
+    );
+  } else {
+    parts.push(`Live scan uses ~${odds.estimated_live_scan_credits ?? "?"} credits; rescore when cache is warm.`);
+  }
+
+  return parts.join(" ");
 }
 
 export function DataProvidersPanel() {
   const [apiKey, setApiKey] = useState("");
   const [masked, setMasked] = useState<string | null>(null);
-  const [configured, setConfigured] = useState(false);
+  const [finnhubConfigured, setFinnhubConfigured] = useState(false);
   const [loading, setLoading] = useState(false);
   const [statusLoading, setStatusLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -108,26 +70,31 @@ export function DataProvidersPanel() {
   const [finnhub, setFinnhub] = useState<FinnhubStatus | null>(null);
   const [odds, setOdds] = useState<OddsStatus | null>(null);
   const [backendError, setBackendError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   const loadStatus = useCallback(async () => {
     setStatusLoading(true);
     try {
-      const apiUrl = getApiUrl();
-      const statusRes = await fetch(`${apiUrl}/providers/status`, {
-        headers: apiRequestHeaders(),
-        cache: "no-store",
-      });
+      let token: string | undefined;
+      if (!usesBffProxy()) {
+        const { createClient } = await import("@/lib/supabase/client");
+        const { data } = await createClient().auth.getSession();
+        token = data.session?.access_token ?? undefined;
+      }
 
-      if (!statusRes.ok) {
+      const data = await fetchProvidersStatus(token);
+      if (!data) {
         setBackendError(`Backend unreachable — ${API_START_HINT}`);
+        setStatusLoading(false);
         return;
       }
+
       setBackendError(null);
-      const data = await statusRes.json();
-      setFinnhub(data.finnhub ?? null);
-      setOdds((data.odds_api ?? {}) as OddsStatus);
+      setFinnhub((data.finnhub ?? null) as FinnhubStatus | null);
+      setOdds((data.odds_api ?? null) as OddsStatus | null);
+      setLastUpdated(new Date());
     } catch {
-      setBackendError(`Could not reach API on port ${apiPortLabel()}`);
+      setBackendError(`Could not reach the API — ${API_START_HINT}`);
     }
     setStatusLoading(false);
   }, []);
@@ -136,7 +103,7 @@ export function DataProvidersPanel() {
     fetch("/api/finnhub")
       .then((r) => r.json())
       .then((d) => {
-        setConfigured(Boolean(d.configured));
+        setFinnhubConfigured(Boolean(d.configured));
         setMasked(d.masked ?? null);
       })
       .catch(() => undefined);
@@ -144,11 +111,16 @@ export function DataProvidersPanel() {
   }, [loadStatus]);
 
   useEffect(() => {
-    void loadStatus();
-    const onFocus = () => void loadStatus();
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
-  }, [configured, loadStatus]);
+    const onRefresh = () => void loadStatus();
+    window.addEventListener("atlas:dashboard-refresh", onRefresh);
+    window.addEventListener("focus", onRefresh);
+    const interval = window.setInterval(onRefresh, 90_000);
+    return () => {
+      window.removeEventListener("atlas:dashboard-refresh", onRefresh);
+      window.removeEventListener("focus", onRefresh);
+      window.clearInterval(interval);
+    };
+  }, [loadStatus]);
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
@@ -168,68 +140,61 @@ export function DataProvidersPanel() {
       return;
     }
 
-    setConfigured(true);
+    setFinnhubConfigured(true);
     setMasked(`${apiKey.slice(0, 4)}…${apiKey.slice(-4)}`);
     setApiKey("");
     setMessage("Key saved — restart the API to activate.");
     setShowKeyForm(false);
+    void loadStatus();
   }
 
   const fhValue = finnhubGaugeValue(
     Boolean(finnhub?.connected),
-    Boolean(finnhub?.configured ?? configured),
+    Boolean(finnhub?.configured ?? finnhubConfigured),
     finnhub?.error,
   );
 
   const fhSubtitle = finnhub?.connected
-    ? "RSI, trend & news active"
-    : finnhub?.configured || configured
+    ? "Connected · RSI, trend & news"
+    : finnhub?.configured || finnhubConfigured
       ? "Key saved — restart API"
-      : "Yahoo fallback only";
+      : "Not configured";
 
   const fhDetail =
     finnhub?.error && !finnhub.connected
       ? finnhub.error
       : masked
-        ? `Key on file: ${masked}`
-        : "Free key at finnhub.io/register";
+        ? `Finnhub key on file (${masked}). Powers stock RSI, relative volume, and news catalysts.`
+        : "Optional free key from finnhub.io/register. Without it, Atlas uses Yahoo quotes only.";
 
-  const keyCount = odds?.key_count ?? odds?.keys?.length ?? 0;
+  const keyCount = Math.max(1, odds?.key_count ?? odds?.keys?.length ?? 0);
   const totalRemaining = resolveOddsTotalCredits(odds);
+  const monthlyCapacity = odds?.monthly_capacity ?? keyCount * 500;
 
   const oddsValue = oddsCreditsGaugeValue(
     totalRemaining,
     Boolean(odds?.configured),
     Boolean(odds?.connected),
     Boolean(odds?.quota_exhausted),
-    Math.max(1, keyCount),
+    keyCount,
+    monthlyCapacity,
   );
 
   const oddsCenterLabel =
-    totalRemaining != null ? totalRemaining.toLocaleString() : odds?.configured ? "—" : undefined;
+    totalRemaining != null
+      ? totalRemaining.toLocaleString()
+      : odds?.configured
+        ? "—"
+        : undefined;
 
   const oddsSubtitle = !odds?.configured
-    ? "Add ODDS_API_KEY to .env"
-    : odds?.quota_exhausted && (totalRemaining ?? 0) <= 0
+    ? "Not configured"
+    : odds.quota_exhausted && (totalRemaining ?? 0) <= 0
       ? "All keys exhausted"
-      : keyCount > 1
-        ? `${totalRemaining?.toLocaleString() ?? "?"} / ${(odds?.monthly_capacity ?? keyCount * 500).toLocaleString()} credits · ${keyCount} keys`
-        : `${totalRemaining?.toLocaleString() ?? "?"} credits remaining`;
+      : `${totalRemaining?.toLocaleString() ?? "—"} / ${monthlyCapacity.toLocaleString()} credits`;
 
-  const activeIdx = odds?.active_key_index;
-  const oddsDetail = odds?.error
-    ? odds.error
-    : odds?.configured
-      ? `Active key: #${(activeIdx ?? 0) + 1} · live scan ~${odds.estimated_live_scan_credits ?? "?"} credits${
-          odds.cache_rescore_free
-            ? ` · rescore free (${Math.round(odds.cache_age_minutes ?? 0)}m cache)`
-            : odds.cache_fresh
-              ? ` · cache fresh (${Math.round(odds.cache_age_minutes ?? 0)}m)`
-              : ""
-        }`
-      : "Powers sports odds & +EV scans";
-
-  const keysWithActive = odds?.keys ?? [];
+  const oddsDetail = buildOddsDescription(odds, totalRemaining);
+  const updatedLabel = formatUpdatedAt(lastUpdated);
 
   return (
     <div className="space-y-4">
@@ -239,52 +204,37 @@ export function DataProvidersPanel() {
         </p>
       )}
 
-      <div className="flex justify-end">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs text-muted">
+          {updatedLabel ? `Last updated ${updatedLabel}` : "Checking provider status…"}
+        </p>
         <button
           type="button"
           onClick={() => void loadStatus()}
           disabled={statusLoading}
           className="text-xs font-medium text-accent hover:underline disabled:opacity-50"
         >
-          {statusLoading ? "Refreshing…" : "Refresh status"}
+          {statusLoading ? "Refreshing…" : "Refresh"}
         </button>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
         <div className="atlas-card flex flex-col items-center p-5 sm:p-6">
-          <p className="mb-1 self-start text-xs font-bold uppercase tracking-wider text-emerald-400">
-            Stocks & news
-          </p>
           <StatusGauge
             value={fhValue}
             title="Finnhub"
             subtitle={fhSubtitle}
             detail={fhDetail}
           />
-          <FeatureChips
-            items={finnhub?.features ?? ["stock quotes", "RSI / trend", "news catalysts"]}
-          />
         </div>
 
         <div className="atlas-card flex flex-col items-center p-5 sm:p-6">
-          <p className="mb-1 self-start text-xs font-bold uppercase tracking-wider text-violet-400">
-            Sports odds
-          </p>
           <StatusGauge
             value={oddsValue}
             title="The Odds API"
             subtitle={oddsSubtitle}
             detail={oddsDetail}
             centerLabel={oddsCenterLabel}
-          />
-          <OddsKeysList
-            keys={keysWithActive}
-            total={totalRemaining}
-            keyCount={keyCount}
-            activeKeyIndex={activeIdx}
-          />
-          <FeatureChips
-            items={odds?.features ?? ["live odds", "+EV scan", "multi-book", "parlay legs"]}
           />
         </div>
       </div>
@@ -302,18 +252,7 @@ export function DataProvidersPanel() {
         {showKeyForm && (
           <div className="mt-3 border-t border-border pt-3">
             <p className="text-xs leading-relaxed text-muted">
-              Optional free key from{" "}
-              <a
-                href="https://finnhub.io/register"
-                target="_blank"
-                rel="noreferrer"
-                className="text-accent underline"
-              >
-                finnhub.io/register
-              </a>
-              . Odds API keys: comma-separated in{" "}
-              <code className="text-foreground">apps/api/.env</code> (you have {keyCount || 3} configured
-              after restart).
+              Odds API keys are managed in <code className="text-foreground">apps/api/.env</code> or Render — not here.
             </p>
             <form onSubmit={handleSave} className="mt-3 flex flex-col gap-2 sm:flex-row">
               <input
@@ -328,7 +267,7 @@ export function DataProvidersPanel() {
                 disabled={loading || !apiKey}
                 className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
               >
-                {loading ? "Saving…" : configured ? "Update key" : "Save key"}
+                {loading ? "Saving…" : finnhubConfigured ? "Update key" : "Save key"}
               </button>
             </form>
             {message && <p className="mt-2 text-xs text-muted">{message}</p>}

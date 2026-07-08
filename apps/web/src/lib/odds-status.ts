@@ -48,6 +48,14 @@ export function rescoreButtonLabel(
 }
 
 export async function fetchOddsProviderStatus(accessToken?: string): Promise<OddsApiStatus | null> {
+  const data = await fetchProvidersStatus(accessToken);
+  return data?.odds_api ?? null;
+}
+
+export async function fetchProvidersStatus(accessToken?: string): Promise<{
+  finnhub?: Record<string, unknown>;
+  odds_api?: OddsApiStatus;
+} | null> {
   const apiUrl = getApiUrl();
   const res = await fetch(`${apiUrl}/providers/status`, {
     headers: apiRequestHeaders(accessToken),
@@ -55,6 +63,5 @@ export async function fetchOddsProviderStatus(accessToken?: string): Promise<Odd
     credentials: usesBffProxy() ? "include" : "same-origin",
   });
   if (!res.ok) return null;
-  const data = await res.json();
-  return (data.odds_api as OddsApiStatus | undefined) ?? null;
+  return res.json();
 }
