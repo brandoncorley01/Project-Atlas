@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { DEFAULT_API_BASE } from "@/lib/api-config";
+import { resolveApiBase } from "@/lib/api-config";
 import { mergeOddsKeyProbe } from "@/lib/merge-odds-status";
 import { probeOddsKeysFromEnv } from "@/lib/odds-key-probe";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? DEFAULT_API_BASE;
+const API_BASE = resolveApiBase();
 const PROXY_TIMEOUT_MS = 60_000;
 const DASHBOARD_PROXY_TIMEOUT_MS = 50_000;
 
@@ -47,6 +47,18 @@ async function proxyRequest(request: NextRequest, pathSegments: string[]) {
     const text = await upstream.text();
     if (!upstream.ok) {
       console.error("[atlas proxy]", target, upstream.status, text.slice(0, 300));
+      if (upstream.status === 404) {
+        return NextResponse.json(
+          {
+            detail:
+              "Backend route not found. On Vercel, set NEXT_PUBLIC_API_URL to your Render URL "
+              + "including /api/v1 (example: https://atlas-api-xxxx.onrender.com/api/v1). "
+              + "Then redeploy.",
+            proxy_target: target,
+          },
+          { status: 502 },
+        );
+      }
     }
 
     if (upstream.ok && subpath === "providers/status") {

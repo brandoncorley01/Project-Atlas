@@ -135,6 +135,12 @@ export function DashboardView() {
         setApiStatusColor("text-warning");
       } else if (status === 401) {
         setApiStatus("Session expired — sign out and sign in again");
+      } else if (status === 404 || status === 502) {
+        setApiStatus(
+          err instanceof Error
+            ? err.message
+            : "Backend not configured — check NEXT_PUBLIC_API_URL on Vercel (must end with /api/v1)",
+        );
       } else if (status === 503) {
         setApiStatus(err instanceof Error ? err.message : `Backend unreachable — ${API_START_HINT}`);
       } else if (status === 502) {
