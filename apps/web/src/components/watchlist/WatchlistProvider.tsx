@@ -10,7 +10,7 @@ import {
 } from "react";
 import { fetchWatchlist } from "@/lib/watchlist-api";
 import type { WatchlistItem } from "@/lib/watchlist-types";
-import { watchlistItemKey } from "@/lib/watchlist-types";
+import { watchlistItemKey, watchlistSaveKey } from "@/lib/watchlist-types";
 
 interface WatchlistContextValue {
   items: WatchlistItem[];
@@ -73,7 +73,7 @@ export function WatchlistProvider({
   }, []);
 
   const isSaved = useCallback(
-    (symbol: string, itemType: string) => savedKeys.has(`${itemType}:${symbol}`),
+    (symbol: string, itemType: string) => savedKeys.has(watchlistSaveKey(symbol, itemType)),
     [savedKeys],
   );
 

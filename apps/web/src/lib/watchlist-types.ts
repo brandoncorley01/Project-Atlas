@@ -60,9 +60,26 @@ export function watchlistTabCounts(items: WatchlistItem[]): Record<WatchlistTab,
 
 export type PerformanceModule = "options" | "stock" | "sports" | "parlay";
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Normalize symbols so saved-state keys match API storage (tickers uppercased, UUIDs lowercased). */
+export function normalizeWatchlistSymbol(symbol: string, itemType?: string): string {
+  const trimmed = symbol.trim();
+  if (UUID_RE.test(trimmed)) return trimmed.toLowerCase();
+  if (itemType === "ticker") return trimmed.toUpperCase();
+  return trimmed;
+}
+
 /** Stable key for deduping saved picks across pages. */
 export function watchlistItemKey(item: WatchlistItem): string {
-  return `${effectiveItemType(item)}:${item.symbol}`;
+  const kind = effectiveItemType(item);
+  return `${kind}:${normalizeWatchlistSymbol(item.symbol, kind === "ticker" ? "ticker" : undefined)}`;
+}
+
+/** Build a save-state key from button props. */
+export function watchlistSaveKey(symbol: string, itemType: string): string {
+  return `${itemType}:${normalizeWatchlistSymbol(symbol, itemType === "ticker" ? "ticker" : undefined)}`;
 }
 
 /** Map a saved watchlist row to performance tracking ids (null for plain tickers). */

@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+import logging
+import re
 from typing import Any
 
 from app.db.supabase_client import SupabaseClient
 from app.services.performance_service import PerformanceService
+
+logger = logging.getLogger(__name__)
+
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 
 VALID_ITEM_TYPES = frozenset({
     "ticker",
@@ -60,14 +69,12 @@ class WatchlistService:
         item_type: str = "ticker",
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        sym = symbol.strip()
+        sym = self._normalize_symbol(symbol.strip(), item_type)
         if not sym:
             raise ValueError("symbol is required")
 
         meta = dict(metadata or {})
         storage_type = self._storage_item_type(item_type, meta)
-        if storage_type == "ticker":
-            sym = sym.upper()
         if storage_type not in VALID_ITEM_TYPES:
             raise ValueError(f"item_type must be one of: {', '.join(sorted(VALID_ITEM_TYPES))}")
 
@@ -107,10 +114,21 @@ class WatchlistService:
             )
             item = self._format_item(saved[0])
 
-        tracking = await self._register_tracking(item)
-        if tracking:
-            item["tracking"] = tracking
+        try:
+            tracking = await self._register_tracking(item)
+            if tracking:
+                item["tracking"] = tracking
+        except Exception as exc:
+            logger.warning("Watchlist save ok but performance tracking failed: %s", exc)
         return item
+
+    @staticmethod
+    def _normalize_symbol(sym: str, item_type: str) -> str:
+        if item_type == "ticker" and not _UUID_RE.match(sym):
+            return sym.upper()
+        if _UUID_RE.match(sym):
+            return sym.lower()
+        return sym
 
     @staticmethod
     def _storage_item_type(item_type: str, metadata: dict[str, Any]) -> str:
@@ -127,7 +145,8 @@ class WatchlistService:
                 return None
         try:
             return await self.performance.register_from_watchlist(item=item)
-        except Exception:
+        except Exception as exc:
+            logger.warning("Performance tracking registration failed: %s", exc)
             return None
 
     async def remove_item(self, item_id: str) -> bool:

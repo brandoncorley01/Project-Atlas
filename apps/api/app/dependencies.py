@@ -111,6 +111,8 @@ async def get_current_user(
         if not user_id:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
 
+        await _ensure_profile(user_id, user.get("email"), token)
+
         return {
             "user_id": user_id,
             "email": user.get("email"),

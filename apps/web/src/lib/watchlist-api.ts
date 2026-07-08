@@ -1,8 +1,9 @@
 import { apiRequestHeaders, getApiUrl, usesBffProxy } from "@/lib/api-url";
+import { addWatchlistItemDirect, fetchWatchlistDirect } from "@/lib/watchlist-direct";
 import type { WatchlistItem, WatchlistItemType } from "@/lib/watchlist-types";
-import { effectiveItemType, watchlistItemKey } from "@/lib/watchlist-types";
+import { effectiveItemType, normalizeWatchlistSymbol } from "@/lib/watchlist-types";
 
-export { watchlistItemKey };
+export { watchlistItemKey } from "@/lib/watchlist-types";
 
 /** Map new item types to legacy API/DB types until migration + API restart are complete. */
 function toApiPayload(payload: {
@@ -15,17 +16,50 @@ function toApiPayload(payload: {
   switch (payload.item_type) {
     case "sport_bet":
     case "parlay":
-      return { symbol: payload.symbol, item_type: "sport_event", metadata };
+      return {
+        symbol: normalizeWatchlistSymbol(payload.symbol),
+        item_type: "sport_event",
+        metadata,
+      };
     case "stock_signal":
     case "option_signal":
-      return { symbol: payload.symbol, item_type: "ticker", metadata };
+      return {
+        symbol: normalizeWatchlistSymbol(payload.symbol),
+        item_type: "ticker",
+        metadata,
+      };
     default:
-      return { symbol: payload.symbol, item_type: payload.item_type, metadata };
+      return {
+        symbol: normalizeWatchlistSymbol(payload.symbol, payload.item_type),
+        item_type: payload.item_type,
+        metadata,
+      };
   }
 }
 
 function normalizeItem(item: WatchlistItem): WatchlistItem {
-  return { ...item, item_type: effectiveItemType(item) };
+  const kind = effectiveItemType(item);
+  return {
+    ...item,
+    symbol: normalizeWatchlistSymbol(item.symbol, kind === "ticker" ? "ticker" : undefined),
+    item_type: kind,
+  };
+}
+
+function parseApiError(body: unknown, fallback: string): string {
+  if (typeof body === "object" && body && "detail" in body) {
+    const detail = (body as { detail: unknown }).detail;
+    if (typeof detail === "string") {
+      if (detail.includes("foreign key")) {
+        return "Account setup incomplete — sign out and sign in again, then retry.";
+      }
+      if (detail.includes("check constraint") || detail.includes("item_type_check")) {
+        return "Watchlist database needs an update. Saving directly…";
+      }
+      return detail.length > 240 ? `${detail.slice(0, 240)}…` : detail;
+    }
+  }
+  return fallback;
 }
 
 async function getToken() {
@@ -41,6 +75,11 @@ function notifyWatchlistUpdated() {
   }
 }
 
+const watchlistFetchInit = (token?: string): RequestInit => ({
+  headers: apiRequestHeaders(token),
+  credentials: usesBffProxy() ? "include" : "same-origin",
+});
+
 export async function fetchWatchlist(): Promise<{
   id: string;
   name: string;
@@ -49,19 +88,20 @@ export async function fetchWatchlist(): Promise<{
   const token = await getToken();
   if (!usesBffProxy() && !token) return null;
   try {
-    const res = await fetch(`${getApiUrl()}/watchlist`, {
-      headers: apiRequestHeaders(token),
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return {
-      id: data.id,
-      name: data.name,
-      items: (data.items as WatchlistItem[]).map(normalizeItem),
-    };
+    const res = await fetch(`${getApiUrl()}/watchlist`, watchlistFetchInit(token));
+    if (res.ok) {
+      const data = await res.json();
+      return {
+        id: data.id,
+        name: data.name,
+        items: (data.items as WatchlistItem[]).map(normalizeItem),
+      };
+    }
   } catch {
-    return null;
+    /* fall through to direct Supabase */
   }
+
+  return fetchWatchlistDirect();
 }
 
 export async function addWatchlistItem(payload: {
@@ -73,21 +113,36 @@ export async function addWatchlistItem(payload: {
   if (!usesBffProxy() && !token) {
     return { ok: false, error: "Not signed in" };
   }
+
+  const apiPayload = toApiPayload(payload);
+
   try {
-    const apiPayload = toApiPayload(payload);
     const res = await fetch(`${getApiUrl()}/watchlist/items`, {
       method: "POST",
       headers: apiRequestHeaders(token),
+      credentials: usesBffProxy() ? "include" : "same-origin",
       body: JSON.stringify(apiPayload),
     });
-    const body = await res.json();
-    if (!res.ok) {
-      const detail = typeof body.detail === "string" ? body.detail : "Failed to add";
-      return { ok: false, error: detail };
+    const body = await res.json().catch(() => ({}));
+    if (res.ok && body.item) {
+      notifyWatchlistUpdated();
+      return { ok: true, item: normalizeItem(body.item as WatchlistItem) };
     }
-    notifyWatchlistUpdated();
-    return { ok: true, item: normalizeItem(body.item as WatchlistItem) };
+
+    const apiError = parseApiError(body, "Failed to add");
+    const direct = await addWatchlistItemDirect(payload);
+    if (direct) {
+      notifyWatchlistUpdated();
+      return { ok: true, item: direct };
+    }
+
+    return { ok: false, error: apiError };
   } catch {
+    const direct = await addWatchlistItemDirect(payload);
+    if (direct) {
+      notifyWatchlistUpdated();
+      return { ok: true, item: direct };
+    }
     return { ok: false, error: "Backend not responding" };
   }
 }
@@ -100,6 +155,7 @@ export async function removeWatchlistItem(
     const res = await fetch(`${getApiUrl()}/watchlist/items/${itemId}`, {
       method: "DELETE",
       headers: apiRequestHeaders(token),
+      credentials: usesBffProxy() ? "include" : "same-origin",
     });
     if (!res.ok) return { ok: false, error: "Failed to remove" };
     notifyWatchlistUpdated();
