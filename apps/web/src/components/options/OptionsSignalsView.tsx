@@ -1,18 +1,25 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { OptionSignalCard, type OptionSignal } from "@/components/options/OptionSignalCard";
 import { SignalsToolbar } from "@/components/dashboard/SignalsToolbar";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { ListSkeleton } from "@/components/ui/Skeleton";
+import { QuickStartGuide } from "@/components/ui/QuickStartGuide";
 import { filterSignals, sortSignals, type FilterKey, type SortKey } from "@/lib/signal-filters";
 import type { SignalSummary } from "@/components/dashboard/OpportunityList";
+import { apiRequestHeaders, getApiUrl, usesBffProxy } from "@/lib/api-url";
 
 function toSummary(row: OptionSignal): SignalSummary {
   const ctx = row.scoring_snapshot?.market_context as SignalSummary["context"] | undefined;
-  const contractCost = row.premium * 100;
+  const premium = Number(row.premium ?? 0);
+  const contractCost = row.contract_cost ?? premium * 100;
+  const optionType = (row.option_type ?? "option").toUpperCase();
   return {
     id: row.id,
     module: "options",
-    title: `${row.underlying} ${row.option_type.toUpperCase()} $${Number(row.strike).toFixed(0)}`,
+    title: `${row.underlying} ${optionType} $${Number(row.strike ?? 0).toFixed(0)}`,
     recommendation: row.recommendation,
     context: {
       ...ctx,
@@ -20,8 +27,8 @@ function toSummary(row: OptionSignal): SignalSummary {
     },
     expiration: row.expiration,
     contract_cost: contractCost,
-    is_budget: contractCost <= 100,
-    premium: row.premium,
+    is_budget: row.is_budget ?? contractCost <= 100,
+    premium,
     scores: {
       confidence: row.confidence_score,
       risk: row.risk_score,
@@ -30,16 +37,140 @@ function toSummary(row: OptionSignal): SignalSummary {
   };
 }
 
-interface OptionsSignalsViewProps {
-  allItems: OptionSignal[];
-  budgetItems: OptionSignal[];
+interface OptionsListResponse {
+  items: OptionSignal[];
 }
 
-export function OptionsSignalsView({ allItems, budgetItems }: OptionsSignalsViewProps) {
+interface OptionsSignalsViewProps {
+  initialAllItems?: OptionSignal[];
+  initialBudgetItems?: OptionSignal[];
+}
+
+async function getToken(): Promise<string | undefined> {
+  if (usesBffProxy()) return undefined;
+  const { createClient } = await import("@/lib/supabase/client");
+  const { data } = await createClient().auth.getSession();
+  return data.session?.access_token ?? undefined;
+}
+
+export function OptionsSignalsView({
+  initialAllItems = [],
+  initialBudgetItems = [],
+}: OptionsSignalsViewProps) {
+  const router = useRouter();
+  const [allItems, setAllItems] = useState(initialAllItems);
+  const [budgetItems, setBudgetItems] = useState(initialBudgetItems);
+  const [loading, setLoading] = useState(true);
+  const [scanning, setScanning] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
   const [topSort, setTopSort] = useState<SortKey>("win_prob");
   const [topFilter, setTopFilter] = useState<FilterKey>("all");
   const [budgetSort, setBudgetSort] = useState<SortKey>("win_prob");
   const [budgetFilter, setBudgetFilter] = useState<FilterKey>("all");
+
+  const loadOptions = useCallback(async () => {
+    setLoading(true);
+    setMessage(null);
+
+    const token = await getToken();
+    if (!usesBffProxy() && !token) {
+      setMessage("Not signed in");
+      setLoading(false);
+      return;
+    }
+
+    const apiUrl = getApiUrl();
+    try {
+      const [allRes, budgetRes] = await Promise.all([
+        fetch(`${apiUrl}/signals/options?limit=20`, {
+          headers: apiRequestHeaders(token),
+          cache: "no-store",
+        }),
+        fetch(`${apiUrl}/signals/options?limit=12&budget=true`, {
+          headers: apiRequestHeaders(token),
+          cache: "no-store",
+        }),
+      ]);
+
+      if (!allRes.ok || !budgetRes.ok) {
+        const failed = !allRes.ok ? allRes : budgetRes;
+        let detail = "Could not load options picks";
+        try {
+          const body = await failed.json();
+          if (typeof body.detail === "string") detail = body.detail;
+        } catch {
+          // ignore parse errors
+        }
+        setMessage(detail);
+        setLoading(false);
+        return;
+      }
+
+      const [allData, budgetData] = (await Promise.all([
+        allRes.json(),
+        budgetRes.json(),
+      ])) as [OptionsListResponse, OptionsListResponse];
+
+      setAllItems(allData.items ?? []);
+      setBudgetItems(budgetData.items ?? []);
+    } catch {
+      setMessage(
+        usesBffProxy()
+          ? "Atlas API is temporarily unavailable. Try again in a moment."
+          : "Backend not responding — run .\\scripts\\start-dev.ps1",
+      );
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    void loadOptions();
+  }, [loadOptions]);
+
+  async function refreshOptions() {
+    setScanning(true);
+    setMessage(null);
+
+    const token = await getToken();
+    if (!usesBffProxy() && !token) {
+      setMessage("Not signed in");
+      setScanning(false);
+      return;
+    }
+
+    const apiUrl = getApiUrl();
+    try {
+      const res = await fetch(`${apiUrl}/engine/refresh-options`, {
+        method: "POST",
+        headers: apiRequestHeaders(token),
+        signal: AbortSignal.timeout(300_000),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        setMessage(typeof body.detail === "string" ? body.detail : "Options scan failed");
+        setScanning(false);
+        return;
+      }
+
+      const created = body.signals_created as number | undefined;
+      const scanned = body.symbols_scanned as number | undefined;
+      setMessage(
+        created != null && created > 0
+          ? `Found ${created} options setups · scanned ${scanned ?? "?"} symbols`
+          : (body.message as string) ?? "No setups met the score threshold",
+      );
+
+      await loadOptions();
+      router.refresh();
+    } catch {
+      setMessage(
+        usesBffProxy()
+          ? "Options scan timed out or API is unavailable. Try again in a moment."
+          : "Backend not responding — run .\\scripts\\start-dev.ps1",
+      );
+    }
+    setScanning(false);
+  }
 
   const topOrdered = useMemo(() => {
     const summaries = sortSignals(filterSignals(allItems.map(toSummary), topFilter), topSort);
@@ -53,8 +184,66 @@ export function OptionsSignalsView({ allItems, budgetItems }: OptionsSignalsView
     return summaries.map((s) => byId.get(s.id)).filter(Boolean) as OptionSignal[];
   }, [budgetItems, budgetFilter, budgetSort]);
 
+  const busy = loading || scanning;
+  const hasAny = allItems.length > 0 || budgetItems.length > 0;
+
+  if (loading && !hasAny) {
+    return (
+      <div className="space-y-6">
+        <ListSkeleton count={3} />
+      </div>
+    );
+  }
+
+  if (!hasAny && !loading) {
+    return (
+      <div className="space-y-6">
+        {!message && <QuickStartGuide compact />}
+        {message && (
+          <p className="rounded-lg border border-border bg-surface-elevated px-4 py-2.5 text-sm text-muted">
+            {message}
+          </p>
+        )}
+        <EmptyState
+          title="No options picks yet"
+          description='Tap "Deep scan market" below. Atlas ranks call and put setups by confidence and profit odds.'
+          action={
+            <button
+              type="button"
+              onClick={refreshOptions}
+              disabled={busy}
+              className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            >
+              {scanning ? "Scanning…" : "Deep scan market"}
+            </button>
+          }
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-10">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-sm text-muted">
+          Ranked by profit probability · expand any card for entry dates, breakeven, and trade plan.
+        </p>
+        <button
+          type="button"
+          onClick={refreshOptions}
+          disabled={busy}
+          className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white shadow-sm shadow-accent/20 disabled:opacity-50"
+        >
+          {scanning ? "Scanning…" : "Deep scan market"}
+        </button>
+      </div>
+
+      {message && (
+        <p className="rounded-lg border border-border bg-surface-elevated px-4 py-2.5 text-sm text-muted">
+          {message}
+        </p>
+      )}
+
       <section>
         <h2 className="mb-1 text-lg font-semibold">Top Picks</h2>
         <p className="mb-2 text-sm text-muted">Highest profit probability from the full market scan.</p>

@@ -54,8 +54,10 @@ export function OptionSignalCard({ row, rank }: { row: OptionSignal; rank: numbe
   const ctx = row.context ?? (row.scoring_snapshot?.market_context as OptionSignal["context"]);
   const winProb = row.scoring_snapshot?.profit_probability ?? ctx?.profit_probability;
   const expLabel = formatExpiration(row.expiration);
-  const contractCost = row.contract_cost ?? row.premium * 100;
+  const premium = Number(row.premium ?? 0);
+  const contractCost = row.contract_cost ?? premium * 100;
   const isBudget = row.is_budget ?? contractCost <= 100;
+  const optionType = (row.option_type ?? "option").toUpperCase();
   const headline = ctx?.top_headline;
 
   return (
@@ -76,7 +78,7 @@ export function OptionSignalCard({ row, rank }: { row: OptionSignal; rank: numbe
             )}
           </div>
           <h2 className="mt-1 text-xl font-bold">
-            {row.underlying} {row.option_type.toUpperCase()} ${Number(row.strike).toFixed(0)}
+            {row.underlying} {optionType} ${Number(row.strike ?? 0).toFixed(0)}
           </h2>
           <p className="mt-1 text-sm text-muted">
             Premium ${Number(row.premium).toFixed(2)} ·{" "}
