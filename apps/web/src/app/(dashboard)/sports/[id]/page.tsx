@@ -56,7 +56,7 @@ export default async function SportsDetailPage({
             ))}
           </div>
         )}
-        <h1 className="mt-2 break-words text-2xl font-bold">
+        <h1 className="signal-card__title mt-2 text-2xl font-bold">
           {signal.selection} · {signal.sport}
         </h1>
       </div>

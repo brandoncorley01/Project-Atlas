@@ -128,11 +128,11 @@ export function SportsSignalCard({
 
   return (
     <article
-      className={`atlas-card atlas-card-interactive w-full max-w-full overflow-hidden p-4 sm:p-5 ${
+      className={`signal-card atlas-card atlas-card-interactive p-4 sm:p-5 ${
         isTopPick ? "border-violet-500/50 ring-2 ring-violet-500/20" : ""
       }`}
     >
-      <div className="flex items-start gap-3">
+      <div className="flex w-full min-w-0 items-start gap-3">
         {onParlayToggle && (
           <ParlayLegToggle
             signalId={row.id}
@@ -173,36 +173,35 @@ export function SportsSignalCard({
         </div>
       </div>
 
-      <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(220px,260px)] lg:items-start">
-        <div className="min-w-0">
-          {!hideSelection && (
-            <h2 className="text-xl font-bold leading-tight text-balance sm:text-2xl">{row.selection}</h2>
-          )}
-          <p className={`text-sm leading-relaxed text-muted ${hideSelection ? "" : "mt-1"}`}>
-            {row.event_name}
+      <div className="signal-card__body mt-3 w-full min-w-0">
+        {!hideSelection && (
+          <h2 className="signal-card__title text-xl font-bold leading-tight sm:text-2xl">{row.selection}</h2>
+        )}
+        <p className={`text-sm leading-relaxed text-muted ${hideSelection ? "" : "mt-1"}`}>
+          {row.event_name}
+        </p>
+        <p className="mt-1 text-xs leading-relaxed text-muted">
+          Starts {formatEventStart(row.event_start)}
+        </p>
+        {row.hours_until_start != null && row.hours_until_start > 0 && (
+          <p className="mt-0.5 text-xs text-emerald-400">
+            {row.hours_until_start < 24
+              ? `Starts in ${row.hours_until_start.toFixed(1)}h`
+              : `Starts in ${(row.hours_until_start / 24).toFixed(1)} days`}
           </p>
-          <p className="mt-1 text-xs leading-relaxed text-muted">
-            Starts {formatEventStart(row.event_start)}
-          </p>
-          {row.hours_until_start != null && row.hours_until_start > 0 && (
-            <p className="mt-0.5 text-xs text-emerald-400">
-              {row.hours_until_start < 24
-                ? `Starts in ${row.hours_until_start.toFixed(1)}h`
-                : `Starts in ${(row.hours_until_start / 24).toFixed(1)} days`}
-            </p>
-          )}
-          {row.data_as_of_label && (
-            <p className="mt-0.5 text-xs text-muted">Odds as of {row.data_as_of_label}</p>
-          )}
-        </div>
-        <div className="grid w-full grid-cols-3 gap-2">
-          <ScoreBadge label="Confidence" shortLabel="Conf." value={row.confidence_score} variant="confidence" />
-          <ScoreBadge label="Risk" value={row.risk_score} variant="risk" />
-          <ScoreBadge label="Opportunity" shortLabel="Opp." value={row.opportunity_score} variant="opportunity" />
-        </div>
+        )}
+        {row.data_as_of_label && (
+          <p className="mt-0.5 text-xs text-muted">Odds as of {row.data_as_of_label}</p>
+        )}
       </div>
 
-      <p className="mt-3 text-sm font-medium leading-relaxed [overflow-wrap:anywhere] sm:text-base">
+      <div className="signal-card__scores mt-4 grid w-full grid-cols-3 gap-2">
+        <ScoreBadge label="Confidence" shortLabel="Conf." value={row.confidence_score} variant="confidence" />
+        <ScoreBadge label="Risk" value={row.risk_score} variant="risk" />
+        <ScoreBadge label="Opportunity" shortLabel="Opp." value={row.opportunity_score} variant="opportunity" />
+      </div>
+
+      <p className="signal-card__recommendation mt-3 text-sm font-medium leading-relaxed sm:text-base">
         {row.recommendation}
       </p>
 

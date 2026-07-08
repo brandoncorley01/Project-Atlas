@@ -10,7 +10,7 @@ interface AppShellProps {
 
 export function AppShell({ children, userEmail }: AppShellProps) {
   return (
-    <div className="flex min-h-screen flex-col">
+    <div className="flex min-h-screen w-full min-w-0 flex-col">
       <header className="sticky top-0 z-30 border-b border-border bg-surface/95 backdrop-blur-md">
         <div className="mx-auto flex max-w-7xl items-center gap-3 px-4 py-3 sm:gap-4">
           <Link href="/" className="shrink-0 text-lg font-bold tracking-tight text-accent">

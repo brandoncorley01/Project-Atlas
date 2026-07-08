@@ -4,6 +4,7 @@ import { getSupabaseEnv } from "@/lib/env";
 
 export async function updateSession(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
+  const isDevPreview = pathname.startsWith("/dev/");
   const isSetupRoute = pathname.startsWith("/setup");
   const isAuthRoute =
     pathname.startsWith("/login") ||
@@ -14,7 +15,7 @@ export async function updateSession(request: NextRequest) {
 
   const env = getSupabaseEnv();
   if (!env) {
-    if (isSetupRoute || isAuthRoute) {
+    if (isDevPreview || isSetupRoute || isAuthRoute) {
       return NextResponse.next({ request });
     }
     const url = request.nextUrl.clone();
@@ -45,7 +46,7 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user && !isAuthRoute && !isSetupRoute && !isApiProxyRoute) {
+  if (!user && !isAuthRoute && !isSetupRoute && !isApiProxyRoute && !isDevPreview) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);

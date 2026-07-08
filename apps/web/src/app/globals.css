@@ -47,6 +47,30 @@ body {
   color: var(--foreground);
   font-family: var(--font-sans), system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
+  width: 100%;
+  min-width: 0;
+  overflow-x: clip;
+}
+
+html {
+  width: 100%;
+  overflow-x: clip;
+}
+
+/* Sports / signal cards: never squeeze readable text on narrow screens */
+.signal-card {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.signal-card__body,
+.signal-card__title,
+.signal-card__recommendation {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* Card shell used across signal modules */

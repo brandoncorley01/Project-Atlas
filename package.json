@@ -10,7 +10,8 @@
     "dev:tunnel": "powershell -ExecutionPolicy Bypass -File scripts/start-tunnel.ps1",
     "dev:web": "npm run dev --workspace=apps/web",
     "build:web": "npm run build --workspace=apps/web",
-    "lint:web": "npm run lint --workspace=apps/web"
+    "lint:web": "npm run lint --workspace=apps/web",
+    "verify:mobile-sports-layout": "node scripts/verify-mobile-sports-layout.mjs"
   },
   "workspaces": [
     "apps/web"
