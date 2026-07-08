@@ -95,11 +95,29 @@ Supabase → auth + database (already cloud)
 | `OPENAI_MODEL` | Optional. Default `gpt-4o-mini` (cost-efficient). |
 | `CORS_ORIGINS` | Your Vercel URL, e.g. `https://project-atlas-brandoncorley01.vercel.app` |
 | `ENVIRONMENT` | `production` |
-| `DEFAULT_USER_ID` | Your Supabase user UUID (for future cron jobs) |
+| `DEFAULT_USER_ID` | Your Supabase user UUID (required for cron learning jobs) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Service role key (required for cron jobs to auto-grade and track picks) |
 
 4. Deploy → note API URL: `https://atlas-api-xxxx.onrender.com`
 
 5. Verify: `https://atlas-api-xxxx.onrender.com/api/v1/health`
+
+6. **Cron job (learning flywheel)** — `render.yaml` deploys `atlas-learning-cron` automatically. It runs every 6 hours UTC and:
+   - Registers any unscanned historical picks
+   - Auto-grades expired sports, stocks, and options
+   - Rolls up performance summaries
+   - Refreshes AI market intelligence
+
+   Required on Render for cron: `DEFAULT_USER_ID`, `SUPABASE_SERVICE_ROLE_KEY`, `OPENAI_API_KEY` (optional but recommended).
+
+   Manual trigger (replace URL and secret from Render → Environment):
+
+   ```bash
+   curl -X POST "https://atlas-api-xxxx.onrender.com/api/v1/internal/jobs/nightly-learning" \
+     -H "X-Cron-Secret: YOUR_CRON_SECRET"
+   ```
+
+   Check cron logs in Render → **atlas-learning-cron** → Logs after deploy.
 
 ### Step 2 — Deploy web (Vercel)
 
@@ -151,6 +169,7 @@ Keep localhost URLs if you still develop locally.
 | Odds scan fails | `ODDS_API_KEY` only on **Render**, not in browser env. Paste **all** keys comma-separated in Render → Environment, redeploy, then rescan. |
 | Odds credits exhausted | Add another free key at [the-odds-api.com](https://the-odds-api.com), append to `ODDS_API_KEY` (comma-separated), update Render, redeploy. |
 | AI briefing says "Smart summary" | Add `OPENAI_API_KEY` on Render, redeploy API. Template briefings still work without a key. |
+| Cron job skipped / fails | Set `DEFAULT_USER_ID` and `SUPABASE_SERVICE_ROLE_KEY` on **both** atlas-api and atlas-learning-cron in Render. |
 
 ---
 
@@ -159,7 +178,7 @@ Keep localhost URLs if you still develop locally.
 With mobile off LAN, focus shifts to:
 
 1. **Auto-tracking flywheel** — every scan registers picks; sports/stocks/options auto-grade on expiry; OpenAI analyzes the full corpus for market intelligence
-2. Scheduled auto-grade cron (Render)
+2. ~~Scheduled auto-grade cron (Render)~~ — deployed as `atlas-learning-cron` (every 6h)
 3. Parlay learning loop
 4. Richer calibration UI
 

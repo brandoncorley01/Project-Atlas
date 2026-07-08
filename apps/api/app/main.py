@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from app.config import settings
 
 logger = logging.getLogger(__name__)
-from app.routers import ai, alerts, dashboard, engine, health, me, news, parlays, performance, providers, signals, watchlist
+from app.routers import ai, alerts, dashboard, engine, health, internal, me, news, parlays, performance, providers, signals, watchlist
 
 app = FastAPI(
     title="Project Atlas API",
@@ -72,6 +72,7 @@ app.include_router(watchlist.router, prefix=API_PREFIX, tags=["watchlist"])
 app.include_router(alerts.router, prefix=API_PREFIX, tags=["alerts"])
 app.include_router(performance.router, prefix=API_PREFIX, tags=["performance"])
 app.include_router(ai.router, prefix=API_PREFIX, tags=["ai"])
+app.include_router(internal.router, prefix=API_PREFIX, tags=["internal"])
 
 
 @app.get("/")

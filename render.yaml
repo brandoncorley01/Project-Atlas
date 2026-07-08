@@ -35,3 +35,34 @@ services:
         sync: false
       - key: DEFAULT_USER_ID
         sync: false
+
+  # Learning flywheel — auto-track, grade outcomes, coach rollup, AI intelligence.
+  # Runs every 6 hours UTC (2am/8am/2pm/8pm Eastern during standard time).
+  - type: cron
+    name: atlas-learning-cron
+    runtime: python
+    rootDir: apps/api
+    schedule: "0 */6 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.jobs.nightly_learning
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: PYTHON_VERSION
+        value: "3.12"
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+      - key: FINNHUB_API_KEY
+        sync: false
+      - key: ODDS_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: DEFAULT_USER_ID
+        sync: false
