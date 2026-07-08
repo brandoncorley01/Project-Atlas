@@ -7,6 +7,7 @@ import json
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
+from time import monotonic as _monotonic
 from typing import Any
 
 import httpx
@@ -420,11 +421,12 @@ class OddsApiError(Exception):
 
 
 class OddsApiClient:
-    def __init__(self, api_key: str | None = None) -> None:
+    def __init__(self, api_key: str | None = None, *, timeout: float = 45.0) -> None:
         keys = config.settings.odds_api_keys
         self.api_key = api_key or (keys[0] if keys else "")
         if not self.api_key:
             raise OddsApiError("ODDS_API_KEY is not configured")
+        self.timeout = timeout
         self.requests_remaining: str | None = None
         self.requests_used: str | None = None
         self.quota_exhausted: bool = False
@@ -432,7 +434,7 @@ class OddsApiClient:
     async def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         query = {"apiKey": self.api_key, **(params or {})}
         try:
-            async with httpx.AsyncClient(timeout=45.0) as client:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.get(f"{ODDS_API_BASE}{path}", params=query)
         except (httpx.HTTPError, OSError) as exc:
             raise OddsApiError(
@@ -502,10 +504,78 @@ def _mask_odds_key(key: str) -> str:
     return f"{key[:4]}…{key[-4:]}"
 
 
-async def probe_all_odds_keys() -> dict[str, Any]:
-    """Probe every configured key via free /sports — sum credits across all keys."""
+# Short-lived cache so the dashboard + sports page share one probe result and
+# don't each spawn N network calls. Credits barely change second-to-second, and
+# a scan busts this via invalidate_key_probe_cache().
+_PROBE_CACHE: dict[str, Any] = {"at": 0.0, "data": None}
+_PROBE_TTL_SECONDS = 45.0
+_PROBE_TIMEOUT_SECONDS = 12.0
+
+
+def invalidate_key_probe_cache() -> None:
+    _PROBE_CACHE["at"] = 0.0
+    _PROBE_CACHE["data"] = None
+
+
+async def _probe_single_key(idx: int, key: str) -> dict[str, Any]:
+    """Probe one key via the free /sports endpoint for its live credit count."""
+    client = OddsApiClient(key, timeout=_PROBE_TIMEOUT_SECONDS)
+    entry: dict[str, Any] = {
+        "index": idx + 1,
+        "masked": _mask_odds_key(key),
+        "remaining": None,
+        "used": None,
+        "exhausted": False,
+        "valid": False,
+        "_client": client,
+        "_sports": [],
+    }
+    try:
+        sports = await client.list_sports()
+        entry["valid"] = True
+        entry["_sports"] = sports
+        rem = _to_int(client.requests_remaining)
+        used = _to_int(client.requests_used)
+        if rem is not None:
+            entry["remaining"] = rem
+        if used is not None:
+            entry["used"] = used
+        entry["exhausted"] = client.quota_exhausted
+    except OddsApiError as exc:
+        msg = str(exc)
+        entry["error"] = msg[:120]
+        if "INVALID_KEY" in msg:
+            logger.info("Odds key #%d rejected (invalid)", idx + 1)
+        else:
+            logger.info("Odds key #%d error: %s", idx + 1, exc)
+    return entry
+
+
+async def probe_all_odds_keys(*, use_cache: bool = True) -> dict[str, Any]:
+    """Probe every configured key in parallel via free /sports — sum live credits."""
     keys = config.settings.odds_api_keys
-    entries: list[dict[str, Any]] = []
+    if not keys:
+        return {
+            "key_count": 0,
+            "keys": [],
+            "total_remaining": None,
+            "active_key_index": None,
+            "active_client": None,
+            "active_sports": [],
+            "quota_exhausted": False,
+            "error": "ODDS_API_KEY is not configured",
+        }
+
+    now = _monotonic()
+    if (
+        use_cache
+        and _PROBE_CACHE["data"] is not None
+        and (now - _PROBE_CACHE["at"]) < _PROBE_TTL_SECONDS
+    ):
+        return _PROBE_CACHE["data"]
+
+    probed = await asyncio.gather(*[_probe_single_key(i, k) for i, k in enumerate(keys)])
+
     total_remaining = 0
     have_remaining = False
     active_index: int | None = None
@@ -514,48 +584,31 @@ async def probe_all_odds_keys() -> dict[str, Any]:
     last_error: str | None = None
     exhausted_valid = 0
     valid_count = 0
+    entries: list[dict[str, Any]] = []
 
-    for idx, key in enumerate(keys):
-        client = OddsApiClient(key)
-        entry: dict[str, Any] = {
-            "index": idx + 1,
-            "masked": _mask_odds_key(key),
-            "remaining": None,
-            "used": None,
-            "exhausted": False,
-            "valid": False,
-        }
-        try:
-            sports = await client.list_sports()
-            entry["valid"] = True
+    for idx, entry in enumerate(probed):
+        client = entry.pop("_client", None)
+        sports = entry.pop("_sports", [])
+        if entry.get("valid"):
             valid_count += 1
-            rem = _to_int(client.requests_remaining)
-            used = _to_int(client.requests_used)
-            if rem is not None:
-                entry["remaining"] = rem
+            if entry.get("remaining") is not None:
                 have_remaining = True
-                total_remaining += max(0, rem)
-            if used is not None:
-                entry["used"] = used
-            entry["exhausted"] = client.quota_exhausted
-            if client.quota_exhausted:
+                total_remaining += max(0, int(entry["remaining"]))
+            if entry.get("exhausted"):
                 exhausted_valid += 1
-            if active_index is None and not client.quota_exhausted and sports:
+            elif active_index is None and sports and client is not None:
                 active_index = idx
                 active_client = client
                 active_sports = sports
-        except OddsApiError as exc:
-            last_error = str(exc)
-            entry["error"] = last_error[:120]
-            if "INVALID_KEY" in last_error:
-                logger.info("Odds key #%d rejected (invalid)", idx + 1)
-            else:
-                logger.info("Odds key #%d error: %s", idx + 1, exc)
+        elif entry.get("error"):
+            last_error = entry["error"]
         entries.append(entry)
 
-    quota_exhausted = bool(keys) and valid_count > 0 and exhausted_valid == valid_count and active_index is None
+    quota_exhausted = (
+        bool(keys) and valid_count > 0 and exhausted_valid == valid_count and active_index is None
+    )
 
-    return {
+    result = {
         "key_count": len(keys),
         "keys": entries,
         "total_remaining": total_remaining if have_remaining else None,
@@ -565,6 +618,10 @@ async def probe_all_odds_keys() -> dict[str, Any]:
         "quota_exhausted": quota_exhausted,
         "error": last_error,
     }
+
+    _PROBE_CACHE["at"] = now
+    _PROBE_CACHE["data"] = result
+    return result
 
 
 async def _select_active_client() -> tuple[OddsApiClient | None, list[dict[str, Any]], dict[str, Any]]:
@@ -581,6 +638,7 @@ async def _select_active_client() -> tuple[OddsApiClient | None, list[dict[str, 
         "keys": probe["keys"],
     }
     if client is not None:
+        client.timeout = 45.0  # probe used a short timeout; restore for odds fetches
         info["requests_remaining"] = client.requests_remaining
         info["requests_used"] = client.requests_used
     return client, sports, info
@@ -766,6 +824,9 @@ async def fetch_all_sports_odds(
         stats["requests_used"] = client.requests_used
     if client.quota_exhausted:
         stats["quota_exhausted"] = True
+
+    # A live pull just spent credits — force the next probe to re-read balances.
+    invalidate_key_probe_cache()
 
     raw_count = len(events)
     events = filter_upcoming_events(events)

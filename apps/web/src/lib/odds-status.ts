@@ -47,17 +47,21 @@ export function rescoreButtonLabel(
   return "Rescore saved odds (0 credits)";
 }
 
-export async function fetchOddsProviderStatus(accessToken?: string): Promise<OddsApiStatus | null> {
-  const data = await fetchProvidersStatus(accessToken);
+export async function fetchOddsProviderStatus(accessToken?: string, refresh = false): Promise<OddsApiStatus | null> {
+  const data = await fetchProvidersStatus(accessToken, refresh);
   return data?.odds_api ?? null;
 }
 
-export async function fetchProvidersStatus(accessToken?: string): Promise<{
+export async function fetchProvidersStatus(
+  accessToken?: string,
+  refresh = false,
+): Promise<{
   finnhub?: Record<string, unknown>;
   odds_api?: OddsApiStatus;
 } | null> {
   const apiUrl = getApiUrl();
-  const res = await fetch(`${apiUrl}/providers/status`, {
+  const query = refresh ? "?refresh=true" : "";
+  const res = await fetch(`${apiUrl}/providers/status${query}`, {
     headers: apiRequestHeaders(accessToken),
     cache: "no-store",
     credentials: usesBffProxy() ? "include" : "same-origin",

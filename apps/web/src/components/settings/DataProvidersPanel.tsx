@@ -72,7 +72,7 @@ export function DataProvidersPanel() {
   const [backendError, setBackendError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-  const loadStatus = useCallback(async () => {
+  const loadStatus = useCallback(async (refresh = false) => {
     setStatusLoading(true);
     try {
       let token: string | undefined;
@@ -82,7 +82,7 @@ export function DataProvidersPanel() {
         token = data.session?.access_token ?? undefined;
       }
 
-      const data = await fetchProvidersStatus(token);
+      const data = await fetchProvidersStatus(token, refresh);
       if (!data) {
         setBackendError(`Backend unreachable — ${API_START_HINT}`);
         setStatusLoading(false);
@@ -210,7 +210,7 @@ export function DataProvidersPanel() {
         </p>
         <button
           type="button"
-          onClick={() => void loadStatus()}
+          onClick={() => void loadStatus(true)}
           disabled={statusLoading}
           className="text-xs font-medium text-accent hover:underline disabled:opacity-50"
         >

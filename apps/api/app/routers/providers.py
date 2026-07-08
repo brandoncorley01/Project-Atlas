@@ -6,7 +6,7 @@ router = APIRouter()
 
 
 @router.get("/providers/status")
-async def providers_status() -> dict:
+async def providers_status(refresh: bool = False) -> dict:
     """Show which data providers are configured."""
     reload_settings()
     from app.config import settings as active_settings
@@ -49,7 +49,7 @@ async def providers_status() -> dict:
 
     if odds_configured:
         try:
-            probe = await probe_all_odds_keys()
+            probe = await probe_all_odds_keys(use_cache=not refresh)
             odds_key_count = probe.get("key_count") or odds_key_count
             odds_keys_breakdown = probe.get("keys") or []
             odds_total_remaining = probe.get("total_remaining")
