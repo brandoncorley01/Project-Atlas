@@ -123,9 +123,6 @@ class SportsRefreshService:
 
         reload_settings()
         try:
-            from app.services.stale_signal_service import StaleSignalService
-
-            await StaleSignalService(self.db, self.user_id).expire_all()
             events, fetch_stats = await fetch_all_sports_odds(force_refresh=force_refresh)
             raw_count = len(events)
             events = filter_upcoming_events(events)
@@ -244,7 +241,30 @@ class SportsRefreshService:
 
         sports_in_results = sorted({str(r.get("sport")) for r in setups})
 
-        if replace:
+        if replace and not setups:
+            existing = await self.db.select(
+                "sports_signals",
+                filters={"user_id": f"eq.{self.user_id}", "status": "eq.active"},
+                limit=1,
+            )
+            kept_msg = (
+                "No new +EV edges in this scan — your current picks are unchanged. "
+                "Use Fetch live odds only when you want fresh lines from the API."
+            )
+            return {
+                "signals_created": 0,
+                "signals_kept": len(existing) > 0,
+                "events_scanned": len(events),
+                "stats": fetch_stats,
+                "top_opportunity": None,
+                "parlays_invalidated": False,
+                "calibration": calibration,
+                "message": kept_msg if existing else self._result_message(
+                    setups, fetch_stats, parlays_invalidated=False, calibration=calibration
+                ),
+            }
+
+        if replace and setups:
             await self.db.delete(
                 "sports_signals",
                 {"user_id": f"eq.{self.user_id}", "status": "eq.active"},

@@ -47,11 +47,16 @@ def hours_until_event(event_start: str | None) -> float | None:
 
 
 def is_sports_actionable(row: dict[str, Any]) -> bool:
-    """True when the game hasn't started and the scan isn't ancient."""
+    """True when the game hasn't started — used only for new scans, not listing saved picks."""
     hours = hours_until_event(row.get("event_start"))
     if hours is None:
         return False
     return hours > 0
+
+
+def is_sports_listable(row: dict[str, Any]) -> bool:
+    """True for any active saved pick with a known kickoff (including started games)."""
+    return hours_until_event(row.get("event_start")) is not None
 
 
 def is_event_upcoming(commence_time: str | None) -> bool:

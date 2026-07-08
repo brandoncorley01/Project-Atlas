@@ -46,7 +46,7 @@ export default async function SportsPage() {
             24/7 GLOBAL
           </span>
         }
-        description="Plays for the next 7 days ranked by edge and kickoff time — includes WNBA, MLB, soccer, tennis, and more."
+        description="Your scan results stay on this page until the next successful scan — rescore uses 0 credits when cache is warm; Fetch live odds spends API credits."
       />
       <SportsSignalsView initialItems={items} initialCategories={categories} />
     </>

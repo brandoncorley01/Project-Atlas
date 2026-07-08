@@ -87,6 +87,8 @@ export function SportsSignalsView({
       if (category) params.set("category", category);
       const res = await fetch(`${apiUrl}/signals/sports?${params}`, {
         headers: apiRequestHeaders(token),
+        cache: "no-store",
+        credentials: usesBffProxy() ? "include" : "same-origin",
       });
       if (res.ok) {
         const data = await res.json();
@@ -119,6 +121,17 @@ export function SportsSignalsView({
   }
 
   useEffect(() => {
+    void (async () => {
+      const token = await getToken();
+      if (token || usesBffProxy()) {
+        await loadItems(token, activeCategory);
+      }
+    })();
+    // Refresh on mount so picks persist after API changes without a full reload.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
     if (initialCategories.length) return;
     void (async () => {
       const token = await getToken();
@@ -144,13 +157,14 @@ export function SportsSignalsView({
       return;
     }
 
-    const shouldForceLive = forceRefresh || cacheNeedsLive;
+    const shouldForceLive = forceRefresh;
     const apiUrl = getApiUrl();
     const params = shouldForceLive ? "?force_refresh=true" : "";
     try {
       const res = await fetch(`${apiUrl}/engine/refresh-sports${params}`, {
         method: "POST",
         headers: apiRequestHeaders(token),
+        credentials: usesBffProxy() ? "include" : "same-origin",
         signal: AbortSignal.timeout(300000),
       });
       const body = await res.json();
@@ -166,14 +180,17 @@ export function SportsSignalsView({
       }
 
       const created = body.signals_created as number;
+      const kept = body.signals_kept as boolean | undefined;
       const creditsUsed = body.credits_used as number | undefined;
       const cacheUsed = body.cache_used as boolean | undefined;
       const apiMessage = body.message as string | undefined;
       setMessage(
         apiMessage ??
-          (created > 0
-            ? `Found ${created} plays across active leagues · ${cacheUsed ? "0 credits (cached)" : `~${creditsUsed ?? "?"} credits`}`
-            : "No edges met the threshold — try Fetch live odds for a fresh slate"),
+          (kept
+            ? "No new edges found — kept your current picks on the board"
+            : created > 0
+              ? `Found ${created} plays across active leagues · ${cacheUsed ? "0 credits (cached)" : `~${creditsUsed ?? "?"} credits`}`
+              : "No edges met the threshold — try Fetch live odds for a fresh slate"),
       );
 
       await Promise.all([
@@ -234,10 +251,10 @@ export function SportsSignalsView({
             type="button"
             onClick={() => refreshSports(true)}
             disabled={loading}
-            title="Uses API credits · scans in-season leagues first (MLB, WNBA, soccer, tennis) · skips far-future NFL lines in summer"
+            title="Uses API credits — fetches fresh odds from The Odds API. Your current picks stay until this scan finds new plays."
             className="rounded-lg border border-violet-500/40 bg-violet-500/10 px-4 py-2 text-sm font-medium text-violet-200 hover:bg-violet-500/20 disabled:opacity-50"
           >
-            Fetch live odds
+            {loading ? "Scanning…" : "Fetch live odds"}
           </button>
         </div>
       </div>

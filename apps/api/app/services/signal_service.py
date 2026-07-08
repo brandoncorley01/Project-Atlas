@@ -14,13 +14,33 @@ from app.services.freshness import (
     format_data_as_of_label,
     hours_until_event,
     is_options_fresh,
-    is_sports_actionable,
+    is_sports_listable,
     is_stock_fresh,
     sports_staleness_reason,
     stock_staleness_reason,
 )
-from app.services.sports_ranking import filter_near_term, is_within_horizon, sort_for_display
+from app.services.sports_ranking import (
+    MAX_SCAN_HORIZON_HOURS,
+    NEAR_TERM_HOURS,
+    filter_near_term,
+    is_within_horizon,
+    sort_for_display,
+)
 import re
+
+
+def _sports_window_match(row: dict, window: str) -> bool:
+    """Include started games until the next scan replaces them."""
+    hours = hours_until_event(row.get("event_start"))
+    if hours is None:
+        return False
+    if hours <= 0:
+        return True
+    if window == "soon":
+        return hours <= NEAR_TERM_HOURS
+    if window == "week":
+        return hours <= MAX_SCAN_HORIZON_HOURS
+    return True
 
 
 def _safe_float(value: object, default: float = 0.0) -> float:
@@ -172,11 +192,7 @@ class SignalService:
         window: str = "soon",
         skip_expire: bool = False,
     ) -> list[dict]:
-        if status == "active" and not skip_expire:
-            from app.services.stale_signal_service import StaleSignalService
-
-            await StaleSignalService(self.db, self.user_id).expire_all()
-
+        # Sports picks persist until the user runs a new scan — never auto-expire on list load.
         fetch_limit = 200 if category or window == "all" else max(limit * 3, 50)
         rows = await self.db.select(
             "sports_signals",
@@ -191,11 +207,8 @@ class SignalService:
         if sport:
             sport_upper = sport.upper()
             rows = [r for r in rows if str(r.get("sport") or "").upper() == sport_upper]
-        rows = [r for r in rows if is_sports_actionable(r)]
-        if window == "soon":
-            rows = filter_near_term(rows)
-        elif window == "week":
-            rows = [r for r in rows if is_within_horizon(r)]
+        rows = [r for r in rows if is_sports_listable(r)]
+        rows = [r for r in rows if _sports_window_match(r, window)]
         if category:
             rows = filter_by_category(rows, category)
         rows = sort_for_display(rows)
@@ -210,7 +223,7 @@ class SignalService:
         if not rows:
             return None
         row = rows[0]
-        if str(row.get("status")) == "active" and not is_sports_actionable(row):
+        if str(row.get("status")) == "active" and not is_sports_listable(row):
             return None
         return row
 
@@ -224,7 +237,7 @@ class SignalService:
             order="opportunity_score.desc",
             limit=limit,
         )
-        return [r for r in rows if is_sports_actionable(r)]
+        return [r for r in rows if is_sports_listable(r)]
 
     async def sports_category_catalog(self) -> list[dict]:
         pool = await self.list_all_sports()

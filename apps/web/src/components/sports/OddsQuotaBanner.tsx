@@ -75,8 +75,9 @@ export function OddsQuotaBanner({ status }: { status: OddsApiStatus | null }) {
         )}{" "}
         {status.cache_rescore_free ? (
           <>
-            Cached odds are warm — use <strong className="text-emerald-400">{rescoreButtonLabel(status)}</strong>{" "}
-            before spending credits on a live pull.
+            Cached odds are warm — <strong className="text-emerald-400">{rescoreButtonLabel(status)}</strong>{" "}
+            costs 0 credits and keeps your current board unless new plays are found. Use{" "}
+            <strong className="text-amber-300">Fetch live odds</strong> only when you need fresh lines.
           </>
         ) : (
           <>

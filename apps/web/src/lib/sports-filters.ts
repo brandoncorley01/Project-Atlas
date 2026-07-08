@@ -35,10 +35,19 @@ function compositeRank(row: SportsSignal): number {
 }
 
 export function filterByWindow(items: SportsSignal[], window: SportsWindowKey): SportsSignal[] {
+  const started = items.filter((i) => (i.hours_until_start ?? 0) <= 0);
   if (window === "week") {
-    return items.filter((i) => (i.hours_until_start ?? 9999) <= WEEK_HOURS);
+    const upcoming = items.filter((i) => {
+      const h = i.hours_until_start ?? 9999;
+      return h > 0 && h <= WEEK_HOURS;
+    });
+    return [...started, ...upcoming];
   }
-  return items.filter((i) => (i.hours_until_start ?? 9999) <= NEAR_TERM_HOURS);
+  const upcoming = items.filter((i) => {
+    const h = i.hours_until_start ?? 9999;
+    return h > 0 && h <= NEAR_TERM_HOURS;
+  });
+  return [...started, ...upcoming];
 }
 
 export function filterSports(items: SportsSignal[], filter: SportsFilterKey): SportsSignal[] {

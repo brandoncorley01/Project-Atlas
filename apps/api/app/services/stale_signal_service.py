@@ -30,10 +30,14 @@ class StaleSignalService:
         self.db = db
         self.user_id = user_id
 
-    async def expire_all(self) -> dict[str, int]:
-        """Move stale active rows to status=expired."""
+    async def expire_all(self, *, include_sports: bool = False) -> dict[str, int]:
+        """Move stale active rows to status=expired.
+
+        Sports picks are kept until the user runs a new scan (include_sports=False by default).
+        """
         counts: dict[str, int] = {}
-        counts["sports"] = await self._expire_table("sports_signals", is_sports_actionable)
+        if include_sports:
+            counts["sports"] = await self._expire_table("sports_signals", is_sports_actionable)
         counts["stocks"] = await self._expire_table("stock_signals", is_stock_fresh)
         counts["options"] = await self._expire_table("options_signals", is_options_fresh)
         counts["parlays"] = await self._expire_table("parlays", is_parlay_fresh)
