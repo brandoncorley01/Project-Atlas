@@ -38,6 +38,24 @@ async def refresh_stocks(
     return {"status": "ok", "module": "stocks", **result}
 
 
+@router.post("/analyze-stock")
+async def analyze_stock(
+    user_id: str = Depends(get_current_user_id),
+    token: str = Depends(get_access_token),
+    ticker: str = "",
+    persist: bool = False,
+) -> dict:
+    """Full swing analysis for a single ticker — chart, entry, stop, and targets."""
+    from app.services.stock_service import StockRefreshService
+
+    service = StockRefreshService(SupabaseClient(token), user_id)
+    result = await service.analyze_ticker(ticker, persist=persist)
+    if not result.get("ok"):
+        return {"status": "error", "module": "stocks", **result}
+    set_last_job("analyze_stock")
+    return {"status": "ok", "module": "stocks", **result}
+
+
 @router.post("/refresh-sports")
 async def refresh_sports(
     user_id: str = Depends(get_current_user_id),

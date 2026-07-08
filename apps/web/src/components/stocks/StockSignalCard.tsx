@@ -1,11 +1,12 @@
 "use client";
 
-import Link from "next/link";
 import { ScoreBadge } from "@/components/ui/ScoreBadge";
 import { StockChart, type ChartBar } from "@/components/charts/StockChart";
 import { AddToWatchlistButton } from "@/components/watchlist/AddToWatchlistButton";
 import { LogOutcomeButtons } from "@/components/performance/LogOutcomeButtons";
 import { stockSignalMetadata } from "@/lib/watchlist-api";
+import { formatRiskReward, midpoint, riskRewardRatio } from "@/lib/trade-metrics";
+import Link from "next/link";
 import { useState } from "react";
 
 export interface StockSignal {
@@ -41,6 +42,9 @@ export interface StockSignal {
     trend_bullish?: boolean;
   };
   chart_bars?: ChartBar[];
+  scoring_snapshot?: {
+    weak_setup?: boolean;
+  };
 }
 
 function timeframeLabel(timeframe?: string) {
@@ -49,25 +53,40 @@ function timeframeLabel(timeframe?: string) {
   return "Swing trade";
 }
 
+function isLookupId(id: string) {
+  return id.startsWith("lookup-");
+}
+
 export function StockSignalCard({
   row,
   rank,
   showChart = false,
+  lookupMode = false,
 }: {
   row: StockSignal;
   rank: number;
   showChart?: boolean;
+  lookupMode?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(rank === 1 || showChart);
+  const [expanded, setExpanded] = useState(rank === 1 || showChart || lookupMode);
   const tech = row.technicals ?? {};
   const bullish = tech.trend === "bullish";
   const entry = row.entry_range ?? {};
   const headline = row.context?.top_headline;
+  const weakSetup = row.scoring_snapshot?.weak_setup;
+  const entryMid = midpoint(entry.low, entry.high) ?? row.current_price;
+  const target1 = row.profit_targets?.[0] ?? null;
+  const target2 = row.profit_targets?.[1] ?? null;
+  const rr1 = formatRiskReward(riskRewardRatio(entryMid, row.stop_loss ?? null, target1));
+  const chartVisible = lookupMode || showChart || expanded;
+  const canSaveOutcome = !isLookupId(row.id);
 
   return (
     <article className="w-full max-w-full overflow-hidden rounded-xl border border-border bg-surface p-4 sm:p-5">
       <div className="flex flex-wrap items-center gap-2">
-        <p className="text-xs uppercase tracking-wide text-muted">#{rank} · Stock swing</p>
+        <p className="text-xs uppercase tracking-wide text-muted">
+          #{rank} · {lookupMode ? "Ticker analysis" : "Stock swing"}
+        </p>
         <span
           className={`rounded-full px-2 py-0.5 text-xs font-medium ${
             bullish ? "bg-success/20 text-success" : "bg-danger/20 text-danger"
@@ -75,6 +94,11 @@ export function StockSignalCard({
         >
           {bullish ? "Bullish" : "Bearish"}
         </span>
+        {weakSetup && (
+          <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs font-medium text-amber-300">
+            Watchlist only
+          </span>
+        )}
         {row.context?.has_catalyst && (
           <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs font-medium text-amber-300">
             📰 Catalyst
@@ -127,26 +151,41 @@ export function StockSignalCard({
             SMA20 ${Number(tech.sma20).toFixed(2)}
           </span>
         )}
+        {tech.vs_sma20_pct != null && (
+          <span className="rounded-md bg-background px-2 py-1 text-xs text-muted">
+            vs SMA20 {Number(tech.vs_sma20_pct) >= 0 ? "+" : ""}
+            {Number(tech.vs_sma20_pct).toFixed(1)}%
+          </span>
+        )}
       </div>
 
-      <div className="mt-4 grid gap-3 sm:grid-cols-3">
-        <div className="rounded-lg border border-border bg-background/50 p-3">
-          <p className="text-xs uppercase tracking-wide text-muted">Entry zone</p>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="rounded-lg border border-accent/30 bg-accent/10 p-3">
+          <p className="text-xs uppercase tracking-wide text-accent">Entry zone</p>
           <p className="mt-1 text-sm font-semibold">
             ${Number(entry.low ?? 0).toFixed(2)} – ${Number(entry.high ?? 0).toFixed(2)}
           </p>
+          <p className="mt-1 text-xs text-muted">Where to open the position</p>
         </div>
-        <div className="rounded-lg border border-border bg-background/50 p-3">
-          <p className="text-xs uppercase tracking-wide text-muted">Stop loss</p>
+        <div className="rounded-lg border border-danger/30 bg-danger/10 p-3">
+          <p className="text-xs uppercase tracking-wide text-danger">Stop loss</p>
           <p className="mt-1 text-sm font-semibold text-danger">
             ${Number(row.stop_loss ?? 0).toFixed(2)}
           </p>
+          <p className="mt-1 text-xs text-muted">Exit if thesis breaks</p>
+        </div>
+        <div className="rounded-lg border border-success/30 bg-success/10 p-3">
+          <p className="text-xs uppercase tracking-wide text-success">Take profit</p>
+          <p className="mt-1 text-sm font-semibold text-success">
+            {target1 != null ? `$${Number(target1).toFixed(2)}` : "—"}
+            {target2 != null ? ` · $${Number(target2).toFixed(2)}` : ""}
+          </p>
+          <p className="mt-1 text-xs text-muted">T1 {target2 != null ? "· T2 scale-out" : "first target"}</p>
         </div>
         <div className="rounded-lg border border-border bg-background/50 p-3">
-          <p className="text-xs uppercase tracking-wide text-muted">Targets</p>
-          <p className="mt-1 text-sm font-semibold text-success">
-            {(row.profit_targets ?? []).map((t) => `$${Number(t).toFixed(2)}`).join(" · ") || "—"}
-          </p>
+          <p className="text-xs uppercase tracking-wide text-muted">Risk / reward</p>
+          <p className="mt-1 text-sm font-semibold">{rr1}</p>
+          <p className="mt-1 text-xs text-muted">To first target vs stop</p>
         </div>
       </div>
 
@@ -157,36 +196,43 @@ export function StockSignalCard({
         </div>
       )}
 
-      {!showChart && (
+      {(row.chart_bars?.length ?? 0) > 0 && chartVisible && (
+        <div className="mt-4">
+          <StockChart
+            bars={row.chart_bars ?? []}
+            entryLow={entry.low}
+            entryHigh={entry.high}
+            stopLoss={row.stop_loss}
+            profitTargets={row.profit_targets}
+          />
+        </div>
+      )}
+
+      {!lookupMode && !showChart && (
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <button
             type="button"
             onClick={() => setExpanded((v) => !v)}
             className="text-sm font-medium text-accent hover:underline"
           >
-            {expanded ? "Hide details" : "Show trade plan & chart"}
+            {expanded ? "Hide trade plan" : "Show trade plan & chart"}
           </button>
-          <Link href={`/stocks/${row.id}`} className="text-sm font-medium text-accent hover:underline">
-            Full detail page →
-          </Link>
+          {!isLookupId(row.id) && (
+            <Link href={`/stocks/${row.id}`} className="text-sm font-medium text-accent hover:underline">
+              Full detail page →
+            </Link>
+          )}
           <AddToWatchlistButton
-            symbol={row.id}
-            itemType="stock_signal"
+            symbol={canSaveOutcome ? row.id : row.ticker}
+            itemType={canSaveOutcome ? "stock_signal" : "ticker"}
             metadata={stockSignalMetadata(row)}
             label="Save to watchlist"
-            variant="compact"
-          />
-          <AddToWatchlistButton
-            symbol={row.ticker}
-            itemType="ticker"
-            metadata={{ label: `${row.ticker} ticker` }}
-            label={`Track ${row.ticker}`}
             variant="compact"
           />
         </div>
       )}
 
-      {expanded && (
+      {(expanded || lookupMode) && (
         <div className="mt-4 space-y-4 border-t border-border pt-4">
           <p className="text-sm text-muted">{row.explanation}</p>
           {row.suggested_action && (
@@ -209,19 +255,23 @@ export function StockSignalCard({
               <span className="font-medium text-danger">Bear case:</span> {row.bear_case}
             </p>
           )}
-          {(row.chart_bars?.length ?? 0) > 0 && (
-            <StockChart
-              bars={row.chart_bars ?? []}
-              entryLow={entry.low}
-              entryHigh={entry.high}
-              stopLoss={row.stop_loss}
-              profitTargets={row.profit_targets}
-            />
-          )}
           {row.risk_warning && (
             <p className="text-xs text-muted">{row.risk_warning}</p>
           )}
-          <LogOutcomeButtons module="stock" signalId={row.id} className="pt-2 border-t border-border" />
+          {canSaveOutcome && (
+            <LogOutcomeButtons module="stock" signalId={row.id} className="pt-2 border-t border-border" />
+          )}
+          {lookupMode && (
+            <div className="flex flex-wrap gap-3 pt-2">
+              <AddToWatchlistButton
+                symbol={row.ticker}
+                itemType="ticker"
+                metadata={{ label: `${row.ticker} ticker` }}
+                label={`Track ${row.ticker}`}
+                variant="compact"
+              />
+            </div>
+          )}
         </div>
       )}
     </article>

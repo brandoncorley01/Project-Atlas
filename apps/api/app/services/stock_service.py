@@ -76,6 +76,67 @@ class StockRefreshService:
             return None
         return setup_to_row(self.user_id, setup)
 
+    async def analyze_ticker(self, symbol: str, *, persist: bool = False) -> dict[str, Any]:
+        """On-demand analysis for any ticker — chart, levels, and scoring."""
+        from app.services.signal_service import SignalService
+
+        sym = str(symbol or "").upper().strip()
+        if not sym or len(sym) > 12 or not sym.replace(".", "").isalnum():
+            return {"ok": False, "message": "Enter a valid ticker symbol (e.g. AAPL, NVDA)."}
+
+        payload = await fetch_daily_bars(sym, days=120)
+        bars = payload.get("bars") or []
+        if len(bars) < 30:
+            return {
+                "ok": False,
+                "message": f"Not enough price history for {sym}. Check the symbol and try again.",
+            }
+
+        series = bars_to_series(bars)
+        catalyst = await self._news.catalyst_for_symbol(sym)
+        setup = analyze_swing(
+            symbol=sym,
+            closes=series["closes"],
+            highs=series["highs"],
+            lows=series["lows"],
+            volumes=series["volumes"],
+            catalyst=catalyst,
+            chart_bars=bars,
+            min_setup_strength=0.0,
+        )
+        if not setup:
+            return {"ok": False, "message": f"Could not analyze {sym}."}
+
+        row = setup_to_row(self.user_id, setup)
+        persisted = False
+
+        if persist:
+            await self.db.delete(
+                "stock_signals",
+                {"user_id": f"eq.{self.user_id}", "ticker": f"eq.{sym}", "status": "eq.active"},
+            )
+            saved = await self.db.insert("stock_signals", [row])
+            if saved:
+                row = saved[0]
+                persisted = True
+        else:
+            row["id"] = f"lookup-{sym}"
+
+        item = SignalService(self.db, self.user_id).format_stock_item(row)
+        weak = bool((row.get("scoring_snapshot") or {}).get("weak_setup"))
+        message = (
+            f"{sym} setup scored {setup.opportunity_score:.0f}/100 — no strong swing edge yet."
+            if weak
+            else f"{sym} swing analysis ready — opportunity {setup.opportunity_score:.0f}/100."
+        )
+        return {
+            "ok": True,
+            "item": item,
+            "persisted": persisted,
+            "weak_setup": weak,
+            "message": message,
+        }
+
     async def refresh_stocks(self, *, replace: bool = True, limit: int = MAX_SIGNALS) -> dict[str, Any]:
         from app.services.stale_signal_service import StaleSignalService
 

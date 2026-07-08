@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { StockTickerLookup } from "@/components/stocks/StockTickerLookup";
 import { StockSignalCard, type StockSignal } from "@/components/stocks/StockSignalCard";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ListSkeleton } from "@/components/ui/Skeleton";
@@ -9,9 +10,10 @@ import { apiRequestHeaders, getApiUrl, usesBffProxy } from "@/lib/api-url";
 
 interface StocksSignalsViewProps {
   initialItems: StockSignal[];
+  initialTicker?: string;
 }
 
-export function StocksSignalsView({ initialItems }: StocksSignalsViewProps) {
+export function StocksSignalsView({ initialItems, initialTicker }: StocksSignalsViewProps) {
   const router = useRouter();
   const [items, setItems] = useState(initialItems);
   const [loading, setLoading] = useState(false);
@@ -71,6 +73,8 @@ export function StocksSignalsView({ initialItems }: StocksSignalsViewProps) {
 
   return (
     <div>
+      <StockTickerLookup initialTicker={initialTicker} />
+
       <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm text-muted">
           Ranked by opportunity score · RSI, MACD, relative volume, and news catalysts.

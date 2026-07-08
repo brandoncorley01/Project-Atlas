@@ -87,6 +87,7 @@ def analyze_swing(
     volumes: list[float],
     catalyst: dict[str, Any] | None = None,
     chart_bars: list[dict[str, Any]] | None = None,
+    min_setup_strength: float = 42.0,
 ) -> StockSwingSetup | None:
     if len(closes) < 30:
         return None
@@ -167,8 +168,10 @@ def analyze_swing(
 
     direction = "bullish" if bullish >= bearish else "bearish"
     setup_strength = max(bullish, bearish)
-    if setup_strength < 42:
+    if setup_strength < min_setup_strength:
         return None
+
+    weak_setup = setup_strength < 42
 
     entry_low, entry_high, stop, targets, hold, timeframe = _build_levels(
         direction=direction,
@@ -184,6 +187,9 @@ def analyze_swing(
     risk_score = round(min(90, max(18, stop_distance_pct * 12 + (100 - (rsi or 50)) * 0.15)), 1)
     confidence = round(min(92, setup_strength + (8 if catalyst.get("has_catalyst") else 0)), 1)
     opportunity = round(min(95, confidence * 0.55 + (100 - risk_score) * 0.35 + min(12, rvol * 4)), 1)
+    if weak_setup:
+        opportunity = round(min(38, opportunity * 0.65), 1)
+        confidence = round(min(55, confidence * 0.75), 1)
 
     technicals = {
         "rsi": rsi,
@@ -199,7 +205,10 @@ def analyze_swing(
     }
 
     if direction == "bullish":
-        recommendation = f"Bullish swing on {symbol} — momentum + support alignment"
+        if weak_setup:
+            recommendation = f"Watch {symbol} — bullish lean but setup not strong enough yet"
+        else:
+            recommendation = f"Bullish swing on {symbol} — momentum + support alignment"
         bull_case = (
             f"Price ${price:.2f} holds above SMA20 (${sma20:.2f}). "
             f"RSI {rsi:.0f}, MACD histogram positive, volume {rvol:.1f}x average."
@@ -210,7 +219,10 @@ def analyze_swing(
         invalidation = f"Daily close below ${stop:.2f}"
         suggested_action = f"Consider entry between ${entry_low:.2f}–${entry_high:.2f}"
     else:
-        recommendation = f"Bearish swing on {symbol} — weakness below key averages"
+        if weak_setup:
+            recommendation = f"Watch {symbol} — bearish lean but setup not strong enough yet"
+        else:
+            recommendation = f"Bearish swing on {symbol} — weakness below key averages"
         bull_case = "Reclaim of SMA20 with volume would invalidate the short swing."
         bear_case = (
             f"Price ${price:.2f} below SMA20 (${sma20:.2f}). "
@@ -255,6 +267,7 @@ def analyze_swing(
         scoring_snapshot={
             "direction": direction,
             "setup_strength": setup_strength,
+            "weak_setup": weak_setup,
             "catalyst": catalyst,
             "chart_bars": compact_chart,
             "market_context": {

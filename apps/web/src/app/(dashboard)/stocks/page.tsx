@@ -9,7 +9,13 @@ interface StocksListResponse {
   items: StockSignal[];
 }
 
-export default async function StocksPage() {
+export default async function StocksPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ ticker?: string }>;
+}) {
+  const params = await searchParams;
+  const initialTicker = params.ticker?.toUpperCase();
   let items: StockSignal[] = [];
 
   if (getSupabaseEnv()) {
@@ -30,9 +36,9 @@ export default async function StocksPage() {
     <>
       <PageHeader
         title="Stock Swing Trading"
-        description="2–7 day and 1–2 week setups ranked by opportunity score. Each card shows entry zone, stop loss, and price targets — tap for the full chart."
+        description="Type any ticker for a full analysis with chart, entry zone, stop-loss, and take-profit targets — or scan the market for ranked swing setups."
       />
-      <StocksSignalsView initialItems={items} />
+      <StocksSignalsView initialItems={items} initialTicker={initialTicker} />
     </>
   );
 }

@@ -48,9 +48,17 @@ function formatExpiration(expiration?: string) {
   });
 }
 
+function recommendedStrategy(plan?: TradePlan) {
+  if (!plan?.strategies?.length) return null;
+  return (
+    plan.strategies.find((s) => s.id === plan.recommended_strategy_id) ?? plan.strategies[0]
+  );
+}
+
 export function OptionSignalCard({ row, rank }: { row: OptionSignal; rank: number }) {
   const [expanded, setExpanded] = useState(rank === 1);
   const tradePlan = row.scoring_snapshot?.trade_plan;
+  const strategy = recommendedStrategy(tradePlan);
   const ctx = row.context ?? (row.scoring_snapshot?.market_context as OptionSignal["context"]);
   const winProb = row.scoring_snapshot?.profit_probability ?? ctx?.profit_probability;
   const expLabel = formatExpiration(row.expiration);
@@ -81,7 +89,7 @@ export function OptionSignalCard({ row, rank }: { row: OptionSignal; rank: numbe
             {row.underlying} {optionType} ${Number(row.strike ?? 0).toFixed(0)}
           </h2>
           <p className="mt-1 text-sm text-muted">
-            Premium ${Number(row.premium).toFixed(2)} ·{" "}
+            Premium ${premium.toFixed(2)} ·{" "}
             <span className={isBudget ? "font-semibold text-emerald-400" : "text-success"}>
               ${contractCost.toFixed(0)}/contract
             </span>{" "}
@@ -123,17 +131,56 @@ export function OptionSignalCard({ row, rank }: { row: OptionSignal; rank: numbe
         </div>
       )}
 
-      {tradePlan?.purchase_window && (
-        <div className="mt-4 flex flex-wrap gap-2">
-          <span className="rounded-lg bg-accent/15 px-3 py-1.5 text-sm text-accent">
-            Buy: {tradePlan.purchase_window.label}
-          </span>
-          <span className="rounded-lg bg-background px-3 py-1.5 text-sm text-muted">
-            Breakeven ${tradePlan.breakeven_price.toFixed(2)}
-          </span>
-          <span className="rounded-lg bg-background px-3 py-1.5 text-sm text-muted">
-            Need {tradePlan.move_needed_pct.toFixed(1)}% move
-          </span>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="rounded-lg border border-accent/30 bg-accent/10 p-3">
+          <p className="text-xs uppercase tracking-wide text-accent">Entry window</p>
+          <p className="mt-1 text-sm font-semibold">
+            {tradePlan?.purchase_window?.label ?? strategy?.purchase_window ?? "Run deep scan"}
+          </p>
+          <p className="mt-1 text-xs text-muted">When to open the contract</p>
+        </div>
+        <div className="rounded-lg border border-danger/30 bg-danger/10 p-3">
+          <p className="text-xs uppercase tracking-wide text-danger">Max loss</p>
+          <p className="mt-1 text-sm font-semibold text-danger">
+            {strategy?.max_loss ?? `$${contractCost.toFixed(0)} (premium)`}
+          </p>
+          <p className="mt-1 text-xs text-muted">Worst case on 1 contract</p>
+        </div>
+        <div className="rounded-lg border border-success/30 bg-success/10 p-3">
+          <p className="text-xs uppercase tracking-wide text-success">Take profit</p>
+          <p className="mt-1 text-sm font-semibold text-success">
+            {strategy?.max_profit ?? "See trade plan"}
+          </p>
+          <p className="mt-1 text-xs text-muted">Upside on recommended play</p>
+        </div>
+        <div className="rounded-lg border border-border bg-background/50 p-3">
+          <p className="text-xs uppercase tracking-wide text-muted">Breakeven</p>
+          <p className="mt-1 text-sm font-semibold">
+            {tradePlan ? `$${tradePlan.breakeven_price.toFixed(2)}` : "—"}
+          </p>
+          <p className="mt-1 text-xs text-muted">
+            {tradePlan ? `${tradePlan.move_needed_pct.toFixed(1)}% move needed` : "From trade plan"}
+          </p>
+        </div>
+      </div>
+
+      {tradePlan && (
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          <div className="rounded-lg border border-border bg-background/40 p-3">
+            <p className="text-xs text-muted">Stock now</p>
+            <p className="text-lg font-bold">${tradePlan.stock_price.toFixed(2)}</p>
+          </div>
+          <div className="rounded-lg border border-border bg-background/40 p-3">
+            <p className="text-xs text-muted">Recommended</p>
+            <p className="text-sm font-semibold">{strategy?.name ?? "Long call"}</p>
+            <p className="text-xs text-muted">{strategy?.badge}</p>
+          </div>
+          <div className="rounded-lg border border-border bg-background/40 p-3">
+            <p className="text-xs text-muted">Strategy win odds</p>
+            <p className="text-lg font-bold text-success">
+              {strategy?.win_probability ?? winProb ?? "—"}%
+            </p>
+          </div>
         </div>
       )}
 
@@ -150,7 +197,9 @@ export function OptionSignalCard({ row, rank }: { row: OptionSignal; rank: numbe
             onClick={() => setExpanded((v) => !v)}
             className="text-sm font-medium text-accent hover:underline"
           >
-            {expanded ? "Hide full trade plan" : "Show when to buy, ITM dates & strategies"}
+            {expanded
+              ? "Hide ITM timeline & strategy comparison"
+              : "Show ITM timeline, purchase dates & strategies"}
           </button>
           {expanded && <TradePlanPanel plan={tradePlan} />}
         </div>
@@ -160,7 +209,7 @@ export function OptionSignalCard({ row, rank }: { row: OptionSignal; rank: numbe
           <Link href="/" className="text-accent underline">
             deep market scan
           </Link>{" "}
-          to generate purchase dates and strategy comparisons.
+          to generate purchase dates, ITM odds, and strategy comparisons.
         </p>
       )}
 
@@ -176,6 +225,12 @@ export function OptionSignalCard({ row, rank }: { row: OptionSignal; rank: numbe
           label="Save to watchlist"
           variant="compact"
         />
+        <Link
+          href={`/stocks?ticker=${encodeURIComponent(row.underlying)}`}
+          className="text-xs font-medium text-muted hover:text-accent"
+        >
+          Analyze {row.underlying} stock →
+        </Link>
         <Link href="/watchlist?tab=options" className="text-xs font-medium text-muted hover:text-accent">
           View watchlist →
         </Link>
