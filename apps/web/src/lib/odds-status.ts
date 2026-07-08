@@ -33,6 +33,14 @@ export interface OddsApiStatus {
   error?: string | null;
 }
 
+export interface OpenAiStatus {
+  configured?: boolean;
+  connected?: boolean;
+  model?: string | null;
+  error?: string | null;
+  features?: string[];
+}
+
 export function rescoreButtonLabel(
   status: Pick<
     OddsApiStatus,
@@ -58,6 +66,7 @@ export async function fetchProvidersStatus(
 ): Promise<{
   finnhub?: Record<string, unknown>;
   odds_api?: OddsApiStatus;
+  openai?: OpenAiStatus;
 } | null> {
   const apiUrl = getApiUrl();
   const query = refresh ? "?refresh=true" : "";

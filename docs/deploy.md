@@ -91,6 +91,8 @@ Supabase → auth + database (already cloud)
 | `SUPABASE_*` | Same as local `.env` |
 | `FINNHUB_API_KEY` | Optional |
 | `ODDS_API_KEY` | Comma-separated keys (e.g. `key1,key2,key3,key4`). Each free account = 500 credits/month; Atlas auto-failovers when one runs out. **Update Render whenever you add a key locally** — `apps/api/.env` is not deployed. |
+| `OPENAI_API_KEY` | Optional. Enables AI daily briefings, coach insight, and deeper pick explanations. Without it, Atlas uses smart template summaries. Get a key at [platform.openai.com](https://platform.openai.com). |
+| `OPENAI_MODEL` | Optional. Default `gpt-4o-mini` (cost-efficient). |
 | `CORS_ORIGINS` | Your Vercel URL, e.g. `https://project-atlas-brandoncorley01.vercel.app` |
 | `ENVIRONMENT` | `production` |
 | `DEFAULT_USER_ID` | Your Supabase user UUID (for future cron jobs) |
@@ -148,6 +150,7 @@ Keep localhost URLs if you still develop locally.
 | CORS errors | Set `CORS_ORIGINS` on Render to your Vercel domain |
 | Odds scan fails | `ODDS_API_KEY` only on **Render**, not in browser env. Paste **all** keys comma-separated in Render → Environment, redeploy, then rescan. |
 | Odds credits exhausted | Add another free key at [the-odds-api.com](https://the-odds-api.com), append to `ODDS_API_KEY` (comma-separated), update Render, redeploy. |
+| AI briefing says "Smart summary" | Add `OPENAI_API_KEY` on Render, redeploy API. Template briefings still work without a key. |
 
 ---
 

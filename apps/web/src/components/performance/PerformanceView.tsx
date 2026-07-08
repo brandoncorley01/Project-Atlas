@@ -48,6 +48,12 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
   const [history, setHistory] = useState(initialHistory);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [coachInsight, setCoachInsight] = useState<{
+    narrative?: string;
+    focus_areas?: string[];
+    source?: string;
+  } | null>(null);
+  const [coachLoading, setCoachLoading] = useState(false);
 
   async function getToken() {
     if (usesBffProxy()) return undefined;
@@ -121,6 +127,26 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
     setLoading(false);
   }
 
+  async function loadCoachInsight() {
+    setCoachLoading(true);
+    setMessage(null);
+    const token = await getToken();
+    try {
+      const res = await fetch(`${getApiUrl()}/ai/coach-insight?refresh=true`, {
+        headers: apiRequestHeaders(token),
+      });
+      if (res.ok) {
+        setCoachInsight(await res.json());
+        setMessage("AI coach insight updated");
+      } else {
+        setMessage("Could not load coach insight");
+      }
+    } catch {
+      setMessage("Backend not responding");
+    }
+    setCoachLoading(false);
+  }
+
   const learningNotes = summary.learning_notes ?? summary.calibration?.learning_notes ?? [];
   const confidenceBuckets = summary.confidence_accuracy ?? {};
 
@@ -155,6 +181,14 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
           </button>
           <button
             type="button"
+            onClick={loadCoachInsight}
+            disabled={loading || coachLoading}
+            className="rounded-lg border border-sky-500/40 px-4 py-2 text-sm font-medium text-sky-200 hover:bg-sky-500/10 disabled:opacity-50"
+          >
+            {coachLoading ? "Thinking…" : "AI coach insight"}
+          </button>
+          <button
+            type="button"
             onClick={runAggregate}
             disabled={loading}
             className="rounded-lg border border-border px-4 py-2 text-sm text-muted hover:bg-surface-hover disabled:opacity-50"
@@ -162,6 +196,21 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
             Refresh summary
           </button>
         </div>
+        {coachInsight?.narrative && (
+          <div className="mt-4 rounded-lg border border-sky-500/25 bg-sky-500/5 p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-sky-200/80">
+              {coachInsight.source === "openai" ? "AI coach" : "Coach summary"}
+            </p>
+            <p className="mt-2 text-sm leading-relaxed text-foreground/90">{coachInsight.narrative}</p>
+            {coachInsight.focus_areas && coachInsight.focus_areas.length > 0 && (
+              <ul className="mt-3 space-y-1 text-sm text-muted">
+                {coachInsight.focus_areas.map((area) => (
+                  <li key={area}>· {area}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
         {message && <p className="mt-3 text-sm text-muted">{message}</p>}
       </section>
 

@@ -14,6 +14,7 @@ from app.services.performance_service import PerformanceService
 from app.services.signal_service import SignalService
 from app.services.stale_signal_service import StaleSignalService
 from app.jobs.resolve_outcomes import run_resolve_outcomes_job
+from app.services.ai_narrative_service import ai_narrative_service
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +112,56 @@ async def _build_dashboard(user_id: str, token: str, limit: int) -> dict:
     budget = signal_service.apply_live_catalysts(budget, catalyst_map)
     stocks = signal_service.apply_live_catalysts(stocks, catalyst_map)
 
+    performance_block = {
+        "win_rate_30d": perf_summary.get("win_rate") if isinstance(perf_summary, dict) else None,
+        "avg_return_30d": perf_summary.get("avg_return_pct") if isinstance(perf_summary, dict) else None,
+        "total_logged": perf_summary.get("total_signals") if isinstance(perf_summary, dict) else 0,
+        "learning_active": perf_summary.get("learning_active") if isinstance(perf_summary, dict) else False,
+        "learning_notes": perf_summary.get("learning_notes") if isinstance(perf_summary, dict) else [],
+        "auto_resolved": perf_summary.get("auto_resolved") if isinstance(perf_summary, dict) else 0,
+    }
+
+    needs_refresh = {
+        "sports": len(sports) == 0,
+        "stocks": len(stocks) == 0,
+        "options": len(top) == 0 and len(budget) == 0,
+        "news": len(breaking) == 0,
+    }
+
+    briefing_ctx = {
+        "top_opportunities": top,
+        "budget_opportunities": budget,
+        "stock_opportunities": stocks,
+        "sports_opportunities": sports,
+        "breaking_news": breaking,
+        "best_parlay": best_parlay,
+        "performance_summary": performance_block,
+        "needs_refresh": needs_refresh,
+    }
+
+    atlas_briefing: dict[str, Any] = {}
+    try:
+        atlas_briefing = await asyncio.wait_for(
+            ai_narrative_service.daily_briefing(user_id=user_id, ctx=briefing_ctx),
+            timeout=8.0,
+        )
+    except TimeoutError:
+        warnings.append("atlas_briefing: timed out (template only)")
+        atlas_briefing = await ai_narrative_service.daily_briefing(
+            user_id=user_id,
+            ctx=briefing_ctx,
+            use_llm=False,
+        )
+    except Exception as exc:
+        msg = str(exc).strip() or exc.__class__.__name__
+        logger.warning("Dashboard atlas_briefing failed: %s", msg)
+        warnings.append(f"atlas_briefing: {msg}")
+        atlas_briefing = await ai_narrative_service.daily_briefing(
+            user_id=user_id,
+            ctx=briefing_ctx,
+            use_llm=False,
+        )
+
     payload = {
         "top_opportunities": top,
         "budget_opportunities": budget,
@@ -119,14 +170,8 @@ async def _build_dashboard(user_id: str, token: str, limit: int) -> dict:
         "best_parlay": best_parlay,
         "breaking_news": breaking,
         "unread_alerts_count": unread_alerts,
-        "performance_summary": {
-            "win_rate_30d": perf_summary.get("win_rate") if isinstance(perf_summary, dict) else None,
-            "avg_return_30d": perf_summary.get("avg_return_pct") if isinstance(perf_summary, dict) else None,
-            "total_logged": perf_summary.get("total_signals") if isinstance(perf_summary, dict) else 0,
-            "learning_active": perf_summary.get("learning_active") if isinstance(perf_summary, dict) else False,
-            "learning_notes": perf_summary.get("learning_notes") if isinstance(perf_summary, dict) else [],
-            "auto_resolved": perf_summary.get("auto_resolved") if isinstance(perf_summary, dict) else 0,
-        },
+        "atlas_briefing": atlas_briefing,
+        "performance_summary": performance_block,
         "meta": {
             "user_id": user_id,
             "limit": limit,
@@ -134,12 +179,7 @@ async def _build_dashboard(user_id: str, token: str, limit: int) -> dict:
             "warnings": warnings,
             "expired_purged": expired_counts,
             "outcomes_resolved": resolve_stats.get("resolved", 0),
-            "needs_refresh": {
-                "sports": len(sports) == 0,
-                "stocks": len(stocks) == 0,
-                "options": len(top) == 0 and len(budget) == 0,
-                "news": len(breaking) == 0,
-            },
+            "needs_refresh": needs_refresh,
         },
     }
 

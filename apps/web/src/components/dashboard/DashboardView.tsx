@@ -21,6 +21,7 @@ import { StatusPill } from "@/components/ui/StatusPill";
 import { DashboardSkeleton } from "@/components/ui/Skeleton";
 import { QuickStartGuide } from "@/components/ui/QuickStartGuide";
 import { DashboardLegend } from "@/components/dashboard/DashboardLegend";
+import { AtlasBriefingCard, type AtlasBriefing } from "@/components/dashboard/AtlasBriefingCard";
 
 interface DashboardResponse {
   top_opportunities: SignalSummary[];
@@ -29,6 +30,7 @@ interface DashboardResponse {
   sports_opportunities: SignalSummary[];
   best_parlay?: Parlay | null;
   breaking_news: NewsItem[];
+  atlas_briefing?: AtlasBriefing | null;
   performance_summary?: {
     win_rate_30d?: number | null;
     avg_return_30d?: number | null;
@@ -66,6 +68,8 @@ export function DashboardView() {
   const [sportsOpportunities, setSportsOpportunities] = useState<SignalSummary[]>([]);
   const [bestParlay, setBestParlay] = useState<Parlay | null>(null);
   const [breakingNews, setBreakingNews] = useState<NewsItem[]>([]);
+  const [atlasBriefing, setAtlasBriefing] = useState<AtlasBriefing | null>(null);
+  const [briefingRefreshing, setBriefingRefreshing] = useState(false);
   const [performanceSummary, setPerformanceSummary] = useState<
     DashboardResponse["performance_summary"] | undefined
   >(undefined);
@@ -107,6 +111,7 @@ export function DashboardView() {
       setSportsOpportunities(dashboard.sports_opportunities ?? []);
       setBestParlay(dashboard.best_parlay ?? null);
       setBreakingNews(dashboard.breaking_news ?? []);
+      setAtlasBriefing(dashboard.atlas_briefing ?? null);
       setPerformanceSummary(dashboard.performance_summary ?? undefined);
       setFreshnessMeta(dashboard.meta ?? null);
 
@@ -158,6 +163,23 @@ export function DashboardView() {
         setLoading(false);
       }
       loadInFlightRef.current = false;
+    }
+  }, []);
+
+  const refreshBriefing = useCallback(async () => {
+    setBriefingRefreshing(true);
+    try {
+      const supabase = createClient();
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      const briefing = await apiFetch<AtlasBriefing>("/ai/briefing?refresh=true", token, {
+        timeoutMs: 30_000,
+      });
+      setAtlasBriefing(briefing);
+    } catch {
+      // keep existing briefing on failure
+    } finally {
+      setBriefingRefreshing(false);
     }
   }, []);
 
@@ -241,6 +263,12 @@ export function DashboardView() {
       <DashboardLegend />
 
       <StaleDataBanner meta={freshnessMeta ?? undefined} />
+
+      <AtlasBriefingCard
+        briefing={atlasBriefing}
+        onRefresh={() => void refreshBriefing()}
+        refreshing={briefingRefreshing}
+      />
 
       {(performanceSummary?.total_logged ?? 0) > 0 || performanceSummary?.learning_active ? (
         <section className="mb-8 rounded-xl border border-violet-500/30 bg-violet-500/5 p-4">

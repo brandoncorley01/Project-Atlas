@@ -8,6 +8,7 @@ import { SportsNewsPanel, type SportsNewsItem } from "@/components/sports/Sports
 import { ParlayLegToggle } from "@/components/sports/ManualParlayBuilder";
 import { AddToWatchlistButton } from "@/components/watchlist/AddToWatchlistButton";
 import { LogOutcomeButtons } from "@/components/performance/LogOutcomeButtons";
+import { AtlasExplainButton } from "@/components/ai/AtlasExplainButton";
 import { sportBetMetadata } from "@/lib/watchlist-api";
 import { CATEGORY_SLUG_LABELS } from "@/lib/sports-categories";
 import { getSportMeta } from "@/lib/sport-meta";
@@ -322,6 +323,7 @@ export function SportsSignalCard({
             </p>
           )}
           {row.risk_warning && <p className="text-xs text-muted">{row.risk_warning}</p>}
+          <AtlasExplainButton module="sports" signalId={row.id} className="pt-2" />
           <LogOutcomeButtons module="sports" signalId={row.id} className="pt-2 border-t border-border" />
         </div>
       )}

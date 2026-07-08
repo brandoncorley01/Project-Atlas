@@ -4,6 +4,7 @@ import { ScoreBadge } from "@/components/ui/ScoreBadge";
 import { StockChart, type ChartBar } from "@/components/charts/StockChart";
 import { AddToWatchlistButton } from "@/components/watchlist/AddToWatchlistButton";
 import { LogOutcomeButtons } from "@/components/performance/LogOutcomeButtons";
+import { AtlasExplainButton } from "@/components/ai/AtlasExplainButton";
 import { stockSignalMetadata } from "@/lib/watchlist-api";
 import { formatRiskReward, midpoint, riskRewardRatio } from "@/lib/trade-metrics";
 import Link from "next/link";
@@ -259,7 +260,10 @@ export function StockSignalCard({
             <p className="text-xs text-muted">{row.risk_warning}</p>
           )}
           {canSaveOutcome && (
-            <LogOutcomeButtons module="stock" signalId={row.id} className="pt-2 border-t border-border" />
+            <>
+              <AtlasExplainButton module="stock" signalId={row.id} className="pt-2" />
+              <LogOutcomeButtons module="stock" signalId={row.id} className="pt-2 border-t border-border" />
+            </>
           )}
           {lookupMode && (
             <div className="flex flex-wrap gap-3 pt-2">

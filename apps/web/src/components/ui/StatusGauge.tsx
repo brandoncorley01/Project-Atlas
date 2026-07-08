@@ -174,3 +174,10 @@ export function oddsCreditsGaugeValue(
   const pct = Math.min(100, Math.max(0, (remaining / capacity) * 100));
   return Math.round(8 + pct * 0.84);
 }
+
+export function openaiGaugeValue(connected: boolean, configured: boolean, error?: string | null): number {
+  if (error && !connected) return 15;
+  if (connected) return 88;
+  if (configured) return 55;
+  return 20;
+}

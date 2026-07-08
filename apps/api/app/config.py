@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     polygon_api_key: str = ""
     odds_api_key: str = ""
     openai_api_key: str = ""
+    openai_model: str = "gpt-4o-mini"
 
     # Minutes to reuse cached odds before spending API credits on a fresh scan.
     odds_cache_ttl_minutes: int = 30

@@ -6,6 +6,7 @@ import { BudgetTag } from "@/components/ui/BudgetTag";
 import { TradePlanPanel, type TradePlan } from "@/components/options/TradePlanPanel";
 import { AddToWatchlistButton } from "@/components/watchlist/AddToWatchlistButton";
 import { LogOutcomeButtons } from "@/components/performance/LogOutcomeButtons";
+import { AtlasExplainButton } from "@/components/ai/AtlasExplainButton";
 import { optionSignalMetadata } from "@/lib/watchlist-api";
 import { useState } from "react";
 
@@ -214,6 +215,8 @@ export function OptionSignalCard({ row, rank }: { row: OptionSignal; rank: numbe
       )}
 
       <p className="mt-4 text-xs text-warning">{row.risk_warning}</p>
+
+      <AtlasExplainButton module="options" signalId={row.id} className="mt-3" />
 
       <LogOutcomeButtons module="options" signalId={row.id} compact className="mt-4" />
 

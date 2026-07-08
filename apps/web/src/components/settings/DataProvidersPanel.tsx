@@ -5,11 +5,12 @@ import {
   StatusGauge,
   finnhubGaugeValue,
   oddsCreditsGaugeValue,
+  openaiGaugeValue,
 } from "@/components/ui/StatusGauge";
 import { API_START_HINT } from "@/lib/api-config";
 import { usesBffProxy } from "@/lib/api-url";
 import { resolveOddsTotalCredits } from "@/lib/odds-credits";
-import { fetchProvidersStatus, type OddsApiStatus } from "@/lib/odds-status";
+import { fetchProvidersStatus, type OddsApiStatus, type OpenAiStatus } from "@/lib/odds-status";
 
 interface FinnhubStatus {
   configured?: boolean;
@@ -69,6 +70,7 @@ export function DataProvidersPanel() {
   const [showKeyForm, setShowKeyForm] = useState(false);
   const [finnhub, setFinnhub] = useState<FinnhubStatus | null>(null);
   const [odds, setOdds] = useState<OddsStatus | null>(null);
+  const [openai, setOpenai] = useState<OpenAiStatus | null>(null);
   const [backendError, setBackendError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
@@ -92,6 +94,7 @@ export function DataProvidersPanel() {
       setBackendError(null);
       setFinnhub((data.finnhub ?? null) as FinnhubStatus | null);
       setOdds((data.odds_api ?? null) as OddsStatus | null);
+      setOpenai((data.openai ?? null) as OpenAiStatus | null);
       setLastUpdated(new Date());
     } catch {
       setBackendError(`Could not reach the API — ${API_START_HINT}`);
@@ -196,6 +199,25 @@ export function DataProvidersPanel() {
   const oddsDetail = buildOddsDescription(odds, totalRemaining);
   const updatedLabel = formatUpdatedAt(lastUpdated);
 
+  const openaiValue = openaiGaugeValue(
+    Boolean(openai?.connected),
+    Boolean(openai?.configured),
+    openai?.error,
+  );
+
+  const openaiSubtitle = !openai?.configured
+    ? "Not configured"
+    : openai.connected
+      ? `Connected · ${openai.model ?? "gpt-4o-mini"}`
+      : "Key saved — check API";
+
+  const openaiDetail =
+    openai?.error && !openai.connected
+      ? openai.error
+      : openai?.configured
+        ? "Powers daily briefings, coach insight, and deeper pick explanations. Atlas never lets AI invent prices or odds — it only narrates ranked scan data."
+        : "Add OPENAI_API_KEY to apps/api/.env (local) or Render (production). Briefings still work with smart templates without a key.";
+
   return (
     <div className="space-y-4">
       {backendError && (
@@ -218,7 +240,7 @@ export function DataProvidersPanel() {
         </button>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         <div className="atlas-card flex flex-col items-center p-5 sm:p-6">
           <StatusGauge
             value={fhValue}
@@ -235,6 +257,15 @@ export function DataProvidersPanel() {
             subtitle={oddsSubtitle}
             detail={oddsDetail}
             centerLabel={oddsCenterLabel}
+          />
+        </div>
+
+        <div className="atlas-card flex flex-col items-center p-5 sm:p-6 md:col-span-2 lg:col-span-1">
+          <StatusGauge
+            value={openaiValue}
+            title="OpenAI"
+            subtitle={openaiSubtitle}
+            detail={openaiDetail}
           />
         </div>
       </div>

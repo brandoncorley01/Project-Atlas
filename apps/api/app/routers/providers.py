@@ -95,6 +95,19 @@ async def providers_status(refresh: bool = False) -> dict:
     estimated_scan_credits = estimate_live_scan_credits() if odds_configured else 0
     monthly_capacity = odds_key_count * 500 if odds_key_count else 500
 
+    openai_configured = bool(active_settings.openai_api_key)
+    openai_connected = False
+    openai_error: str | None = None
+    openai_model = active_settings.openai_model if openai_configured else None
+
+    if openai_configured:
+        if refresh:
+            from app.services.llm_service import llm_service
+
+            openai_connected, openai_error = await llm_service.probe_connection()
+        else:
+            openai_connected = True
+
     return {
         "finnhub": {
             "configured": finnhub_configured,
@@ -140,5 +153,16 @@ async def providers_status(refresh: bool = False) -> dict:
         "options_data": {
             "provider": "yahoo_finance",
             "requires_key": False,
+        },
+        "openai": {
+            "configured": openai_configured,
+            "connected": openai_connected and openai_configured,
+            "model": openai_model,
+            "error": openai_error,
+            "features": [
+                "daily Atlas briefing",
+                "coach insight narratives",
+                "deeper pick explanations",
+            ],
         },
     }
