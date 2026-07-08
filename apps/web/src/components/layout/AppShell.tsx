@@ -25,7 +25,7 @@ export function AppShell({ children, userEmail }: AppShellProps) {
         Decision support only — not financial advice. Trade and bet at your own risk.
       </div>
 
-      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 pb-24 sm:pb-6">{children}</main>
+      <main className="mx-auto w-full min-w-0 max-w-7xl flex-1 px-4 py-6 pb-24 sm:pb-6">{children}</main>
 
       <MobileBottomNav />
     </div>

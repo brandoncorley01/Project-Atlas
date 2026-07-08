@@ -85,15 +85,15 @@ export function OpportunityList({
                 : ""
             }`}
           >
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div className="flex-1">
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(220px,260px)] lg:items-start">
+            <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <p className="text-xs uppercase tracking-wide text-muted">
                   #{index + 1} · {item.module}
                 </p>
                 {budget && highlightBudget && <BudgetTag cost={item.contract_cost} />}
               </div>
-              <h3 className="mt-1 font-semibold">{item.title}</h3>
+              <h3 className="mt-1 font-semibold leading-tight text-balance">{item.title}</h3>
               {showContractCost && item.contract_cost != null && (
                 <p className="mt-0.5 text-sm font-medium text-success">
                   ${Number(item.contract_cost).toFixed(0)} per contract
@@ -186,10 +186,10 @@ export function OpportunityList({
                     : "View dates, ITM odds & strategies →"}
               </Link>
             </div>
-            <div className="grid w-full shrink-0 grid-cols-3 gap-2 sm:w-auto sm:min-w-[240px]">
-              <ScoreBadge label="Confidence" value={item.scores.confidence} variant="confidence" />
+            <div className="grid w-full grid-cols-3 gap-2">
+              <ScoreBadge label="Confidence" shortLabel="Conf." value={item.scores.confidence} variant="confidence" />
               <ScoreBadge label="Risk" value={item.scores.risk} variant="risk" />
-              <ScoreBadge label="Opportunity" value={item.scores.opportunity} variant="opportunity" />
+              <ScoreBadge label="Opportunity" shortLabel="Opp." value={item.scores.opportunity} variant="opportunity" />
             </div>
           </div>
           </div>

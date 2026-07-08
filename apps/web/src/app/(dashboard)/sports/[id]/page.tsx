@@ -60,7 +60,7 @@ export default async function SportsDetailPage({
           {signal.selection} · {signal.sport}
         </h1>
       </div>
-      <SportsSignalCard row={signal} rank={1} />
+      <SportsSignalCard row={signal} rank={1} hideSelection />
     </>
   );
 }

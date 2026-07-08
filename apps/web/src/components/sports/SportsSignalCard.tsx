@@ -106,11 +106,13 @@ export function SportsSignalCard({
   rank,
   parlaySelected,
   onParlayToggle,
+  hideSelection = false,
 }: {
   row: SportsSignal;
   rank: number;
   parlaySelected?: boolean;
   onParlayToggle?: (id: string) => void;
+  hideSelection?: boolean;
 }) {
   const [expanded, setExpanded] = useState(rank === 1);
   const edge = row.line_movement?.edge_pct ?? row.context?.edge_pct;
@@ -126,20 +128,19 @@ export function SportsSignalCard({
 
   return (
     <article
-      className={`atlas-card atlas-card-interactive p-5 ${
+      className={`atlas-card atlas-card-interactive w-full max-w-full overflow-hidden p-4 sm:p-5 ${
         isTopPick ? "border-violet-500/50 ring-2 ring-violet-500/20" : ""
       }`}
     >
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="flex min-w-0 w-full gap-3 sm:flex-1">
-          {onParlayToggle && (
-            <ParlayLegToggle
-              signalId={row.id}
-              selected={Boolean(parlaySelected)}
-              onToggle={onParlayToggle}
-            />
-          )}
-          <div className="min-w-0 flex-1">
+      <div className="flex items-start gap-3">
+        {onParlayToggle && (
+          <ParlayLegToggle
+            signalId={row.id}
+            selected={Boolean(parlaySelected)}
+            onToggle={onParlayToggle}
+          />
+        )}
+        <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <p className="text-xs uppercase tracking-wide text-muted">
               #{rank} · Sports{isTopPick && " · TOP PICK"}
@@ -169,9 +170,20 @@ export function SportsSignalCard({
               </span>
             ))}
           </div>
-          <h2 className="mt-1 text-xl font-bold break-words">{row.selection}</h2>
-          <p className="mt-1 text-sm text-muted break-words">{row.event_name}</p>
-          <p className="mt-0.5 text-xs text-muted">Starts {formatEventStart(row.event_start)}</p>
+        </div>
+      </div>
+
+      <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(220px,260px)] lg:items-start">
+        <div className="min-w-0">
+          {!hideSelection && (
+            <h2 className="text-xl font-bold leading-tight text-balance sm:text-2xl">{row.selection}</h2>
+          )}
+          <p className={`text-sm leading-relaxed text-muted ${hideSelection ? "" : "mt-1"}`}>
+            {row.event_name}
+          </p>
+          <p className="mt-1 text-xs leading-relaxed text-muted">
+            Starts {formatEventStart(row.event_start)}
+          </p>
           {row.hours_until_start != null && row.hours_until_start > 0 && (
             <p className="mt-0.5 text-xs text-emerald-400">
               {row.hours_until_start < 24
@@ -182,16 +194,17 @@ export function SportsSignalCard({
           {row.data_as_of_label && (
             <p className="mt-0.5 text-xs text-muted">Odds as of {row.data_as_of_label}</p>
           )}
-          </div>
         </div>
-        <div className="grid w-full shrink-0 grid-cols-3 gap-2 sm:w-auto sm:min-w-[240px]">
-          <ScoreBadge label="Confidence" value={row.confidence_score} variant="confidence" />
+        <div className="grid w-full grid-cols-3 gap-2">
+          <ScoreBadge label="Confidence" shortLabel="Conf." value={row.confidence_score} variant="confidence" />
           <ScoreBadge label="Risk" value={row.risk_score} variant="risk" />
-          <ScoreBadge label="Opportunity" value={row.opportunity_score} variant="opportunity" />
+          <ScoreBadge label="Opportunity" shortLabel="Opp." value={row.opportunity_score} variant="opportunity" />
         </div>
       </div>
 
-      <p className="mt-3 break-words font-medium leading-snug">{row.recommendation}</p>
+      <p className="mt-3 text-sm font-medium leading-relaxed [overflow-wrap:anywhere] sm:text-base">
+        {row.recommendation}
+      </p>
 
       <div className="mt-3 flex flex-wrap gap-2">
         <span className="rounded-md border border-fanduel/40 bg-fanduel-muted px-2 py-1 text-xs font-medium text-fanduel-text">

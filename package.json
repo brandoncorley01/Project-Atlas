@@ -14,5 +14,8 @@
   },
   "workspaces": [
     "apps/web"
-  ]
+  ],
+  "devDependencies": {
+    "playwright": "^1.61.1"
+  }
 }

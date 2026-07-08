@@ -65,42 +65,45 @@ export function StockSignalCard({
   const headline = row.context?.top_headline;
 
   return (
-    <article className="rounded-xl border border-border bg-surface p-5">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="text-xs uppercase tracking-wide text-muted">#{rank} · Stock swing</p>
-            <span
-              className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                bullish ? "bg-success/20 text-success" : "bg-danger/20 text-danger"
-              }`}
-            >
-              {bullish ? "Bullish" : "Bearish"}
-            </span>
-            {row.context?.has_catalyst && (
-              <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs font-medium text-amber-300">
-                📰 Catalyst
-              </span>
-            )}
-          </div>
-          <h2 className="mt-1 text-xl font-bold">
+    <article className="w-full max-w-full overflow-hidden rounded-xl border border-border bg-surface p-4 sm:p-5">
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-xs uppercase tracking-wide text-muted">#{rank} · Stock swing</p>
+        <span
+          className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+            bullish ? "bg-success/20 text-success" : "bg-danger/20 text-danger"
+          }`}
+        >
+          {bullish ? "Bullish" : "Bearish"}
+        </span>
+        {row.context?.has_catalyst && (
+          <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs font-medium text-amber-300">
+            📰 Catalyst
+          </span>
+        )}
+      </div>
+
+      <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(220px,260px)] lg:items-start">
+        <div className="min-w-0">
+          <h2 className="text-xl font-bold leading-tight text-balance sm:text-2xl">
             {row.ticker}{" "}
             <span className="text-lg font-semibold text-muted">
               ${Number(row.current_price).toFixed(2)}
             </span>
           </h2>
-          <p className="mt-1 text-sm text-muted">
+          <p className="mt-1 text-sm leading-relaxed text-muted">
             {timeframeLabel(row.timeframe)} · Hold {row.expected_hold_time ?? "—"}
           </p>
         </div>
-        <div className="grid w-full shrink-0 grid-cols-3 gap-2 sm:w-auto sm:min-w-[240px]">
-          <ScoreBadge label="Conf." value={row.confidence_score} variant="confidence" />
+        <div className="grid w-full grid-cols-3 gap-2">
+          <ScoreBadge label="Confidence" shortLabel="Conf." value={row.confidence_score} variant="confidence" />
           <ScoreBadge label="Risk" value={row.risk_score} variant="risk" />
-          <ScoreBadge label="Opp." value={row.opportunity_score} variant="opportunity" />
+          <ScoreBadge label="Opportunity" shortLabel="Opp." value={row.opportunity_score} variant="opportunity" />
         </div>
       </div>
 
-      <p className="mt-3 font-medium">{row.recommendation}</p>
+      <p className="mt-3 text-sm font-medium leading-relaxed [overflow-wrap:anywhere] sm:text-base">
+        {row.recommendation}
+      </p>
 
       <div className="mt-3 flex flex-wrap gap-2">
         {tech.rsi != null && (

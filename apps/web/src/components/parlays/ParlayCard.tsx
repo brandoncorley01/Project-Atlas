@@ -100,42 +100,47 @@ export function ParlayCard({ row, rank }: { row: Parlay; rank: number }) {
   const [expanded, setExpanded] = useState(rank === 1);
 
   return (
-    <article className="atlas-card atlas-card-interactive p-5">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="text-xs uppercase tracking-wide text-muted">#{rank} · Parlay</p>
-            <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${styleColor(row.style)}`}>
-              {styleLabel(row.style)}
-            </span>
-            <span className="rounded-full bg-background px-2 py-0.5 text-xs text-muted">
-              {row.leg_count ?? row.legs.length} legs
-            </span>
-            {(row.categories ?? []).map((slug) => (
-              <span
-                key={slug}
-                className="rounded-full bg-orange-500/15 px-2 py-0.5 text-xs font-medium text-orange-300"
-              >
-                {PARLAY_CATEGORY_LABELS[slug] ?? slug}
-              </span>
-            ))}
-          </div>
-          <h2 className="mt-1 text-xl font-bold">{row.name ?? row.recommendation}</h2>
+    <article className="atlas-card atlas-card-interactive w-full max-w-full overflow-hidden p-4 sm:p-5">
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-xs uppercase tracking-wide text-muted">#{rank} · Parlay</p>
+        <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${styleColor(row.style)}`}>
+          {styleLabel(row.style)}
+        </span>
+        <span className="rounded-full bg-background px-2 py-0.5 text-xs text-muted">
+          {row.leg_count ?? row.legs.length} legs
+        </span>
+        {(row.categories ?? []).map((slug) => (
+          <span
+            key={slug}
+            className="rounded-full bg-orange-500/15 px-2 py-0.5 text-xs font-medium text-orange-300"
+          >
+            {PARLAY_CATEGORY_LABELS[slug] ?? slug}
+          </span>
+        ))}
+      </div>
+
+      <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(220px,260px)] lg:items-start">
+        <div className="min-w-0">
+          <h2 className="text-xl font-bold leading-tight text-balance sm:text-2xl">
+            {row.name ?? row.recommendation}
+          </h2>
           {(row.sports?.length ?? 0) > 0 && (
-            <p className="mt-1 text-sm text-muted">{row.sports?.join(" · ")}</p>
+            <p className="mt-1 text-sm leading-relaxed text-muted">{row.sports?.join(" · ")}</p>
           )}
           {formatTimeWindow(row) && (
             <p className="mt-1 text-xs text-muted">{formatTimeWindow(row)}</p>
           )}
         </div>
-        <div className="grid w-full shrink-0 grid-cols-3 gap-2 sm:w-auto sm:min-w-[240px]">
-          <ScoreBadge label="Confidence" value={row.confidence_score} variant="confidence" />
+        <div className="grid w-full grid-cols-3 gap-2">
+          <ScoreBadge label="Confidence" shortLabel="Conf." value={row.confidence_score} variant="confidence" />
           <ScoreBadge label="Risk" value={row.risk_score} variant="risk" />
-          <ScoreBadge label="Opportunity" value={row.opportunity_score} variant="opportunity" />
+          <ScoreBadge label="Opportunity" shortLabel="Opp." value={row.opportunity_score} variant="opportunity" />
         </div>
       </div>
 
-      <p className="mt-3 font-medium">{row.recommendation}</p>
+      <p className="mt-3 text-sm font-medium leading-relaxed [overflow-wrap:anywhere] sm:text-base">
+        {row.recommendation}
+      </p>
 
       <div className="mt-3 flex flex-wrap gap-2">
         <span className="rounded-md border border-fanduel/40 bg-fanduel-muted px-2 py-1 text-xs font-medium text-fanduel-text">
