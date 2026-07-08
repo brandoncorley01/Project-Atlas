@@ -2,7 +2,7 @@
 
 Atlas uses a **BFF pattern**: your phone only talks to the Next.js app; the server proxies to FastAPI. You never expose port `8012` to the internet.
 
-**GitHub repo:** [github.com/brandoncorley01/project-atlas](https://github.com/brandoncorley01/project-atlas)
+**GitHub repo:** [github.com/brandoncorley01/Project-Atlas](https://github.com/brandoncorley01/Project-Atlas)
 
 ---
 
@@ -19,14 +19,14 @@ cd "c:\Users\brand\OneDrive\Desktop\Project Atlas"
 git add .
 git commit -m "Ship v1: learning loop, deploy configs for Vercel + Render"
 git branch -M main
-git remote add origin https://github.com/brandoncorley01/project-atlas.git
+git remote add origin https://github.com/brandoncorley01/Project-Atlas.git
 git push -u origin main
 ```
 
 If `origin` already exists, update it:
 
 ```powershell
-git remote set-url origin https://github.com/brandoncorley01/project-atlas.git
+git remote set-url origin https://github.com/brandoncorley01/Project-Atlas.git
 git push -u origin main
 ```
 
@@ -90,7 +90,7 @@ Supabase → auth + database (already cloud)
 |----------|--------|
 | `SUPABASE_*` | Same as local `.env` |
 | `FINNHUB_API_KEY` | Optional |
-| `ODDS_API_KEY` | Comma-separated keys |
+| `ODDS_API_KEY` | Comma-separated keys (e.g. `key1,key2,key3,key4`). Each free account = 500 credits/month; Atlas auto-failovers when one runs out. **Update Render whenever you add a key locally** — `apps/api/.env` is not deployed. |
 | `CORS_ORIGINS` | Your Vercel URL, e.g. `https://project-atlas-brandoncorley01.vercel.app` |
 | `ENVIRONMENT` | `production` |
 | `DEFAULT_USER_ID` | Your Supabase user UUID (for future cron jobs) |
@@ -146,7 +146,8 @@ Keep localhost URLs if you still develop locally.
 | Login loops | Add exact Vercel/tunnel URL to Supabase redirect URLs |
 | API 503 on Vercel | Check `NEXT_PUBLIC_API_URL`; wake Render free tier (first request ~30s) |
 | CORS errors | Set `CORS_ORIGINS` on Render to your Vercel domain |
-| Odds scan fails | `ODDS_API_KEY` only on **Render**, not in browser env |
+| Odds scan fails | `ODDS_API_KEY` only on **Render**, not in browser env. Paste **all** keys comma-separated in Render → Environment, redeploy, then rescan. |
+| Odds credits exhausted | Add another free key at [the-odds-api.com](https://the-odds-api.com), append to `ODDS_API_KEY` (comma-separated), update Render, redeploy. |
 
 ---
 
