@@ -33,7 +33,7 @@ class PerformanceService:
         if outcome not in VALID_OUTCOMES:
             raise ValueError(f"outcome must be one of: {', '.join(sorted(VALID_OUTCOMES))}")
 
-        snapshot_row = signal_snapshot or await self._fetch_signal(module, signal_id)
+        label_source = signal_snapshot or await self._fetch_signal(module, signal_id)
         now = datetime.now(UTC).isoformat()
         row: dict[str, Any] = {
             "user_id": self.user_id,
@@ -46,13 +46,59 @@ class PerformanceService:
             "updated_at": now,
             "resolution_source": resolution_source,
             "resolved_at": now if outcome != "pending" else None,
-            "signal_label": self._signal_label(module, snapshot_row),
-            "opportunity_score": snapshot_row.get("opportunity_score") if snapshot_row else None,
-            "confidence_score": snapshot_row.get("confidence_score") if snapshot_row else None,
-            "scoring_snapshot": snapshot_row.get("scoring_snapshot") if snapshot_row else {},
+            "signal_label": self._signal_label(module, label_source, signal_snapshot),
+            "opportunity_score": self._score_from_snapshot(label_source, signal_snapshot, "opportunity_score"),
+            "confidence_score": self._score_from_snapshot(label_source, signal_snapshot, "confidence_score"),
+            "scoring_snapshot": (label_source or {}).get("scoring_snapshot")
+            if label_source and label_source.get("scoring_snapshot")
+            else (signal_snapshot or {}),
         }
         saved = await self.db.upsert("signal_performance", [row])
         return self._format_entry(saved[0])
+
+    async def register_from_watchlist(self, *, item: dict[str, Any]) -> dict[str, Any] | None:
+        """Create a pending performance row when a pick is saved to the watchlist."""
+        meta = item.get("metadata") or {}
+        kind = meta.get("watchlist_kind") or item.get("item_type")
+
+        module_map: dict[str, str] = {
+            "sport_bet": "sports",
+            "sport_event": "sports",
+            "stock_signal": "stock",
+            "option_signal": "options",
+            "parlay": "parlay",
+        }
+        module = module_map.get(str(kind))
+        if not module:
+            return None
+
+        signal_id: str | None = None
+        if kind == "parlay" or item.get("item_type") == "parlay":
+            signal_id = str(meta.get("parlay_id") or item.get("id") or "")
+        elif meta.get("signal_id"):
+            signal_id = str(meta["signal_id"])
+        else:
+            signal_id = str(item.get("id") or "")
+
+        if not signal_id:
+            return None
+
+        existing = await self.get_outcome(module=module, signal_id=signal_id)
+        if existing:
+            return existing
+
+        snapshot = {
+            **meta,
+            "watchlist_item_id": item.get("id"),
+            "symbol": item.get("symbol"),
+        }
+        return await self.log_outcome(
+            module=module,
+            signal_id=signal_id,
+            outcome="pending",
+            resolution_source="watchlist",
+            signal_snapshot=snapshot,
+        )
 
     async def get_outcome(self, *, module: str, signal_id: str) -> dict[str, Any] | None:
         rows = await self.db.select(
@@ -169,17 +215,35 @@ class PerformanceService:
         return rows[0] if rows else None
 
     @staticmethod
-    def _signal_label(module: str, row: dict[str, Any] | None) -> str | None:
-        if not row:
+    def _signal_label(
+        module: str,
+        row: dict[str, Any] | None,
+        snapshot: dict[str, Any] | None = None,
+    ) -> str | None:
+        source = row or snapshot
+        if not source:
             return None
+        if isinstance(source.get("label"), str):
+            return source["label"]
         if module == "sports":
-            return f"{row.get('sport')} · {row.get('selection')}"
+            return f"{source.get('sport')} · {source.get('selection')}"
         if module == "stock":
-            return str(row.get("symbol") or row.get("recommendation") or "")
+            return str(source.get("symbol") or source.get("ticker") or source.get("recommendation") or "")
         if module == "options":
-            return f"{row.get('underlying')} {row.get('option_type')} {row.get('strike')}"
+            return f"{source.get('underlying')} {source.get('option_type')} {source.get('strike')}"
         if module == "parlay":
-            return str(row.get("title") or row.get("style") or "Parlay")
+            return str(source.get("name") or source.get("title") or source.get("style") or "Parlay")
+        return None
+
+    @staticmethod
+    def _score_from_snapshot(
+        row: dict[str, Any] | None,
+        snapshot: dict[str, Any] | None,
+        key: str,
+    ) -> float | None:
+        for source in (row, snapshot):
+            if source and source.get(key) is not None:
+                return float(source[key])
         return None
 
     def _compute_summary(

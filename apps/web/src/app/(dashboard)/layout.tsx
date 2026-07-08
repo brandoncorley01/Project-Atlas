@@ -1,4 +1,5 @@
 import { AppShell } from "@/components/layout/AppShell";
+import { DashboardProviders } from "@/components/layout/DashboardProviders";
 import { MarketScanBar } from "@/components/dashboard/MarketScanBar";
 import { ModuleNavStrip } from "@/components/ui/ModuleNavStrip";
 import { BackendStatusBar } from "@/components/ui/BackendStatusBar";
@@ -22,9 +23,11 @@ export default async function DashboardLayout({
 
   return (
     <AppShell userEmail={userEmail}>
-      {userEmail && <MarketScanBar />}
-      {userEmail && <ModuleNavStrip />}
-      {children}
+      <DashboardProviders>
+        {userEmail && <MarketScanBar />}
+        {userEmail && <ModuleNavStrip />}
+        {children}
+      </DashboardProviders>
       <BackendStatusBar />
     </AppShell>
   );

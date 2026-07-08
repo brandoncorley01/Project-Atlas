@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { addWatchlistItem } from "@/lib/watchlist-api";
 import type { WatchlistItemType } from "@/lib/watchlist-types";
+import { useWatchlistOptional } from "@/components/watchlist/WatchlistProvider";
 
 interface AddToWatchlistButtonProps {
   symbol: string;
@@ -25,22 +26,34 @@ export function AddToWatchlistButton({
   variant = "ghost",
   onAdded,
 }: AddToWatchlistButtonProps) {
-  const [state, setState] = useState<"idle" | "loading" | "saved" | "error">("idle");
+  const watchlist = useWatchlistOptional();
+  const alreadySaved = watchlist?.isSaved(symbol, itemType) ?? false;
+  const [state, setState] = useState<"idle" | "loading" | "saved" | "error">(
+    alreadySaved ? "saved" : "idle",
+  );
   const [error, setError] = useState<string | null>(null);
 
+  const isSaved = alreadySaved || state === "saved";
+
+  useEffect(() => {
+    if (alreadySaved) {
+      setState("saved");
+    }
+  }, [alreadySaved]);
+
   async function handleClick() {
-    if (state === "saved" || state === "loading") return;
+    if (isSaved || state === "loading") return;
     setState("loading");
     setError(null);
     const result = await addWatchlistItem({ symbol, item_type: itemType, metadata });
     if (result.ok) {
+      watchlist?.markSaved(result.item);
       setState("saved");
       onAdded?.();
-      setTimeout(() => setState("idle"), 2500);
     } else {
       setState("error");
       setError(result.error);
-      setTimeout(() => setState("idle"), 3000);
+      setTimeout(() => setState(alreadySaved ? "saved" : "idle"), 3000);
     }
   }
 
@@ -51,19 +64,25 @@ export function AddToWatchlistButton({
         ? "text-xs font-medium text-accent hover:underline disabled:opacity-50"
         : "rounded-lg border border-border bg-surface-elevated px-3 py-1.5 text-xs font-medium text-foreground hover:border-accent/50 disabled:opacity-50";
 
-  const text =
-    state === "loading" ? "Saving…" : state === "saved" ? savedLabel : state === "error" ? "Retry" : label;
+  const text = isSaved
+    ? savedLabel
+    : state === "loading"
+      ? "Saving…"
+      : state === "error"
+        ? "Retry"
+        : label;
 
   return (
     <span className="inline-flex flex-col items-start gap-0.5">
       <button
         type="button"
         onClick={handleClick}
-        disabled={state === "loading" || state === "saved"}
-        className={`${base} ${className}`}
+        disabled={state === "loading" || isSaved}
+        className={`${base} ${isSaved ? "border-accent/40 text-accent" : ""} ${className}`}
         title={error ?? undefined}
+        aria-pressed={isSaved}
       >
-        {state === "saved" ? "★ " : "☆ "}
+        {isSaved ? "★ " : "☆ "}
         {text}
       </button>
       {error && state === "error" && <span className="text-[10px] text-danger">{error}</span>}

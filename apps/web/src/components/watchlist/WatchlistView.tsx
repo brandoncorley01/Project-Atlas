@@ -3,11 +3,14 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { LogOutcomeButtons } from "@/components/performance/LogOutcomeButtons";
+import { useWatchlist } from "@/components/watchlist/WatchlistProvider";
 import { FilterTabs } from "@/components/ui/FilterTabs";
 import { addWatchlistItem, removeWatchlistItem } from "@/lib/watchlist-api";
 import {
   effectiveItemType,
   filterWatchlistByTab,
+  performanceTrackingForItem,
   watchlistTabCounts,
   type WatchlistItem,
   type WatchlistTab,
@@ -99,9 +102,9 @@ function badgeColor(type: string) {
 }
 
 export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps) {
+  const { items, markSaved, markRemoved, loading: watchlistLoading } = useWatchlist();
   const searchParams = useSearchParams();
   const initialTab = (searchParams.get("tab") as WatchlistTab) || "all";
-  const [items, setItems] = useState(initialItems);
   const [symbol, setSymbol] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -109,8 +112,9 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
     ["all", "stocks", "options", "bets", "parlays"].includes(initialTab) ? initialTab : "all",
   );
 
-  const counts = useMemo(() => watchlistTabCounts(items), [items]);
-  const displayed = useMemo(() => filterWatchlistByTab(items, activeTab), [items, activeTab]);
+  const displayItems = items.length > 0 ? items : initialItems;
+  const counts = useMemo(() => watchlistTabCounts(displayItems), [displayItems]);
+  const displayed = useMemo(() => filterWatchlistByTab(displayItems, activeTab), [displayItems, activeTab]);
 
   async function addTicker(e: React.FormEvent) {
     e.preventDefault();
@@ -120,7 +124,7 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
     setMessage(null);
     const result = await addWatchlistItem({ symbol: sym, item_type: "ticker" });
     if (result.ok) {
-      setItems((prev) => (prev.some((p) => p.id === result.item.id) ? prev : [result.item, ...prev]));
+      markSaved(result.item);
       setSymbol("");
       setMessage(`Added ${sym}`);
     } else {
@@ -133,7 +137,7 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
     setLoading(true);
     const result = await removeWatchlistItem(id);
     if (result.ok) {
-      setItems((prev) => prev.filter((i) => i.id !== id));
+      markRemoved(id);
     } else {
       setMessage(result.error);
     }
@@ -164,7 +168,7 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
 
       <FilterTabs
         label="Filter by type"
-        hint="Everything you save from Sports, Parlays, Options, and Stocks lands here."
+        hint="Everything you save from Sports, Parlays, Options, and Stocks lands here and is tracked in Performance."
         allLabel="All"
         items={TAB_ITEMS.map((t) => ({ id: t.id, label: t.label, count: counts[t.id as WatchlistTab] }))}
         activeId={activeTab === "all" ? null : activeTab}
@@ -173,6 +177,7 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
         guideLinks={[
           { href: "/sports", label: "Build a manual parlay on Sports →" },
           { href: "/parlays", label: "Save auto-built parlays →" },
+          { href: "/performance", label: "View performance tracking →" },
         ]}
       />
 
@@ -187,7 +192,7 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
           />
           <button
             type="submit"
-            disabled={loading || !symbol.trim()}
+            disabled={loading || watchlistLoading || !symbol.trim()}
             className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
           >
             {loading ? "Adding…" : "Add ticker"}
@@ -209,8 +214,9 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
             const href = itemHref(item);
             const badge = itemBadge(item);
             const meta = item.metadata ?? {};
+            const tracking = performanceTrackingForItem(item);
             return (
-              <li key={item.id} className="flex items-start justify-between gap-3 px-4 py-3">
+              <li key={item.id} className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${badgeColor(badge)}`}>
@@ -222,6 +228,11 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
                       </Link>
                     ) : (
                       <span className="font-medium">{itemTitle(item)}</span>
+                    )}
+                    {tracking && (
+                      <span className="rounded-full bg-accent/15 px-2 py-0.5 text-[10px] font-medium text-accent">
+                        Tracking
+                      </span>
                     )}
                   </div>
                   <p className="mt-0.5 truncate text-sm text-muted">{itemSubtitle(item)}</p>
@@ -247,12 +258,21 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
                       Opportunity {Number(meta.opportunity_score).toFixed(0)}
                     </p>
                   )}
+                  {tracking && (
+                    <div className="mt-3 rounded-lg border border-border/60 bg-surface-elevated p-3">
+                      <LogOutcomeButtons
+                        module={tracking.module}
+                        signalId={tracking.signalId}
+                        compact
+                      />
+                    </div>
+                  )}
                 </div>
                 <button
                   type="button"
                   onClick={() => removeItem(item.id)}
                   disabled={loading}
-                  className="shrink-0 text-xs text-muted hover:text-danger"
+                  className="shrink-0 self-start text-xs text-muted hover:text-danger"
                 >
                   Remove
                 </button>
@@ -279,6 +299,10 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
             , or{" "}
             <Link href="/stocks" className="text-accent hover:underline">
               Stocks
+            </Link>
+            . Saved picks are tracked in{" "}
+            <Link href="/performance" className="text-accent hover:underline">
+              Performance
             </Link>
             .
           </p>

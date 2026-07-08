@@ -57,3 +57,40 @@ export function watchlistTabCounts(items: WatchlistItem[]): Record<WatchlistTab,
     parlays: filterWatchlistByTab(items, "parlays").length,
   };
 }
+
+export type PerformanceModule = "options" | "stock" | "sports" | "parlay";
+
+/** Stable key for deduping saved picks across pages. */
+export function watchlistItemKey(item: WatchlistItem): string {
+  return `${effectiveItemType(item)}:${item.symbol}`;
+}
+
+/** Map a saved watchlist row to performance tracking ids (null for plain tickers). */
+export function performanceTrackingForItem(
+  item: WatchlistItem,
+): { module: PerformanceModule; signalId: string } | null {
+  const kind = effectiveItemType(item);
+  const meta = item.metadata ?? {};
+
+  switch (kind) {
+    case "sport_bet":
+      return typeof meta.signal_id === "string"
+        ? { module: "sports", signalId: meta.signal_id }
+        : null;
+    case "stock_signal":
+      return typeof meta.signal_id === "string"
+        ? { module: "stock", signalId: meta.signal_id }
+        : null;
+    case "option_signal":
+      return typeof meta.signal_id === "string"
+        ? { module: "options", signalId: meta.signal_id }
+        : null;
+    case "parlay":
+      if (typeof meta.parlay_id === "string") {
+        return { module: "parlay", signalId: meta.parlay_id };
+      }
+      return { module: "parlay", signalId: item.id };
+    default:
+      return null;
+  }
+}

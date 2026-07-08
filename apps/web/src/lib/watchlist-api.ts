@@ -1,6 +1,8 @@
 import { apiRequestHeaders, getApiUrl, usesBffProxy } from "@/lib/api-url";
 import type { WatchlistItem, WatchlistItemType } from "@/lib/watchlist-types";
-import { effectiveItemType } from "@/lib/watchlist-types";
+import { effectiveItemType, watchlistItemKey } from "@/lib/watchlist-types";
+
+export { watchlistItemKey };
 
 /** Map new item types to legacy API/DB types until migration + API restart are complete. */
 function toApiPayload(payload: {
@@ -33,6 +35,35 @@ async function getToken() {
   return data.session?.access_token ?? undefined;
 }
 
+function notifyWatchlistUpdated() {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("atlas:watchlist-updated"));
+  }
+}
+
+export async function fetchWatchlist(): Promise<{
+  id: string;
+  name: string;
+  items: WatchlistItem[];
+} | null> {
+  const token = await getToken();
+  if (!usesBffProxy() && !token) return null;
+  try {
+    const res = await fetch(`${getApiUrl()}/watchlist`, {
+      headers: apiRequestHeaders(token),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return {
+      id: data.id,
+      name: data.name,
+      items: (data.items as WatchlistItem[]).map(normalizeItem),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function addWatchlistItem(payload: {
   symbol: string;
   item_type: WatchlistItemType;
@@ -54,6 +85,7 @@ export async function addWatchlistItem(payload: {
       const detail = typeof body.detail === "string" ? body.detail : "Failed to add";
       return { ok: false, error: detail };
     }
+    notifyWatchlistUpdated();
     return { ok: true, item: normalizeItem(body.item as WatchlistItem) };
   } catch {
     return { ok: false, error: "Backend not responding" };
@@ -70,6 +102,7 @@ export async function removeWatchlistItem(
       headers: apiRequestHeaders(token),
     });
     if (!res.ok) return { ok: false, error: "Failed to remove" };
+    notifyWatchlistUpdated();
     return { ok: true };
   } catch {
     return { ok: false, error: "Backend not responding" };
@@ -116,6 +149,7 @@ export function stockSignalMetadata(signal: {
     opportunity_score: signal.opportunity_score,
     current_price: signal.current_price,
     label: `${signal.ticker} — ${signal.recommendation}`,
+    watchlist_kind: "stock_signal" as const,
   };
 }
 
@@ -139,6 +173,7 @@ export function optionSignalMetadata(signal: {
     premium: signal.premium,
     expiration: signal.expiration,
     label: `${signal.underlying} ${signal.option_type.toUpperCase()} $${signal.strike}`,
+    watchlist_kind: "option_signal" as const,
   };
 }
 
