@@ -293,8 +293,13 @@ def odds_cache_status() -> dict[str, Any]:
     has_data = bool(near_term)
     within_ttl = age is not None and age <= ttl
     fresh = has_data and within_ttl and not needs_live
+    # Matches fetch_all_sports_odds: zero-credit rescore while cache is within TTL.
+    rescore_free = bool(cache) and within_ttl and bool(near_term)
     return {
         "has_data": has_data,
+        "cache_has_events": bool(raw_events),
+        "cache_within_ttl": within_ttl,
+        "cache_rescore_free": rescore_free,
         "age_minutes": round(age, 1) if age is not None else None,
         "fresh": fresh,
         "cache_needs_live_refresh": needs_live,

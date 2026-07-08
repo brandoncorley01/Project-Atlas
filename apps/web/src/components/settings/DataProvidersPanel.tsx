@@ -9,8 +9,7 @@ import {
 import { apiPortLabel, API_START_HINT } from "@/lib/api-config";
 import { apiRequestHeaders, getApiUrl } from "@/lib/api-url";
 import { resolveOddsTotalCredits } from "@/lib/odds-credits";
-import { mergeOddsKeyProbe } from "@/lib/merge-odds-status";
-import type { OddsKeyProbeResult } from "@/lib/odds-key-probe";
+import type { OddsApiStatus } from "@/lib/odds-status";
 
 interface FinnhubStatus {
   configured?: boolean;
@@ -20,8 +19,8 @@ interface FinnhubStatus {
 }
 
 interface OddsKeyStatus {
-  index: number;
-  masked: string;
+  index?: number;
+  masked?: string;
   remaining?: number | null;
   used?: number | null;
   exhausted?: boolean;
@@ -29,19 +28,7 @@ interface OddsKeyStatus {
   error?: string;
 }
 
-interface OddsStatus {
-  configured?: boolean;
-  connected?: boolean;
-  quota_exhausted?: boolean;
-  total_remaining?: number | null;
-  monthly_capacity?: number | null;
-  key_count?: number;
-  active_key_index?: number | null;
-  keys?: OddsKeyStatus[];
-  cache_fresh?: boolean;
-  cache_age_minutes?: number | null;
-  estimated_live_scan_credits?: number;
-  error?: string | null;
+interface OddsStatus extends OddsApiStatus {
   features?: string[];
 }
 
@@ -79,11 +66,11 @@ function OddsKeysList({
         {keyCount} API key{keyCount === 1 ? "" : "s"} configured
       </p>
       <ul className="mt-2 space-y-1.5">
-        {keys.map((k) => (
-          <li key={k.index} className="flex items-center justify-between gap-2 text-xs">
+        {keys.map((k, i) => (
+          <li key={k.index ?? i} className="flex items-center justify-between gap-2 text-xs">
             <span className="font-mono text-muted">
-              Key {k.index}: {k.masked}
-              {activeKeyIndex === k.index - 1 && (
+              Key {k.index ?? i + 1}: {k.masked ?? "••••"}
+              {activeKeyIndex === (k.index ?? i + 1) - 1 && (
                 <span className="ml-1 font-sans font-semibold text-violet-300">· active</span>
               )}
             </span>
@@ -126,10 +113,10 @@ export function DataProvidersPanel() {
     setStatusLoading(true);
     try {
       const apiUrl = getApiUrl();
-      const [statusRes, keysRes] = await Promise.all([
-        fetch(`${apiUrl}/providers/status`, { headers: apiRequestHeaders() }),
-        fetch("/api/odds-keys"),
-      ]);
+      const statusRes = await fetch(`${apiUrl}/providers/status`, {
+        headers: apiRequestHeaders(),
+        cache: "no-store",
+      });
 
       if (!statusRes.ok) {
         setBackendError(`Backend unreachable — ${API_START_HINT}`);
@@ -138,13 +125,7 @@ export function DataProvidersPanel() {
       setBackendError(null);
       const data = await statusRes.json();
       setFinnhub(data.finnhub ?? null);
-
-      let oddsData = (data.odds_api ?? {}) as OddsStatus;
-      if (keysRes.ok) {
-        const keyProbe = (await keysRes.json()) as OddsKeyProbeResult;
-        oddsData = mergeOddsKeyProbe(oddsData as Record<string, unknown>, keyProbe) as OddsStatus;
-      }
-      setOdds(oddsData);
+      setOdds((data.odds_api ?? {}) as OddsStatus);
     } catch {
       setBackendError(`Could not reach API on port ${apiPortLabel()}`);
     }
@@ -164,6 +145,9 @@ export function DataProvidersPanel() {
 
   useEffect(() => {
     void loadStatus();
+    const onFocus = () => void loadStatus();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
   }, [configured, loadStatus]);
 
   async function handleSave(e: React.FormEvent) {
@@ -237,7 +221,11 @@ export function DataProvidersPanel() {
     ? odds.error
     : odds?.configured
       ? `Active key: #${(activeIdx ?? 0) + 1} · live scan ~${odds.estimated_live_scan_credits ?? "?"} credits${
-          odds.cache_fresh ? ` · cache fresh (${Math.round(odds.cache_age_minutes ?? 0)}m)` : ""
+          odds.cache_rescore_free
+            ? ` · rescore free (${Math.round(odds.cache_age_minutes ?? 0)}m cache)`
+            : odds.cache_fresh
+              ? ` · cache fresh (${Math.round(odds.cache_age_minutes ?? 0)}m)`
+              : ""
         }`
       : "Powers sports odds & +EV scans";
 

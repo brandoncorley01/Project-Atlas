@@ -4,11 +4,21 @@ import { buildSportCounts, FEATURED_LEAGUES } from "@/lib/sport-meta";
 
 interface SportsStatsBarProps {
   items: SportsSignal[];
+  cacheRescoreFree?: boolean;
   cacheFresh?: boolean;
+  cacheNeedsLive?: boolean;
   creditsRemaining?: number | null;
+  keyCount?: number;
 }
 
-export function SportsStatsBar({ items, cacheFresh, creditsRemaining }: SportsStatsBarProps) {
+export function SportsStatsBar({
+  items,
+  cacheRescoreFree,
+  cacheFresh,
+  cacheNeedsLive,
+  creditsRemaining,
+  keyCount,
+}: SportsStatsBarProps) {
   const leagues = buildSportCounts(items);
   const nextEvent = items
     .filter((i) => i.hours_until_start != null && i.hours_until_start > 0)
@@ -46,10 +56,20 @@ export function SportsStatsBar({ items, cacheFresh, creditsRemaining }: SportsSt
       <div className="rounded-xl border border-violet-500/30 bg-violet-500/10 p-4">
         <p className="text-xs font-semibold uppercase tracking-wider text-violet-300">Odds feed</p>
         <p className="mt-1 text-lg font-bold text-foreground">
-          {cacheFresh ? "Cached ✓" : "Needs refresh"}
+          {cacheRescoreFree
+            ? cacheFresh
+              ? "Rescore free"
+              : cacheNeedsLive
+                ? "Narrow cache"
+                : "Rescore free"
+            : cacheFresh
+              ? "Cached ✓"
+              : "Needs refresh"}
         </p>
         <p className="mt-0.5 text-xs text-muted">
-          {creditsRemaining != null ? `~${creditsRemaining} credits left` : "24/7 global markets"}
+          {creditsRemaining != null
+            ? `${creditsRemaining.toLocaleString()} credits · ${keyCount ?? 1} key${(keyCount ?? 1) === 1 ? "" : "s"}`
+            : "24/7 global markets"}
         </p>
       </div>
     </div>

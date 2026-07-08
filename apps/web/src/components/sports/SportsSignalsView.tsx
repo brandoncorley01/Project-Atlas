@@ -9,7 +9,7 @@ import { SportsCategoryTabs } from "@/components/sports/SportsCategoryTabs";
 import { SportFilterTabs } from "@/components/sports/SportFilterTabs";
 import { SportsToolbar } from "@/components/sports/SportsToolbar";
 import { SportsHeroBanner, SportsStatsBar } from "@/components/sports/SportsStatsBar";
-import { OddsQuotaBanner, useOddsApiStatus } from "@/components/sports/OddsQuotaBanner";
+import { OddsQuotaBanner, rescoreButtonLabel, useOddsApiStatus } from "@/components/sports/OddsQuotaBanner";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ListSkeleton } from "@/components/ui/Skeleton";
 import type { SportsCategoryMeta } from "@/lib/sports-categories";
@@ -189,8 +189,10 @@ export function SportsSignalsView({
   }
 
   const activeMeta = categories.find((c) => c.slug === activeCategory);
+  const cacheRescoreFree = oddsStatus?.cache_rescore_free ?? false;
   const cacheFresh = oddsStatus?.cache_fresh ?? false;
   const cacheNeedsLive = oddsStatus?.cache_needs_live_refresh ?? false;
+  const primaryScanLabel = rescoreButtonLabel(oddsStatus, loading);
 
   return (
     <div className="w-full min-w-0 overflow-x-clip">
@@ -198,8 +200,11 @@ export function SportsSignalsView({
 
       <SportsStatsBar
         items={items}
+        cacheRescoreFree={cacheRescoreFree}
         cacheFresh={cacheFresh}
+        cacheNeedsLive={cacheNeedsLive}
         creditsRemaining={oddsStatus?.total_remaining}
+        keyCount={oddsStatus?.key_count}
       />
 
       <OddsQuotaBanner status={oddsStatus} />
@@ -222,13 +227,7 @@ export function SportsSignalsView({
             disabled={loading}
             className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-md shadow-violet-600/25 disabled:opacity-50"
           >
-            {loading
-              ? "Scanning…"
-              : cacheFresh
-                ? "Rescore cached (0 credits)"
-                : cacheNeedsLive
-                  ? "Rescore narrow cache (0 credits)"
-                  : "Scan sports odds"}
+            {primaryScanLabel}
           </button>
           <button
             type="button"
@@ -319,7 +318,7 @@ export function SportsSignalsView({
               disabled={loading}
               className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
             >
-              Scan sports odds
+              {primaryScanLabel}
             </button>
           }
         />

@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { resolveApiBase } from "@/lib/api-config";
-import { mergeOddsKeyProbe } from "@/lib/merge-odds-status";
-import { probeOddsKeysFromEnv } from "@/lib/odds-key-probe";
 
 const API_BASE = resolveApiBase();
 const PROXY_TIMEOUT_MS = 60_000;
@@ -58,19 +56,6 @@ async function proxyRequest(request: NextRequest, pathSegments: string[]) {
           },
           { status: 502 },
         );
-      }
-    }
-
-    if (upstream.ok && subpath === "providers/status") {
-      try {
-        const data = JSON.parse(text) as { odds_api?: Record<string, unknown> };
-        const probe = await probeOddsKeysFromEnv();
-        if (probe.keys.length) {
-          data.odds_api = mergeOddsKeyProbe(data.odds_api, probe);
-          return NextResponse.json(data, { status: upstream.status });
-        }
-      } catch {
-        // Fall through to raw upstream body.
       }
     }
 
