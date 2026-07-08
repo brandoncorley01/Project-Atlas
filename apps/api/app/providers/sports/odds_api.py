@@ -68,6 +68,15 @@ ESSENTIAL_WINTER_KEYS = frozenset(
     {"basketball_nba", "icehockey_nhl", "americanfootball_nfl"}
 )
 
+# Sport *families* where tournaments rotate weekly (tennis, combat sports, golf).
+# The Odds API assigns a fresh key per tournament (e.g. tennis_atp_wimbledon then
+# tennis_atp_canadian_open), so an exact-key allowlist always misses most of the
+# book. Include every active tournament in these families and pin them so the
+# per-scan cap can't drop them.
+PRIORITY_SPORT_PREFIXES = frozenset(
+    {"tennis", "mma", "boxing", "golf"}
+)
+
 SUMMER_PRIORITY_KEYS = (
     "baseball_mlb",
     "basketball_wnba",
@@ -333,6 +342,11 @@ def _off_season_skip_keys() -> frozenset[str]:
     return frozenset(skip)
 
 
+def _sport_family(key: str) -> str:
+    """Top-level family for a sport key, e.g. tennis_atp_wimbledon -> tennis."""
+    return str(key).split("_", 1)[0]
+
+
 def _limit_sport_keys(keys: tuple[str, ...], *, force_refresh: bool = False) -> tuple[str, ...]:
     """Apply scan scope / max-sports settings to conserve API credits."""
     scope = (config.settings.odds_scan_scope or "priority").lower()
@@ -340,7 +354,13 @@ def _limit_sport_keys(keys: tuple[str, ...], *, force_refresh: bool = False) -> 
 
     if scope == "priority":
         priority = {k for k in PRIORITY_SPORT_KEYS}
-        filtered = tuple(k for k in keys if k in priority)
+        # Keep exact priority leagues plus every active tournament in a rotating
+        # family (tennis, MMA, boxing, golf) so the whole book is scanned.
+        filtered = tuple(
+            k
+            for k in keys
+            if k in priority or _sport_family(k) in PRIORITY_SPORT_PREFIXES
+        )
         if filtered:
             keys = filtered
 
@@ -352,8 +372,14 @@ def _limit_sport_keys(keys: tuple[str, ...], *, force_refresh: bool = False) -> 
     keys = _seasonal_key_order(keys)
 
     essential = _essential_keys_for_month()
-    pinned = tuple(k for k in keys if k in essential)
-    rest = tuple(k for k in keys if k not in essential)
+    # Pin in-season essentials + full-book families so the cap trims only the
+    # long tail (extra soccer leagues, minor markets), never tennis/MMA/etc.
+    pinned = tuple(
+        k
+        for k in keys
+        if k in essential or _sport_family(k) in PRIORITY_SPORT_PREFIXES
+    )
+    rest = tuple(k for k in keys if k not in pinned)
 
     if max_sports > 0:
         remaining = max(0, max_sports - len(pinned))
