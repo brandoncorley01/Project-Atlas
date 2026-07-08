@@ -53,7 +53,18 @@ class PerformanceService:
             if label_source and label_source.get("scoring_snapshot")
             else (signal_snapshot or {}),
         }
-        saved = await self.db.upsert("signal_performance", [row])
+
+        existing = await self.get_outcome(module=module, signal_id=signal_id)
+        if existing:
+            update_values = {k: v for k, v in row.items() if k not in ("user_id", "module", "signal_id")}
+            saved = await self.db.update(
+                "signal_performance",
+                {"id": f"eq.{existing['id']}", "user_id": f"eq.{self.user_id}"},
+                update_values,
+            )
+            return self._format_entry(saved[0])
+
+        saved = await self.db.insert("signal_performance", [row])
         return self._format_entry(saved[0])
 
     async def register_from_watchlist(self, *, item: dict[str, Any]) -> dict[str, Any] | None:
@@ -118,10 +129,14 @@ class PerformanceService:
         limit: int = 50,
         offset: int = 0,
         module: str | None = None,
+        resolved_only: bool = False,
     ) -> dict[str, Any]:
         filters: dict[str, str] = {"user_id": f"eq.{self.user_id}"}
         if module:
             filters["module"] = f"eq.{module}"
+        if resolved_only:
+            filters["outcome"] = "in.(win,loss,scratch)"
+
         rows = await self.db.select(
             "signal_performance",
             filters=filters,
@@ -275,7 +290,14 @@ class PerformanceService:
             if mod_rows:
                 by_module[mod] = self._compute_summary(mod_rows, days=days, module=mod)
 
-        auto_resolved = len([r for r in rows if r.get("resolution_source") == "auto_sports"])
+        auto_resolved = len(
+            [
+                r
+                for r in rows
+                if str(r.get("resolution_source") or "").startswith("auto_")
+                and r.get("outcome") in ("win", "loss", "scratch")
+            ]
+        )
 
         return {
             "days": days,

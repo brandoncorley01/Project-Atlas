@@ -47,9 +47,15 @@ async def get_performance_history(
     limit: int = 50,
     offset: int = 0,
     module: str | None = None,
+    resolved_only: bool = False,
 ) -> dict:
     service = PerformanceService(SupabaseClient(token), user_id)
-    return await service.get_history(limit=limit, offset=offset, module=module)
+    return await service.get_history(
+        limit=limit,
+        offset=offset,
+        module=module,
+        resolved_only=resolved_only,
+    )
 
 
 @router.post("/performance")

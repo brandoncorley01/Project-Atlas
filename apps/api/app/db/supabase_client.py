@@ -98,13 +98,22 @@ class SupabaseClient:
             return []
         return result if isinstance(result, list) else [result]
 
-    async def upsert(self, table: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    async def upsert(
+        self,
+        table: str,
+        rows: list[dict[str, Any]],
+        *,
+        on_conflict: str | None = None,
+    ) -> list[dict[str, Any]]:
         url_headers = {**self.headers, "Prefer": "return=representation,resolution=merge-duplicates"}
         url = f"{self.base_url}/{table}"
+        params: dict[str, str] = {}
+        if on_conflict:
+            params["on_conflict"] = on_conflict
         try:
             client = get_http_client()
             response = await client.request(
-                "POST", url, headers=url_headers, json=rows
+                "POST", url, headers=url_headers, params=params, json=rows
             )
         except httpx.HTTPError as exc:
             raise HTTPException(

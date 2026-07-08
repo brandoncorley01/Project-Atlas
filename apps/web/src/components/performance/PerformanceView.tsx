@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { apiRequestHeaders, getApiUrl, usesBffProxy } from "@/lib/api-url";
 
 export interface PerformanceEntry {
@@ -62,22 +62,35 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
     return data.session?.access_token ?? undefined;
   }
 
-  async function refreshSummary() {
+  const refreshSummary = useCallback(async () => {
     const token = await getToken();
     const sumRes = await fetch(`${getApiUrl()}/performance/summary?days=30`, {
       headers: apiRequestHeaders(token),
+      cache: "no-store",
+      credentials: usesBffProxy() ? "include" : "same-origin",
     });
     if (sumRes.ok) {
       setSummary(await sumRes.json());
     }
-    const histRes = await fetch(`${getApiUrl()}/performance/history?limit=30`, {
+    const histRes = await fetch(`${getApiUrl()}/performance/history?limit=50&resolved_only=true`, {
       headers: apiRequestHeaders(token),
+      cache: "no-store",
+      credentials: usesBffProxy() ? "include" : "same-origin",
     });
     if (histRes.ok) {
       const data = await histRes.json();
       setHistory(data.items ?? []);
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    void refreshSummary();
+    function onUpdated() {
+      void refreshSummary();
+    }
+    window.addEventListener("atlas:performance-updated", onUpdated);
+    return () => window.removeEventListener("atlas:performance-updated", onUpdated);
+  }, [refreshSummary]);
 
   async function runResolve() {
     setLoading(true);
@@ -291,6 +304,9 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
                       {row.outcome}
                       {row.resolution_source === "auto_sports" && (
                         <span className="ml-1 text-xs text-muted">(auto)</span>
+                      )}
+                      {row.resolution_source === "manual" && (
+                        <span className="ml-1 text-xs text-muted">(you)</span>
                       )}
                     </td>
                     <td className="px-4 py-2">{fmtPct(row.return_pct)}</td>

@@ -60,7 +60,11 @@ class OutcomeResolverService:
         if module:
             filters["module"] = f"eq.{module}"
         perf_rows = await self.db.select("signal_performance", filters=filters, limit=2000)
-        return {str(r.get("signal_id")) for r in perf_rows if r.get("signal_id")}
+        return {
+            str(r.get("signal_id"))
+            for r in perf_rows
+            if r.get("signal_id") and r.get("outcome") in ("win", "loss", "scratch")
+        }
 
     async def _resolve_sports(self, *, limit: int) -> dict[str, Any]:
         graded_ids = await self._graded_ids("sports")

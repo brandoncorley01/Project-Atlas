@@ -41,6 +41,7 @@ export function LogOutcomeButtons({
       const params = new URLSearchParams({ module, signal_id: signalId });
       const res = await fetch(`${getApiUrl()}/performance/outcome?${params}`, {
         headers: apiRequestHeaders(token),
+        credentials: usesBffProxy() ? "include" : "same-origin",
       });
       if (res.ok) {
         const data = await res.json();
@@ -63,6 +64,7 @@ export function LogOutcomeButtons({
       const res = await fetch(`${getApiUrl()}/performance`, {
         method: "POST",
         headers: apiRequestHeaders(token),
+        credentials: usesBffProxy() ? "include" : "same-origin",
         body: JSON.stringify({ module, signal_id: signalId, outcome }),
       });
       const body = await res.json();
