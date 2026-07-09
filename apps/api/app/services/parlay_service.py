@@ -393,6 +393,8 @@ class ParlayService:
                 "updated_at": now,
             },
         )
+        if not updated:
+            raise ValueError("Parlay update failed — row not found or not permitted")
         signal_map = {self._signal_id(s["id"]): s for s in signals}
         return self.format_parlay(updated[0], proposal["legs"], signal_map=signal_map)
 

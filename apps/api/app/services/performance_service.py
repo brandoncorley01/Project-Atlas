@@ -105,6 +105,8 @@ class PerformanceService:
             {"id": f"eq.{outcome_id}", "user_id": f"eq.{self.user_id}"},
             update_values,
         )
+        if not saved:
+            raise ValueError("Outcome update failed — row not found or not permitted")
         return self._format_entry(saved[0])
 
     async def register_from_watchlist(self, *, item: dict[str, Any]) -> dict[str, Any] | None:

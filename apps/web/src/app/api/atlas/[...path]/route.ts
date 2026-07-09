@@ -5,6 +5,7 @@ import { resolveApiBase } from "@/lib/api-config";
 const API_BASE = resolveApiBase();
 const PROXY_TIMEOUT_MS = 60_000;
 const DASHBOARD_PROXY_TIMEOUT_MS = 50_000;
+const AI_PROXY_TIMEOUT_MS = 90_000;
 
 async function proxyRequest(request: NextRequest, pathSegments: string[]) {
   try {
@@ -25,7 +26,11 @@ async function proxyRequest(request: NextRequest, pathSegments: string[]) {
 
     const subpath = pathSegments.join("/");
     const target = `${API_BASE}/${subpath}${request.nextUrl.search}`;
-    const timeoutMs = subpath === "dashboard" ? DASHBOARD_PROXY_TIMEOUT_MS : PROXY_TIMEOUT_MS;
+    const timeoutMs = subpath.startsWith("ai/")
+      ? AI_PROXY_TIMEOUT_MS
+      : subpath === "dashboard"
+        ? DASHBOARD_PROXY_TIMEOUT_MS
+        : PROXY_TIMEOUT_MS;
 
     const hasBody = request.method !== "GET" && request.method !== "HEAD";
     const body = hasBody ? await request.text() : undefined;

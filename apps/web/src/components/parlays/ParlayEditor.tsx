@@ -38,6 +38,30 @@ export function ParlayEditor({ initialParlay }: ParlayEditorProps) {
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
 
+  // Resolve leg signal IDs from pool when DB legs lack sports_signal_id (older parlays).
+  useEffect(() => {
+    if (!pool.length || !(parlay.legs?.length ?? 0)) return;
+    const needsResolve = (parlay.legs ?? []).some((leg) => !leg.sports_signal_id);
+    if (!needsResolve) return;
+
+    const resolved = (parlay.legs ?? [])
+      .map((leg) => {
+        if (leg.sports_signal_id) return leg.sports_signal_id;
+        const match = pool.find(
+          (p) =>
+            p.event_name === leg.event_name &&
+            p.selection === leg.selection &&
+            (p.bet_type ?? "moneyline") === (leg.bet_type ?? "moneyline"),
+        );
+        return match?.id ?? null;
+      })
+      .filter((id): id is string => Boolean(id));
+
+    if (resolved.length >= 2) {
+      setSelectedIds(resolved);
+    }
+  }, [pool, parlay.legs]);
+
   const dirty = useMemo(() => {
     const current = (parlay.legs ?? [])
       .map((leg) => leg.sports_signal_id)
@@ -111,14 +135,24 @@ export function ParlayEditor({ initialParlay }: ParlayEditorProps) {
     };
   }, [editing, selectedIds, dirty]);
 
-  function toggleLeg(id: string) {
+  function toggleLeg(pick: SportsPick) {
     setSelectedIds((prev) => {
-      if (prev.includes(id)) return prev.filter((x) => x !== id);
+      if (prev.includes(pick.id)) return prev.filter((x) => x !== pick.id);
       if (prev.length >= 6) return prev;
-      return [...prev, id];
+      const takenEvents = new Set(
+        pool
+          .filter((p) => prev.includes(p.id))
+          .map((p) => p.event_name)
+          .filter(Boolean),
+      );
+      if (pick.event_name && takenEvents.has(pick.event_name)) {
+        setError("Only one leg per event — pick a different game.");
+        return prev;
+      }
+      setError(null);
+      return [...prev, pick.id];
     });
     setMessage(null);
-    setError(null);
   }
 
   async function saveParlay() {
@@ -204,7 +238,7 @@ export function ParlayEditor({ initialParlay }: ParlayEditorProps) {
                     <button
                       key={pick.id}
                       type="button"
-                      onClick={() => toggleLeg(pick.id)}
+                      onClick={() => toggleLeg(pick)}
                       className={`flex w-full items-start gap-3 rounded-lg border p-3 text-left text-sm transition-colors ${
                         selected
                           ? "border-orange-500/50 bg-orange-500/10"

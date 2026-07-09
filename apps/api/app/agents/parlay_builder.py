@@ -89,6 +89,11 @@ def _eligible_for_style(style: str, signal: dict[str, Any]) -> bool:
     )
 
 
+def _style_for_leg_count(leg_count: int) -> str:
+    """Map leg count to a valid parlay_style enum value (no 'custom' in DB)."""
+    return {2: "conservative", 3: "balanced", 4: "aggressive"}.get(leg_count, "aggressive")
+
+
 def _combo_is_valid(picks: tuple[dict[str, Any], ...]) -> bool:
     ids = [str(p.get("id")) for p in picks]
     if len(ids) != len(set(ids)):
@@ -424,7 +429,7 @@ def build_custom_parlay(signals: list[dict[str, Any]]) -> dict[str, Any]:
     if correlation_warning:
         explanation += f" Note: {correlation_warning}"
 
-    style = {2: "conservative", 3: "balanced", 4: "aggressive"}.get(leg_count, "custom")
+    style = _style_for_leg_count(leg_count)
 
     return {
         "name": name,

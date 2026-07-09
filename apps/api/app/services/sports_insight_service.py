@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import Any
@@ -124,12 +125,46 @@ def _template_stats_comparison(
 
 
 class SportsInsightService:
-    async def gather_context(self, signal: dict[str, Any]) -> dict[str, Any]:
-        news_pool: list[dict[str, Any]] = []
+    async def _fetch_news(self) -> list[dict[str, Any]]:
         try:
-            news_pool = await fetch_sports_news(limit_per_feed=14)
+            return await fetch_sports_news(limit_per_feed=10)
         except Exception as exc:
             logger.warning("Sports insight news fetch failed: %s", exc)
+            return []
+
+    async def _fetch_stats(
+        self, signal: dict[str, Any], event: dict[str, Any]
+    ) -> tuple[dict[str, Any] | None, float]:
+        stats_payload: dict[str, Any] | None = None
+        support = 0.0
+        if not (event.get("home_team") and event.get("away_team") and event.get("_sport_key")):
+            return stats_payload, support
+        try:
+            stats_index = await build_stats_index([event])
+            match_stats = lookup_match_stats(event, stats_index)
+            stats_payload = match_stats_payload(match_stats)
+            snap = signal.get("scoring_snapshot") or {}
+            pick = snap.get("pick") or {}
+            support, enriched = compute_pick_support(
+                str(signal.get("bet_type") or pick.get("bet_type") or "moneyline"),
+                str(signal.get("selection") or pick.get("team_or_side") or ""),
+                pick.get("point"),
+                event["home_team"],
+                event["away_team"],
+                match_stats,
+            )
+            if enriched:
+                stats_payload = {**(stats_payload or {}), **enriched}
+        except Exception as exc:
+            logger.warning("Sports insight stats fetch failed: %s", exc)
+        return stats_payload, support
+
+    async def gather_context(self, signal: dict[str, Any]) -> dict[str, Any]:
+        event = _event_dict_from_signal(signal)
+        news_pool, (stats_payload, support) = await asyncio.gather(
+            self._fetch_news(),
+            self._fetch_stats(signal, event),
+        )
 
         matched = match_news_to_signal(signal, news_pool, limit=6)
         news_articles = [
@@ -143,30 +178,6 @@ class SportsInsightService:
             }
             for n in matched
         ]
-
-        event = _event_dict_from_signal(signal)
-        stats_payload: dict[str, Any] | None = None
-        support = 0.0
-
-        if event.get("home_team") and event.get("away_team") and event.get("_sport_key"):
-            try:
-                stats_index = await build_stats_index([event])
-                match_stats = lookup_match_stats(event, stats_index)
-                stats_payload = match_stats_payload(match_stats)
-                snap = signal.get("scoring_snapshot") or {}
-                pick = snap.get("pick") or {}
-                support, enriched = compute_pick_support(
-                    str(signal.get("bet_type") or pick.get("bet_type") or "moneyline"),
-                    str(signal.get("selection") or pick.get("team_or_side") or ""),
-                    pick.get("point"),
-                    event["home_team"],
-                    event["away_team"],
-                    match_stats,
-                )
-                if enriched:
-                    stats_payload = {**(stats_payload or {}), **enriched}
-            except Exception as exc:
-                logger.warning("Sports insight stats fetch failed: %s", exc)
 
         if stats_payload is None:
             cached = (signal.get("scoring_snapshot") or {}).get("team_stats")

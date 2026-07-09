@@ -72,7 +72,7 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
     if (sumRes.ok) {
       setSummary(await sumRes.json());
     }
-    const histRes = await fetch(`${getApiUrl()}/performance/history?limit=50&resolved_only=true`, {
+    const histRes = await fetch(`${getApiUrl()}/performance/history?limit=50`, {
       headers: apiRequestHeaders(token),
       cache: "no-store",
       credentials: usesBffProxy() ? "include" : "same-origin",
@@ -354,6 +354,11 @@ function OutcomeRow({
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setOutcome(row.outcome);
+    setReturnPct(row.return_pct != null ? String(row.return_pct) : "");
+  }, [row.id, row.outcome, row.return_pct]);
 
   async function save() {
     setSaving(true);

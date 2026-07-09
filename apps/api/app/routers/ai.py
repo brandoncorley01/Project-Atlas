@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+import logging
+
 from app.db.supabase_client import SupabaseClient
 from app.dependencies import get_access_token, get_current_user_id
 from app.services.ai_narrative_service import ai_narrative_service
@@ -12,6 +14,7 @@ from app.services.signal_service import SignalService
 from app.services.sports_insight_service import sports_insight_service
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class ExplainRequest(BaseModel):
@@ -109,7 +112,23 @@ async def explain_signal(
         if not row:
             raise HTTPException(status_code=404, detail="Signal not found")
         formatted = service.format_sports_item(row)
-        result = await sports_insight_service.explain_pick(signal=row, formatted=formatted)
+        try:
+            result = await sports_insight_service.explain_pick(signal=row, formatted=formatted)
+        except Exception:
+            logger.exception("Sports insight failed for %s", body.signal_id)
+            context = await sports_insight_service.gather_context(row)
+            result = {
+                "explanation": str(
+                    formatted.get("explanation") or row.get("explanation")
+                    or "Insight is limited right now — scan data is still available above."
+                ),
+                "bullets": sports_insight_service._template_bullets(formatted, row, context),
+                "risks": sports_insight_service._template_risks(formatted, row, context),
+                "news_articles": context["news_articles"],
+                "stats_comparison": context["stats_comparison"],
+                "source": "template",
+                "model": None,
+            }
         return {
             "module": module,
             "signal_id": body.signal_id,

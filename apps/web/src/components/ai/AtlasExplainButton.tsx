@@ -51,16 +51,17 @@ export function AtlasExplainButton({ module, signalId, className }: AtlasExplain
   const [data, setData] = useState<ExplainResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function loadExplanation() {
-    if (data && open) {
+  async function loadExplanation(force = false) {
+    if (data && open && !force) {
       setOpen(false);
       return;
     }
     setOpen(true);
-    if (data) return;
+    if (data && !force) return;
 
     setLoading(true);
     setError(null);
+    setData(null);
     try {
       let token: string | undefined;
       if (!usesBffProxy()) {
@@ -107,7 +108,18 @@ export function AtlasExplainButton({ module, signalId, className }: AtlasExplain
                 : "Building explanation from scan data…"}
             </p>
           )}
-          {error && <p className="text-sm text-danger">{error}</p>}
+          {error && (
+            <div className="space-y-2">
+              <p className="text-sm text-danger">{error}</p>
+              <button
+                type="button"
+                onClick={() => void loadExplanation(true)}
+                className="text-xs font-medium text-sky-300 hover:underline"
+              >
+                Try again
+              </button>
+            </div>
+          )}
           {data && !loading && (
             <>
               {data.source === "openai" && (
