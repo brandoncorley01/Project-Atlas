@@ -6,7 +6,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from app.agents.parlay_builder import build_all_parlays
+from app.agents.parlay_builder import build_all_parlays, build_custom_parlay
 from app.agents.parlay_categories import (
     PARLAY_CATEGORY_ORDER,
     category_counts,
@@ -311,15 +311,20 @@ class ParlayService:
             status=status,
         )
 
-    async def get_parlay(self, parlay_id: str) -> dict[str, Any] | None:
+    async def get_parlay_row(self, parlay_id: str) -> dict[str, Any] | None:
         rows = await self.db.select(
             "parlays",
             filters={"id": f"eq.{parlay_id}", "user_id": f"eq.{self.user_id}"},
             limit=1,
         )
-        if not rows:
+        return rows[0] if rows else None
+
+    async def get_parlay(self, parlay_id: str, *, for_edit: bool = False) -> dict[str, Any] | None:
+        row = await self.get_parlay_row(parlay_id)
+        if not row:
             return None
-        row = rows[0]
+        if for_edit:
+            return row
         if str(row.get("status")) != "active" or not is_parlay_fresh(row):
             return None
         legs = await self.get_legs(parlay_id)
@@ -327,6 +332,157 @@ class ParlayService:
         if not is_parlay_actionable(legs, signal_map):
             return None
         return row
+
+    async def create_custom_parlay(self, signal_ids: list[str]) -> dict[str, Any]:
+        signals = await self._load_signals_by_ids(signal_ids)
+        proposal = build_custom_parlay(signals)
+        return await self._persist_parlay_proposal(proposal)
+
+    async def update_parlay_legs(self, parlay_id: str, signal_ids: list[str]) -> dict[str, Any]:
+        row = await self.get_parlay_row(parlay_id)
+        if not row:
+            raise ValueError("Parlay not found")
+        if str(row.get("status")) not in ("active", "expired"):
+            raise ValueError("Parlay cannot be edited")
+
+        signals = await self._load_signals_by_ids(signal_ids)
+        proposal = build_custom_parlay(signals)
+
+        await self.db.delete(
+            "parlay_legs",
+            {"parlay_id": f"eq.{parlay_id}", "user_id": f"eq.{self.user_id}"},
+        )
+
+        now = datetime.now(UTC).isoformat()
+        leg_rows = [
+            {
+                "parlay_id": parlay_id,
+                "user_id": self.user_id,
+                "leg_order": leg["leg_order"],
+                "sport": leg["sport"],
+                "event_name": leg["event_name"],
+                "bet_type": leg["bet_type"],
+                "selection": leg["selection"],
+                "odds_american": leg["odds_american"],
+                "leg_reason": leg["leg_reason"],
+                "sports_signal_id": leg.get("sports_signal_id"),
+            }
+            for leg in proposal["legs"]
+        ]
+        if leg_rows:
+            await self.db.insert("parlay_legs", leg_rows)
+
+        updated = await self.db.update(
+            "parlays",
+            {"id": f"eq.{parlay_id}", "user_id": f"eq.{self.user_id}"},
+            {
+                "name": proposal["name"],
+                "style": proposal["style"],
+                "combined_odds_american": proposal["combined_odds_american"],
+                "combined_odds_decimal": proposal["combined_odds_decimal"],
+                "expected_value": proposal["expected_value"],
+                "correlation_warning": proposal.get("correlation_warning"),
+                "confidence_score": proposal["confidence_score"],
+                "risk_score": proposal["risk_score"],
+                "opportunity_score": proposal["opportunity_score"],
+                "recommendation": proposal["recommendation"],
+                "explanation": proposal["explanation"],
+                "risk_warning": proposal["risk_warning"],
+                "status": "active",
+                "data_as_of": now,
+                "updated_at": now,
+            },
+        )
+        signal_map = {self._signal_id(s["id"]): s for s in signals}
+        return self.format_parlay(updated[0], proposal["legs"], signal_map=signal_map)
+
+    async def _load_signals_by_ids(self, signal_ids: list[str]) -> list[dict[str, Any]]:
+        if len(signal_ids) < 2:
+            raise ValueError("Parlay must have at least 2 legs")
+        if len(signal_ids) > 6:
+            raise ValueError("Parlay cannot exceed 6 legs")
+
+        unique_ids = [self._signal_id(sid) for sid in signal_ids]
+        if len(unique_ids) != len(set(unique_ids)):
+            raise ValueError("Duplicate legs are not allowed")
+
+        signal_map = await self._load_signals_for_ids(unique_ids)
+        signals: list[dict[str, Any]] = []
+        for sid in unique_ids:
+            row = signal_map.get(sid)
+            if not row:
+                raise ValueError(f"Sports signal not found: {sid}")
+            signals.append(row)
+        return signals
+
+    async def _load_signals_for_ids(self, signal_ids: list[str]) -> dict[str, dict[str, Any]]:
+        if not signal_ids:
+            return {}
+        try:
+            rows = await self.db.select(
+                "sports_signals",
+                filters={
+                    "user_id": f"eq.{self.user_id}",
+                    "id": f"in.({','.join(signal_ids)})",
+                },
+                limit=len(signal_ids),
+            )
+        except Exception as exc:
+            logger.warning("Batch load sports signals: %s", exc)
+            rows = []
+        return {self._signal_id(row["id"]): row for row in rows}
+
+    async def _persist_parlay_proposal(self, proposal: dict[str, Any]) -> dict[str, Any]:
+        now = datetime.now(UTC).isoformat()
+        saved = await self.db.insert(
+            "parlays",
+            [
+                {
+                    "user_id": self.user_id,
+                    "name": proposal["name"],
+                    "style": proposal["style"],
+                    "combined_odds_american": proposal["combined_odds_american"],
+                    "combined_odds_decimal": proposal["combined_odds_decimal"],
+                    "expected_value": proposal["expected_value"],
+                    "correlation_warning": proposal.get("correlation_warning"),
+                    "confidence_score": proposal["confidence_score"],
+                    "risk_score": proposal["risk_score"],
+                    "opportunity_score": proposal["opportunity_score"],
+                    "recommendation": proposal["recommendation"],
+                    "explanation": proposal["explanation"],
+                    "risk_warning": proposal["risk_warning"],
+                    "status": "active",
+                    "data_as_of": now,
+                }
+            ],
+        )
+        parlay_row = saved[0]
+        parlay_id = str(parlay_row["id"])
+        leg_rows = [
+            {
+                "parlay_id": parlay_id,
+                "user_id": self.user_id,
+                "leg_order": leg["leg_order"],
+                "sport": leg["sport"],
+                "event_name": leg["event_name"],
+                "bet_type": leg["bet_type"],
+                "selection": leg["selection"],
+                "odds_american": leg["odds_american"],
+                "leg_reason": leg["leg_reason"],
+                "sports_signal_id": leg.get("sports_signal_id"),
+            }
+            for leg in proposal["legs"]
+        ]
+        if leg_rows:
+            await self.db.insert("parlay_legs", leg_rows)
+
+        signal_ids = [
+            self._signal_id(leg.get("sports_signal_id"))
+            for leg in proposal["legs"]
+            if leg.get("sports_signal_id")
+        ]
+        signal_map = await self._load_signals_for_ids(signal_ids)
+        return self.format_parlay(parlay_row, proposal["legs"], signal_map=signal_map)
 
     async def get_legs(self, parlay_id: str) -> list[dict[str, Any]]:
         rows = await self.db.select(

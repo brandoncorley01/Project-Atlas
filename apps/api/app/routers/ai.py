@@ -9,6 +9,7 @@ from app.services.market_intelligence_service import MarketIntelligenceService
 from app.services.performance_service import PerformanceService
 from app.services.signal_registry_service import SignalRegistryService
 from app.services.signal_service import SignalService
+from app.services.sports_insight_service import sports_insight_service
 
 router = APIRouter()
 
@@ -108,6 +109,13 @@ async def explain_signal(
         if not row:
             raise HTTPException(status_code=404, detail="Signal not found")
         formatted = service.format_sports_item(row)
+        result = await sports_insight_service.explain_pick(signal=row, formatted=formatted)
+        return {
+            "module": module,
+            "signal_id": body.signal_id,
+            "title": formatted.get("title"),
+            **result,
+        }
 
     result = await ai_narrative_service.explain_signal(
         module=module,

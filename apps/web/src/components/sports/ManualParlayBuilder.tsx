@@ -1,10 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import type { SportsSignal } from "@/components/sports/SportsSignalCard";
 import { AddToWatchlistButton } from "@/components/watchlist/AddToWatchlistButton";
 import { ScoreBadge } from "@/components/ui/ScoreBadge";
+import { apiFetch } from "@/lib/api";
+import { createClient } from "@/lib/supabase/client";
+import { usesBffProxy } from "@/lib/api-url";
 import {
   calculateParlayLocally,
   formatParlayTicket,
@@ -29,6 +33,9 @@ export function ManualParlayBuilder({
 }: ManualParlayBuilderProps) {
   const [stake, setStake] = useState(10);
   const [copied, setCopied] = useState(false);
+  const [savingParlay, setSavingParlay] = useState(false);
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const router = useRouter();
 
   const selectedLegs: ParlayLegInput[] = useMemo(() => {
     return signals.filter((s) => selectedIds.has(s.id)).map(legFromSignal);
@@ -55,6 +62,30 @@ export function ManualParlayBuilder({
     await navigator.clipboard.writeText(formatParlayTicket(calculated));
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  }
+
+  async function saveToParlays() {
+    if (!calculated || selectedLegs.length < 2) return;
+    setSavingParlay(true);
+    setSaveMessage(null);
+    try {
+      let token: string | undefined;
+      if (!usesBffProxy()) {
+        const { data } = await createClient().auth.getSession();
+        token = data.session?.access_token;
+      }
+      const result = await apiFetch<{ parlay: { id: string } }>("/parlays", token, {
+        method: "POST",
+        body: JSON.stringify({ signal_ids: selectedLegs.map((l) => l.id) }),
+        timeoutMs: 25_000,
+      });
+      setSaveMessage("Parlay saved — you can edit legs anytime.");
+      router.push(`/parlays/${result.parlay.id}`);
+    } catch (err) {
+      setSaveMessage(err instanceof Error ? err.message : "Could not save parlay");
+    } finally {
+      setSavingParlay(false);
+    }
   }
 
   if (selectedIds.size === 0) return null;
@@ -151,6 +182,14 @@ export function ManualParlayBuilder({
             )}
             <button
               type="button"
+              onClick={() => void saveToParlays()}
+              disabled={savingParlay}
+              className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+            >
+              {savingParlay ? "Saving…" : "Save & edit parlay"}
+            </button>
+            <button
+              type="button"
               onClick={copyTicket}
               className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:border-accent/50"
             >
@@ -163,6 +202,7 @@ export function ManualParlayBuilder({
               View saved parlays →
             </Link>
           </div>
+          {saveMessage && <p className="mt-2 text-xs text-muted">{saveMessage}</p>}
         </>
       )}
     </div>

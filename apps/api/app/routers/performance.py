@@ -86,3 +86,30 @@ async def log_performance(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "logged", "entry": entry}
+
+
+@router.patch("/performance/{outcome_id}")
+async def update_performance(
+    outcome_id: str,
+    body: dict,
+    user_id: str = Depends(get_current_user_id),
+    token: str = Depends(get_access_token),
+) -> dict:
+    outcome = body.get("outcome")
+    if outcome is not None:
+        outcome = str(outcome).strip()
+    return_pct = body.get("return_pct")
+    hold_hours = body.get("hold_duration_hours")
+
+    service = PerformanceService(SupabaseClient(token), user_id)
+    try:
+        entry = await service.update_outcome(
+            outcome_id,
+            outcome=outcome,
+            return_pct=float(return_pct) if return_pct is not None else None,
+            hold_duration_hours=float(hold_hours) if hold_hours is not None else None,
+        )
+    except ValueError as exc:
+        status_code = 404 if "not found" in str(exc).lower() else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    return {"status": "updated", "entry": entry}

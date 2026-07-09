@@ -290,30 +290,12 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
                   <th className="px-4 py-2">Module</th>
                   <th className="px-4 py-2">Outcome</th>
                   <th className="px-4 py-2">Return</th>
-                  <th className="px-4 py-2">Logged</th>
+                  <th className="px-4 py-2">Logged / Edit</th>
                 </tr>
               </thead>
               <tbody>
                 {history.map((row) => (
-                  <tr key={row.id} className="border-b border-border/50">
-                    <td className="px-4 py-2 text-muted">
-                      {row.signal_label ?? row.signal_id.slice(0, 8)}
-                    </td>
-                    <td className="px-4 py-2 capitalize">{row.module}</td>
-                    <td className="px-4 py-2 capitalize">
-                      {row.outcome}
-                      {row.resolution_source === "auto_sports" && (
-                        <span className="ml-1 text-xs text-muted">(auto)</span>
-                      )}
-                      {row.resolution_source === "manual" && (
-                        <span className="ml-1 text-xs text-muted">(you)</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-2">{fmtPct(row.return_pct)}</td>
-                    <td className="px-4 py-2 text-muted">
-                      {row.logged_at ? new Date(row.logged_at).toLocaleDateString() : "—"}
-                    </td>
-                  </tr>
+                  <OutcomeRow key={row.id} row={row} onUpdated={refreshSummary} />
                 ))}
               </tbody>
             </table>
@@ -356,4 +338,142 @@ function fmtPct(v: number | null | undefined) {
   if (v == null) return "—";
   const sign = v > 0 ? "+" : "";
   return `${sign}${v}%`;
+}
+
+function OutcomeRow({
+  row,
+  onUpdated,
+}: {
+  row: PerformanceEntry;
+  onUpdated: () => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [outcome, setOutcome] = useState(row.outcome);
+  const [returnPct, setReturnPct] = useState(
+    row.return_pct != null ? String(row.return_pct) : "",
+  );
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function save() {
+    setSaving(true);
+    setError(null);
+    try {
+      const { apiRequestHeaders, getApiUrl, usesBffProxy } = await import("@/lib/api-url");
+      let token: string | undefined;
+      if (!usesBffProxy()) {
+        const { createClient } = await import("@/lib/supabase/client");
+        const { data } = await createClient().auth.getSession();
+        token = data.session?.access_token ?? undefined;
+      }
+      const body: Record<string, unknown> = { outcome };
+      if (returnPct.trim() !== "") {
+        body.return_pct = Number(returnPct);
+      }
+      const res = await fetch(`${getApiUrl()}/performance/${row.id}`, {
+        method: "PATCH",
+        headers: apiRequestHeaders(token),
+        credentials: usesBffProxy() ? "include" : "same-origin",
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error((data as { detail?: string }).detail ?? "Update failed");
+      }
+      setEditing(false);
+      await onUpdated();
+      window.dispatchEvent(new CustomEvent("atlas:performance-updated"));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not update outcome");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <tr className="border-b border-border/50">
+      <td className="px-4 py-2 text-muted">
+        {row.signal_label ?? row.signal_id.slice(0, 8)}
+      </td>
+      <td className="px-4 py-2 capitalize">{row.module}</td>
+      <td className="px-4 py-2">
+        {editing ? (
+          <select
+            value={outcome}
+            onChange={(e) => setOutcome(e.target.value)}
+            className="rounded border border-border bg-background px-2 py-1 text-sm capitalize"
+          >
+            <option value="win">Win</option>
+            <option value="loss">Loss</option>
+            <option value="scratch">Scratch</option>
+            <option value="pending">Pending</option>
+          </select>
+        ) : (
+          <span className="capitalize">
+            {row.outcome}
+            {row.resolution_source === "auto_sports" && (
+              <span className="ml-1 text-xs text-muted">(auto)</span>
+            )}
+            {(row.resolution_source === "manual" || row.resolution_source === "manual_edit") && (
+              <span className="ml-1 text-xs text-muted">(you)</span>
+            )}
+          </span>
+        )}
+      </td>
+      <td className="px-4 py-2">
+        {editing ? (
+          <input
+            type="number"
+            step="0.1"
+            placeholder="Return %"
+            value={returnPct}
+            onChange={(e) => setReturnPct(e.target.value)}
+            className="w-24 rounded border border-border bg-background px-2 py-1 text-sm"
+          />
+        ) : (
+          fmtPct(row.return_pct)
+        )}
+      </td>
+      <td className="px-4 py-2">
+        <div className="flex flex-col gap-1">
+          <span className="text-muted">
+            {row.logged_at ? new Date(row.logged_at).toLocaleDateString() : "—"}
+          </span>
+          {editing ? (
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => void save()}
+                disabled={saving}
+                className="text-xs font-medium text-accent hover:underline disabled:opacity-50"
+              >
+                {saving ? "Saving…" : "Save"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditing(false);
+                  setOutcome(row.outcome);
+                  setReturnPct(row.return_pct != null ? String(row.return_pct) : "");
+                  setError(null);
+                }}
+                className="text-xs text-muted hover:underline"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setEditing(true)}
+              className="text-left text-xs font-medium text-accent hover:underline"
+            >
+              Edit
+            </button>
+          )}
+          {error && <span className="text-xs text-danger">{error}</span>}
+        </div>
+      </td>
+    </tr>
+  );
 }

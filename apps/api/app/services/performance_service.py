@@ -67,6 +67,46 @@ class PerformanceService:
         saved = await self.db.insert("signal_performance", [row])
         return self._format_entry(saved[0])
 
+    async def update_outcome(
+        self,
+        outcome_id: str,
+        *,
+        outcome: str | None = None,
+        return_pct: float | None = None,
+        hold_duration_hours: float | None = None,
+    ) -> dict[str, Any]:
+        rows = await self.db.select(
+            "signal_performance",
+            filters={"id": f"eq.{outcome_id}", "user_id": f"eq.{self.user_id}"},
+            limit=1,
+        )
+        if not rows:
+            raise ValueError("Outcome not found")
+
+        existing = rows[0]
+        new_outcome = outcome if outcome is not None else existing.get("outcome")
+        if new_outcome not in VALID_OUTCOMES:
+            raise ValueError(f"outcome must be one of: {', '.join(sorted(VALID_OUTCOMES))}")
+
+        now = datetime.now(UTC).isoformat()
+        update_values: dict[str, Any] = {
+            "outcome": new_outcome,
+            "updated_at": now,
+            "resolution_source": "manual_edit",
+            "resolved_at": now if new_outcome != "pending" else None,
+        }
+        if return_pct is not None:
+            update_values["return_pct"] = return_pct
+        if hold_duration_hours is not None:
+            update_values["hold_duration_hours"] = hold_duration_hours
+
+        saved = await self.db.update(
+            "signal_performance",
+            {"id": f"eq.{outcome_id}", "user_id": f"eq.{self.user_id}"},
+            update_values,
+        )
+        return self._format_entry(saved[0])
+
     async def register_from_watchlist(self, *, item: dict[str, Any]) -> dict[str, Any] | None:
         """Create a pending performance row when a pick is saved to the watchlist."""
         meta = item.get("metadata") or {}

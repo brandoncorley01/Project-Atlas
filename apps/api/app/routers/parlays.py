@@ -60,6 +60,24 @@ async def list_parlays(
     }
 
 
+@router.post("/parlays")
+async def create_parlay(
+    body: dict,
+    user_id: str = Depends(get_current_user_id),
+    token: str = Depends(get_access_token),
+) -> dict:
+    signal_ids = body.get("signal_ids") or body.get("sports_signal_ids") or []
+    if not isinstance(signal_ids, list) or len(signal_ids) < 2:
+        raise HTTPException(status_code=400, detail="signal_ids must be a list of at least 2 IDs")
+
+    service = _service(user_id, token)
+    try:
+        parlay = await service.create_custom_parlay([str(sid) for sid in signal_ids[:6]])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"parlay": parlay}
+
+
 @router.post("/parlays/calculate")
 async def calculate_parlay(
     body: dict,
@@ -91,9 +109,30 @@ async def get_parlay(
     parlay_id: str,
     user_id: str = Depends(get_current_user_id),
     token: str = Depends(get_access_token),
+    for_edit: bool = False,
 ) -> dict:
     service = _service(user_id, token)
-    row = await service.get_parlay(parlay_id)
+    row = await service.get_parlay(parlay_id, for_edit=for_edit)
     if not row:
         raise HTTPException(status_code=404, detail="Parlay not found")
     return await service.format_parlay_with_legs(row)
+
+
+@router.patch("/parlays/{parlay_id}")
+async def update_parlay(
+    parlay_id: str,
+    body: dict,
+    user_id: str = Depends(get_current_user_id),
+    token: str = Depends(get_access_token),
+) -> dict:
+    signal_ids = body.get("signal_ids") or body.get("sports_signal_ids") or []
+    if not isinstance(signal_ids, list) or len(signal_ids) < 2:
+        raise HTTPException(status_code=400, detail="signal_ids must be a list of at least 2 IDs")
+
+    service = _service(user_id, token)
+    try:
+        parlay = await service.update_parlay_legs(parlay_id, [str(sid) for sid in signal_ids[:6]])
+    except ValueError as exc:
+        status_code = 404 if "not found" in str(exc).lower() else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    return {"parlay": parlay}

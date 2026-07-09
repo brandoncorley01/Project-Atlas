@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { ParlayCard, type Parlay } from "@/components/parlays/ParlayCard";
+import { ParlayEditor } from "@/components/parlays/ParlayEditor";
+import type { Parlay } from "@/components/parlays/ParlayCard";
 import { getSupabaseEnv } from "@/lib/env";
 import { createClient } from "@/lib/supabase/server";
 import { apiFetch } from "@/lib/api";
@@ -18,7 +19,7 @@ export default async function ParlayDetailPage({
     const token = session.data.session?.access_token;
     if (token) {
       try {
-        parlay = await apiFetch<Parlay>(`/parlays/${id}`, token);
+        parlay = await apiFetch<Parlay>(`/parlays/${id}?for_edit=true`, token);
       } catch {
         parlay = null;
       }
@@ -44,7 +45,7 @@ export default async function ParlayDetailPage({
         </Link>
         <h1 className="mt-2 text-2xl font-bold">{parlay.name ?? "Parlay detail"}</h1>
       </div>
-      <ParlayCard row={parlay} rank={1} />
+      <ParlayEditor initialParlay={parlay} />
     </>
   );
 }
