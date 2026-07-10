@@ -42,7 +42,7 @@ const fetchInit = (token?: string): RequestInit => ({
   credentials: usesBffProxy() ? "include" : "same-origin",
 });
 
-export async function fetchPerformanceHistory(limit = 200): Promise<PerformanceEntry[]> {
+export async function fetchPerformanceHistory(limit = 1000): Promise<PerformanceEntry[]> {
   const token = await getToken();
   try {
     const res = await fetch(`${getApiUrl()}/performance/history?limit=${limit}`, {

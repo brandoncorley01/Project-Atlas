@@ -92,11 +92,11 @@ async def resolve_outcomes(
     limit: int = 25,
     module: str | None = None,
 ) -> dict:
-    """Auto-grade finished sports, stock, and options picks for Atlas learning."""
-    if module is not None and module not in ("sports", "stock", "options"):
+    """Auto-grade finished sports, stock, options, and parlay picks for Atlas learning."""
+    if module is not None and module not in ("sports", "stock", "options", "parlay"):
         raise HTTPException(
             status_code=400,
-            detail="module must be one of: sports, stock, options",
+            detail="module must be one of: sports, stock, options, parlay",
         )
     result = await run_resolve_outcomes_job(user_id, token, limit=limit, module=module)
     set_last_job("resolve_outcomes")

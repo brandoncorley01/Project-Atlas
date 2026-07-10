@@ -144,6 +144,16 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
 
   useEffect(() => {
     void refreshStatuses();
+    // Auto-push every trackable watchlist pick into performance
+    void (async () => {
+      try {
+        const { syncWatchlistToPerformance } = await import("@/lib/performance-api");
+        await syncWatchlistToPerformance();
+        await refreshStatuses();
+      } catch {
+        /* non-fatal */
+      }
+    })();
     function onUpdated() {
       void refreshStatuses();
     }

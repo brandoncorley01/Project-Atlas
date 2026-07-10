@@ -5,6 +5,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LogOutcomeButtons } from "@/components/performance/LogOutcomeButtons";
 import { buildClientCoachInsight, type CoachInsight } from "@/lib/performance-coach";
 import {
+  matchesOriginFilter,
+  originLabel,
+  resolvePickOrigin,
+  type PickOrigin,
+} from "@/lib/performance-origin";
+import {
   backfillPerformanceTracking,
   fetchPerformanceHistory,
   fetchPerformanceSummary,
@@ -24,6 +30,8 @@ export interface PerformanceEntry {
   logged_at?: string;
   resolution_source?: string | null;
   signal_label?: string | null;
+  pick_origin?: PickOrigin | string | null;
+  graded_by?: string | null;
 }
 
 export interface PerformanceSummary {
@@ -37,6 +45,8 @@ export interface PerformanceSummary {
   scratches?: number;
   pending?: number;
   auto_resolved?: number;
+  atlas_picks?: number;
+  user_picks?: number;
   learning_active?: boolean;
   learning_notes?: string[];
   confidence_accuracy?: Record<string, { count: number; win_rate: number }>;
@@ -61,6 +71,9 @@ const SECTORS = [
 ] as const;
 
 type SectorId = (typeof SECTORS)[number]["id"];
+type OriginFilter = "all" | "atlas" | "user";
+
+const HISTORY_LIMIT = 1000;
 
 export function PerformanceView({ initialSummary, initialHistory }: PerformanceViewProps) {
   const [summary, setSummary] = useState(initialSummary);
@@ -74,7 +87,8 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
   const [coachRefreshing, setCoachRefreshing] = useState(false);
   const [coachError, setCoachError] = useState<string | null>(null);
   const [dataSource, setDataSource] = useState<"api" | "direct" | null>(null);
-  const didAutoBackfill = useRef(false);
+  const [originFilter, setOriginFilter] = useState<OriginFilter>("all");
+  const didBootstrap = useRef(false);
   const syncInFlight = useRef(false);
 
   async function getToken() {
@@ -96,7 +110,7 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
           cache: "no-store",
           credentials: creds,
         }),
-        fetch(`${getApiUrl()}/performance/history?limit=200`, {
+        fetch(`${getApiUrl()}/performance/history?limit=${HISTORY_LIMIT}`, {
           headers: apiRequestHeaders(token),
           cache: "no-store",
           credentials: creds,
@@ -116,7 +130,7 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
     if (!usedApi) {
       const [sum, hist] = await Promise.all([
         fetchPerformanceSummary(30),
-        fetchPerformanceHistory(200),
+        fetchPerformanceHistory(HISTORY_LIMIT),
       ]);
       setSummary(sum);
       setHistory(hist);
@@ -253,38 +267,43 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      await refreshSummary();
+      if (didBootstrap.current) return;
+      didBootstrap.current = true;
+
+      // 1) Pull every watchlist pick into performance
+      const sync = await syncWatchlist(true);
       if (cancelled) return;
-      void loadCoachInsight(false);
-      // Auto-grade settled picks (sports/stocks/options/parlays) on page load
+
+      // 2) Register any scanned picks missing from performance
+      await runBackfill(true);
+      if (cancelled) return;
+
+      // 3) Auto-grade settled sports/stocks/options/parlays (high limit)
       try {
         const token = await getToken();
-        await fetch(`${getApiUrl()}/engine/resolve-outcomes`, {
+        await fetch(`${getApiUrl()}/engine/resolve-outcomes?limit=80`, {
           method: "POST",
           headers: apiRequestHeaders(token),
           credentials: usesBffProxy() ? "include" : "same-origin",
         });
-        if (!cancelled) await refreshSummary();
       } catch {
-        /* non-fatal — manual Grade buttons still work */
+        /* non-fatal */
       }
       if (cancelled) return;
-      const sync = await syncWatchlist(true);
-      if (cancelled || didAutoBackfill.current) return;
-      didAutoBackfill.current = true;
-      if (sync.synced > 0) return;
-      const tracked = (summary.total_signals ?? 0) + (summary.pending ?? 0) + history.length;
-      if (tracked === 0 && sync.total === 0) {
-        await runBackfill(true);
-      }
+
+      await refreshSummary();
+      if (cancelled) return;
+      void loadCoachInsight(false);
+
+      if (!silentMessageNeeded(sync)) return;
+      setMessage(formatWatchlistSyncMessage(sync));
     })();
 
     function onUpdated() {
       void refreshSummary();
     }
     function onWatchlistUpdated() {
-      // Refresh only — full sync is explicit (button / mount).
-      void refreshSummary();
+      void syncWatchlist(true).then(() => refreshSummary());
     }
     window.addEventListener("atlas:performance-updated", onUpdated);
     window.addEventListener("atlas:watchlist-updated", onWatchlistUpdated);
@@ -293,7 +312,6 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
       window.removeEventListener("atlas:performance-updated", onUpdated);
       window.removeEventListener("atlas:watchlist-updated", onWatchlistUpdated);
     };
-    // Bootstrap once on mount — callbacks are stable enough for this page
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -301,24 +319,82 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
     setCoachInsight(buildClientCoachInsight(summary));
   }, [summary]);
 
-  const historyBySector = useMemo(() => {
-    const grouped: Record<SectorId, { graded: PerformanceEntry[]; pending: PerformanceEntry[] }> = {
-      sports: { graded: [], pending: [] },
-      stock: { graded: [], pending: [] },
-      options: { graded: [], pending: [] },
-      parlay: { graded: [], pending: [] },
-    };
+  const filteredHistory = useMemo(
+    () => history.filter((row) => matchesOriginFilter(row, originFilter)),
+    [history, originFilter],
+  );
+
+  const originCounts = useMemo(() => {
+    let atlas = 0;
+    let user = 0;
     for (const row of history) {
+      const origin = resolvePickOrigin(row);
+      if (origin === "atlas" || origin === "both") atlas += 1;
+      if (origin === "user" || origin === "both") user += 1;
+    }
+    return { atlas, user, all: history.length };
+  }, [history]);
+
+  const historyBySector = useMemo(() => {
+    const grouped: Record<SectorId, PerformanceEntry[]> = {
+      sports: [],
+      stock: [],
+      options: [],
+      parlay: [],
+    };
+    for (const row of filteredHistory) {
       const mod = row.module as SectorId;
       if (!grouped[mod]) continue;
-      if (row.outcome === "pending") {
-        grouped[mod].pending.push(row);
-      } else if (["win", "loss", "scratch"].includes(row.outcome)) {
-        grouped[mod].graded.push(row);
-      }
+      grouped[mod].push(row);
+    }
+    // Pending first, then graded by date
+    for (const key of Object.keys(grouped) as SectorId[]) {
+      grouped[key].sort((a, b) => {
+        const ap = a.outcome === "pending" ? 0 : 1;
+        const bp = b.outcome === "pending" ? 0 : 1;
+        if (ap !== bp) return ap - bp;
+        return String(b.logged_at ?? "").localeCompare(String(a.logged_at ?? ""));
+      });
     }
     return grouped;
-  }, [history]);
+  }, [filteredHistory]);
+
+  function silentMessageNeeded(sync: {
+    synced: number;
+    alreadyTracked: number;
+    total: number;
+  }) {
+    return sync.synced > 0;
+  }
+
+  async function runResolveAll() {
+    setGradingSector("sports");
+    setMessage(null);
+    const token = await getToken();
+    try {
+      const res = await fetch(`${getApiUrl()}/engine/resolve-outcomes?limit=80`, {
+        method: "POST",
+        headers: apiRequestHeaders(token),
+        credentials: usesBffProxy() ? "include" : "same-origin",
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.ok) {
+        const resolved = body.resolved ?? 0;
+        setMessage(
+          resolved > 0
+            ? `Auto-graded ${resolved} settled pick(s) across all sectors`
+            : "No new grades ready — games/expirations still open",
+        );
+        await refreshSummary();
+        void loadCoachInsight(true);
+      } else {
+        setMessage(typeof body.detail === "string" ? body.detail : "Could not auto-grade");
+      }
+    } catch {
+      setMessage("Backend not responding");
+    }
+    setGradingSector(null);
+  }
 
   async function runResolveSector(sectorId: SectorId) {
     setGradingSector(sectorId);
@@ -326,7 +402,7 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
     const token = await getToken();
     const sector = SECTORS.find((s) => s.id === sectorId);
     try {
-      const params = new URLSearchParams({ module: sectorId });
+      const params = new URLSearchParams({ module: sectorId, limit: "80" });
       const res = await fetch(`${getApiUrl()}/engine/resolve-outcomes?${params}`, {
         method: "POST",
         headers: apiRequestHeaders(token),
@@ -391,9 +467,8 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
       <section className="rounded-xl border border-violet-500/30 bg-violet-500/5 p-4">
         <h2 className="text-sm font-semibold text-foreground">How Atlas learns</h2>
         <p className="mt-2 text-sm text-muted">
-          Every scanned pick is auto-tracked. Sports, stocks, options, and parlays auto-grade after
-          the event or expiration window. Watchlist picks show a status chip and can be sent to
-          Performance one-by-one. Results below feed the coach and tighten future thresholds.
+          Every scan and every watchlist save is auto-tracked. Atlas picks and your picks are kept
+          separate. Settled events auto-grade on load — no awaiting list to babysit.
         </p>
         {summary.learning_active && learningNotes.length > 0 ? (
           <ul className="mt-3 space-y-1 text-sm text-violet-200">
@@ -429,7 +504,15 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
             disabled={loading}
             className="rounded-lg border border-border px-4 py-2 text-sm text-muted hover:bg-surface-hover disabled:opacity-50"
           >
-            Register all past picks
+            Register all Atlas picks
+          </button>
+          <button
+            type="button"
+            onClick={() => void runResolveAll()}
+            disabled={loading || gradingSector != null}
+            className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+          >
+            {gradingSector ? "Grading…" : "Grade all settled"}
           </button>
           <button
             type="button"
@@ -479,20 +562,48 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
         )}
       </section>
 
+      <section className="flex flex-wrap gap-2">
+        {(
+          [
+            ["all", `All picks (${originCounts.all})`],
+            ["atlas", `Atlas picks (${originCounts.atlas})`],
+            ["user", `Your picks (${originCounts.user})`],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setOriginFilter(id)}
+            className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+              originFilter === id
+                ? "bg-accent text-white"
+                : "border border-border text-muted hover:bg-surface-hover"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </section>
+
       <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <StatCard label="Win rate (30d)" value={summary.win_rate != null ? `${summary.win_rate}%` : "—"} />
         <StatCard label="Avg win return" value={fmtPct(summary.avg_return_pct)} />
-        <StatCard label="Logged trades" value={String(summary.total_signals ?? 0)} />
+        <StatCard label="Graded picks" value={String(summary.total_signals ?? 0)} />
         <StatCard
           label="W / L / Auto"
           value={`${summary.wins ?? 0} / ${summary.losses ?? 0} / ${summary.auto_resolved ?? 0}`}
         />
-        <StatCard label="Awaiting grade" value={String(summary.pending ?? 0)} />
+        <StatCard
+          label="Still open"
+          value={String(
+            filteredHistory.filter((r) => r.outcome === "pending").length,
+          )}
+        />
       </section>
 
       {SECTORS.map((sector) => {
         const modSummary = summary.by_module?.[sector.id];
-        const sectorHistory = historyBySector[sector.id];
+        const picks = historyBySector[sector.id];
         const sectorCoach = coachInsight?.by_module?.[sector.id];
         const isGrading = gradingSector === sector.id;
 
@@ -501,8 +612,7 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
             key={sector.id}
             sector={sector}
             summary={modSummary}
-            graded={sectorHistory.graded}
-            pending={sectorHistory.pending}
+            picks={picks}
             coachNarrative={sectorCoach?.narrative}
             isGrading={isGrading}
             onGrade={() => void runResolveSector(sector.id)}
@@ -535,8 +645,7 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
 function SectorSection({
   sector,
   summary,
-  graded,
-  pending,
+  picks,
   coachNarrative,
   isGrading,
   onGrade,
@@ -544,16 +653,15 @@ function SectorSection({
 }: {
   sector: (typeof SECTORS)[number];
   summary?: PerformanceSummary;
-  graded: PerformanceEntry[];
-  pending: PerformanceEntry[];
+  picks: PerformanceEntry[];
   coachNarrative?: string;
   isGrading: boolean;
   onGrade: () => void;
   onUpdated: () => Promise<void>;
 }) {
   const winRate = summary?.win_rate;
-  const totalGraded = summary?.total_signals ?? graded.length;
-  const awaiting = summary?.pending ?? pending.length;
+  const gradedCount = picks.filter((p) => ["win", "loss", "scratch"].includes(p.outcome)).length;
+  const openCount = picks.filter((p) => p.outcome === "pending").length;
 
   return (
     <section className="rounded-xl border border-border bg-surface/30 p-4">
@@ -562,14 +670,17 @@ function SectorSection({
           <h2 className="text-base font-semibold">{sector.label}</h2>
           <div className="mt-2 flex flex-wrap gap-4 text-sm text-muted">
             <span>
+              Shown: <strong className="text-foreground">{picks.length}</strong>
+            </span>
+            <span>
               Win rate:{" "}
               <strong className="text-foreground">{winRate != null ? `${winRate}%` : "—"}</strong>
             </span>
             <span>
-              Graded: <strong className="text-foreground">{totalGraded}</strong>
+              Graded: <strong className="text-foreground">{gradedCount}</strong>
             </span>
             <span>
-              Awaiting: <strong className="text-foreground">{awaiting}</strong>
+              Open: <strong className="text-foreground">{openCount}</strong>
             </span>
             {summary && (summary.wins != null || summary.losses != null) && (
               <span>
@@ -597,65 +708,35 @@ function SectorSection({
         <p className="mt-3 text-sm text-sky-200/90">{coachNarrative}</p>
       )}
 
-      {graded.length > 0 ? (
+      {picks.length > 0 ? (
         <div className="mt-4 overflow-x-auto rounded-lg border border-border">
           <table className="w-full text-left text-sm">
             <thead className="border-b border-border bg-surface text-xs text-muted">
               <tr>
                 <th className="px-4 py-2">Pick</th>
+                <th className="px-4 py-2">Source</th>
                 <th className="px-4 py-2">Outcome</th>
                 <th className="px-4 py-2">Return</th>
                 <th className="px-4 py-2">Logged / Edit</th>
               </tr>
             </thead>
             <tbody>
-              {graded.map((row) => (
-                <OutcomeRow key={row.id} row={row} onUpdated={onUpdated} />
+              {picks.map((row) => (
+                <OutcomeRow key={row.id} row={row} onUpdated={onUpdated} sector={sector.id} />
               ))}
             </tbody>
           </table>
         </div>
       ) : (
         <div className="mt-4 rounded-lg border border-dashed border-border bg-background/30 p-6 text-center text-sm text-muted">
-          <p>No graded {sector.label.toLowerCase()} picks yet.</p>
+          <p>No {sector.label.toLowerCase()} picks in this view yet.</p>
           <p className="mt-2">
-            Tap <strong className="text-foreground">Grade {sector.label.toLowerCase()}</strong> when
-            games or positions settle. Scanned picks auto-track; watchlist picks can be sent
-            individually from{" "}
+            Run a scan or save picks to your{" "}
             <Link href="/watchlist" className="text-accent hover:underline">
-              Watchlist
+              watchlist
             </Link>
-            .
+            — they sync here automatically.
           </p>
-        </div>
-      )}
-
-      {pending.length > 0 && (
-        <div className="mt-4">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">
-            Awaiting grade ({pending.length})
-          </h3>
-          <ul className="mt-2 divide-y divide-border/40 rounded-lg border border-border/60">
-            {pending.slice(0, 12).map((row) => (
-              <li key={row.id} className="px-3 py-2">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-sm text-foreground">
-                    {row.signal_label ?? row.signal_id.slice(0, 8)}
-                  </span>
-                  <span className="text-[10px] uppercase tracking-wide text-sky-300">pending</span>
-                </div>
-                <LogOutcomeButtons
-                  module={sector.id}
-                  signalId={row.signal_id}
-                  compact
-                  className="mt-2"
-                />
-              </li>
-            ))}
-            {pending.length > 12 && (
-              <li className="px-3 py-2 text-xs text-muted">+ {pending.length - 12} more tracked</li>
-            )}
-          </ul>
         </div>
       )}
     </section>
@@ -680,9 +761,11 @@ function fmtPct(v: number | null | undefined) {
 function OutcomeRow({
   row,
   onUpdated,
+  sector,
 }: {
   row: PerformanceEntry;
   onUpdated: () => Promise<void>;
+  sector: SectorId;
 }) {
   const [editing, setEditing] = useState(false);
   const [outcome, setOutcome] = useState(row.outcome);
@@ -691,6 +774,12 @@ function OutcomeRow({
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const origin = resolvePickOrigin(row);
+  const isPending = row.outcome === "pending";
+  const autoGraded =
+    Boolean(row.graded_by) ||
+    (String(row.resolution_source ?? "").startsWith("auto_") &&
+      row.resolution_source !== "auto_scan");
 
   useEffect(() => {
     setOutcome(row.outcome);
@@ -720,9 +809,30 @@ function OutcomeRow({
   }
 
   return (
-    <tr className="border-b border-border/50">
-      <td className="px-4 py-2 text-muted">
-        {row.signal_label ?? row.signal_id.slice(0, 8)}
+    <tr className="border-b border-border/50 align-top">
+      <td className="px-4 py-2">
+        <p className="text-foreground">{row.signal_label ?? row.signal_id.slice(0, 8)}</p>
+        {isPending && (
+          <LogOutcomeButtons
+            module={sector}
+            signalId={row.signal_id}
+            compact
+            className="mt-2"
+          />
+        )}
+      </td>
+      <td className="px-4 py-2">
+        <span
+          className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+            origin === "user"
+              ? "bg-emerald-500/15 text-emerald-300"
+              : origin === "both"
+                ? "bg-violet-500/15 text-violet-200"
+                : "bg-sky-500/15 text-sky-300"
+          }`}
+        >
+          {originLabel(origin)}
+        </span>
       </td>
       <td className="px-4 py-2">
         {editing ? (
@@ -737,15 +847,9 @@ function OutcomeRow({
             <option value="pending">Pending</option>
           </select>
         ) : (
-          <span className="capitalize">
+          <span className={`capitalize ${isPending ? "text-sky-300" : ""}`}>
             {row.outcome}
-            {row.resolution_source === "auto_sports" && (
-              <span className="ml-1 text-xs text-muted">(auto)</span>
-            )}
-            {String(row.resolution_source ?? "").startsWith("auto_") &&
-              row.resolution_source !== "auto_sports" && (
-                <span className="ml-1 text-xs text-muted">(auto)</span>
-              )}
+            {autoGraded && <span className="ml-1 text-xs text-muted">(auto)</span>}
             {(row.resolution_source === "manual" || row.resolution_source === "manual_edit") && (
               <span className="ml-1 text-xs text-muted">(you)</span>
             )}

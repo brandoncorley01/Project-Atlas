@@ -21,6 +21,22 @@ function isUuid(signalId: string): boolean {
 }
 
 function formatRow(row: Record<string, unknown>): PerformanceEntry {
+  const snap =
+    row.scoring_snapshot && typeof row.scoring_snapshot === "object"
+      ? (row.scoring_snapshot as Record<string, unknown>)
+      : {};
+  const stamped = snap.pick_origin;
+  let pick_origin: "atlas" | "user" | "both" = "atlas";
+  if (stamped === "atlas" || stamped === "user" || stamped === "both") {
+    pick_origin = stamped;
+  } else if (snap.user_tracked || snap.watchlist_item_id) {
+    pick_origin = snap.atlas_tracked ? "both" : "user";
+  } else {
+    const src = String(row.resolution_source ?? "");
+    if (src === "watchlist" || src === "manual" || src === "manual_edit") {
+      pick_origin = "user";
+    }
+  }
   return {
     id: String(row.id),
     module: String(row.module),
@@ -33,6 +49,8 @@ function formatRow(row: Record<string, unknown>): PerformanceEntry {
     resolution_source:
       typeof row.resolution_source === "string" ? row.resolution_source : null,
     signal_label: typeof row.signal_label === "string" ? row.signal_label : null,
+    pick_origin,
+    graded_by: typeof snap.graded_by === "string" ? snap.graded_by : null,
   };
 }
 
@@ -148,7 +166,7 @@ export async function fetchPerformanceHistoryDirect(
   const { data, error } = await supabase
     .from("signal_performance")
     .select(
-      "id, module, signal_id, outcome, return_pct, hold_duration_hours, logged_at, resolution_source, signal_label",
+      "id, module, signal_id, outcome, return_pct, hold_duration_hours, logged_at, resolution_source, signal_label, scoring_snapshot",
     )
     .eq("user_id", userId)
     .order("logged_at", { ascending: false })
@@ -169,7 +187,7 @@ export async function getOutcomeDirect(
   const { data, error } = await supabase
     .from("signal_performance")
     .select(
-      "id, module, signal_id, outcome, return_pct, hold_duration_hours, logged_at, resolution_source, signal_label",
+      "id, module, signal_id, outcome, return_pct, hold_duration_hours, logged_at, resolution_source, signal_label, scoring_snapshot",
     )
     .eq("user_id", userId)
     .eq("module", module)
@@ -204,14 +222,45 @@ export async function logOutcomeDirect(params: {
     params.outcome === "pending" &&
     ["win", "loss", "scratch"].includes(existing.outcome)
   ) {
+    // Don't downgrade graded picks — but still stamp user origin if watchlist sync.
+    if (params.resolutionSource === "watchlist") {
+      const { supabase: sb } = await getSession();
+      const snap = {
+        pick_origin: "user",
+        user_tracked: true,
+        ...(params.signalSnapshot ?? {}),
+      };
+      await sb
+        .from("signal_performance")
+        .update({
+          resolution_source: "watchlist",
+          scoring_snapshot: snap,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", existing.id);
+      return { ...existing, resolution_source: "watchlist", pick_origin: "user" };
+    }
     return existing;
   }
-  if (existing && params.outcome === "pending" && existing.outcome === "pending") {
+  if (
+    existing &&
+    params.outcome === "pending" &&
+    existing.outcome === "pending" &&
+    params.resolutionSource !== "watchlist"
+  ) {
     return existing;
   }
 
   const now = new Date().toISOString();
-  const snap = params.signalSnapshot ?? {};
+  const snap = { ...(params.signalSnapshot ?? {}) };
+  const src = params.resolutionSource ?? "manual";
+  if (src === "watchlist" || src === "manual" || src === "manual_edit") {
+    snap.pick_origin = snap.pick_origin === "atlas" || snap.pick_origin === "both" ? "both" : "user";
+    snap.user_tracked = true;
+  } else if (src === "auto_scan" || String(src).startsWith("auto_")) {
+    snap.pick_origin = snap.pick_origin === "user" || snap.pick_origin === "both" ? "both" : "atlas";
+    snap.atlas_tracked = true;
+  }
   const row: Record<string, unknown> = {
     user_id: userId,
     module: params.module,
@@ -220,7 +269,7 @@ export async function logOutcomeDirect(params: {
     return_pct: params.returnPct ?? null,
     logged_at: now,
     updated_at: now,
-    resolution_source: params.resolutionSource ?? "manual",
+    resolution_source: src,
     resolved_at: params.outcome !== "pending" ? now : null,
     signal_label: signalLabel(params.module, snap),
     scoring_snapshot: snap.scoring_snapshot ?? snap,
@@ -472,6 +521,23 @@ export async function syncWatchlistDirect(): Promise<{
 
     const existing = await getOutcomeDirect(tracking.module, tracking.signalId);
     if (existing) {
+      // Re-stamp as user pick so watchlist saves show under Your picks.
+      try {
+        await logOutcomeDirect({
+          module: tracking.module,
+          signalId: tracking.signalId,
+          outcome: existing.outcome === "pending" ? "pending" : existing.outcome,
+          returnPct: existing.return_pct,
+          resolutionSource: "watchlist",
+          signalSnapshot: {
+            ...(tracking.signalSnapshot ?? {}),
+            pick_origin: "user",
+            user_tracked: true,
+          },
+        });
+      } catch {
+        /* keep already-tracked count even if stamp fails */
+      }
       alreadyTracked += 1;
       continue;
     }

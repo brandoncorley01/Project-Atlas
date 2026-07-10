@@ -131,7 +131,7 @@ class SignalRegistryService:
                     signal_id=sid,
                     outcome="pending",
                     resolution_source=TRACKING_SOURCE,
-                    signal_snapshot=row,
+                    signal_snapshot={**row, "pick_origin": "atlas", "atlas_tracked": True},
                 )
                 registered += 1
                 tracked.add((PARLAY_MODULE, sid))
@@ -273,7 +273,7 @@ class SignalRegistryService:
             signal_id=signal_id,
             outcome="pending",
             resolution_source=TRACKING_SOURCE,
-            signal_snapshot=row,
+            signal_snapshot={**(row if isinstance(row, dict) else {}), "pick_origin": "atlas", "atlas_tracked": True},
         )
         return True
 

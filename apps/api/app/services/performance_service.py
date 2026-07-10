@@ -13,10 +13,29 @@ from app.services.calibration_service import SIGNAL_TABLES
 
 VALID_OUTCOMES = frozenset({"win", "loss", "scratch", "pending"})
 VALID_MODULES = frozenset({"options", "stock", "sports", "parlay"})
+USER_ORIGINS = frozenset({"watchlist", "manual", "manual_edit"})
+ATLAS_ORIGINS = frozenset({"auto_scan"})
 _UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
     re.IGNORECASE,
 )
+
+
+def _origin_from_source(resolution_source: str | None) -> str:
+    src = str(resolution_source or "")
+    if src in USER_ORIGINS:
+        return "user"
+    if src == "auto_scan" or src.startswith("auto_"):
+        return "atlas"
+    return "atlas"
+
+
+def _merge_pick_origin(existing: str | None, incoming: str) -> str:
+    if not existing or existing == incoming:
+        return incoming
+    if existing == "both" or incoming == "both":
+        return "both"
+    return "both"
 
 
 class PerformanceService:
@@ -48,6 +67,25 @@ class PerformanceService:
 
         label_source = signal_snapshot or await self._fetch_signal(module, signal_id)
         now = datetime.now(UTC).isoformat()
+
+        # Build snapshot and stamp durable pick_origin (atlas vs user).
+        snap: dict[str, Any] = {}
+        if label_source and isinstance(label_source.get("scoring_snapshot"), dict):
+            snap = dict(label_source["scoring_snapshot"])
+        elif isinstance(signal_snapshot, dict):
+            # Prefer nested scoring_snapshot; otherwise treat whole payload as snapshot.
+            nested = signal_snapshot.get("scoring_snapshot")
+            snap = dict(nested) if isinstance(nested, dict) else dict(signal_snapshot)
+
+        incoming_origin = snap.get("pick_origin")
+        if incoming_origin not in ("atlas", "user", "both"):
+            incoming_origin = _origin_from_source(resolution_source)
+        snap["pick_origin"] = incoming_origin
+        if resolution_source in USER_ORIGINS:
+            snap["user_tracked"] = True
+        if resolution_source == "auto_scan" or str(resolution_source).startswith("auto_"):
+            snap["atlas_tracked"] = True
+
         row: dict[str, Any] = {
             "user_id": self.user_id,
             "module": module,
@@ -62,18 +100,44 @@ class PerformanceService:
             "signal_label": self._signal_label(module, label_source, signal_snapshot),
             "opportunity_score": self._score_from_snapshot(label_source, signal_snapshot, "opportunity_score"),
             "confidence_score": self._score_from_snapshot(label_source, signal_snapshot, "confidence_score"),
-            "scoring_snapshot": (label_source or {}).get("scoring_snapshot")
-            if label_source and label_source.get("scoring_snapshot")
-            else (signal_snapshot or {}),
+            "scoring_snapshot": snap,
         }
 
         existing_raw = await self._fetch_outcome_row(module=module, signal_id=signal_id)
         if existing_raw:
+            existing_snap = existing_raw.get("scoring_snapshot") or {}
+            if isinstance(existing_snap, dict):
+                merged = dict(existing_snap)
+                merged.update({k: v for k, v in snap.items() if v is not None})
+                prev_origin = existing_snap.get("pick_origin") or _origin_from_source(
+                    existing_raw.get("resolution_source")
+                )
+                merged["pick_origin"] = _merge_pick_origin(str(prev_origin), str(incoming_origin))
+                if existing_snap.get("user_tracked") or snap.get("user_tracked"):
+                    merged["user_tracked"] = True
+                if existing_snap.get("atlas_tracked") or snap.get("atlas_tracked"):
+                    merged["atlas_tracked"] = True
+                row["scoring_snapshot"] = merged
+
+            # Preserve user/atlas origin when auto-grading — don't erase watchlist identity.
+            prev_src = str(existing_raw.get("resolution_source") or "")
+            if resolution_source.startswith("auto_") and resolution_source != "auto_scan":
+                if prev_src in USER_ORIGINS:
+                    # Keep watchlist/manual as origin; grade method lives in snapshot.
+                    row["resolution_source"] = prev_src
+                    row["scoring_snapshot"]["graded_by"] = resolution_source
+                elif prev_src == "auto_scan":
+                    row["resolution_source"] = resolution_source
+
             if not row["signal_label"] and existing_raw.get("signal_label"):
                 row["signal_label"] = existing_raw["signal_label"]
-            if not row["scoring_snapshot"] and existing_raw.get("scoring_snapshot"):
-                row["scoring_snapshot"] = existing_raw["scoring_snapshot"]
+            if outcome == "pending" and existing_raw.get("outcome") in ("win", "loss", "scratch"):
+                # Never downgrade a graded pick back to pending.
+                return self._format_entry(existing_raw)
+
             update_values = {k: v for k, v in row.items() if k not in ("user_id", "module", "signal_id")}
+            # Don't clobber logged_at on updates
+            update_values.pop("logged_at", None)
             saved = await self.db.update(
                 "signal_performance",
                 {"id": f"eq.{existing_raw['id']}", "user_id": f"eq.{self.user_id}"},
@@ -103,6 +167,7 @@ class PerformanceService:
 
         if existing_raw:
             update_values = {k: v for k, v in row.items() if k not in ("user_id", "module", "signal_id")}
+            update_values.pop("logged_at", None)
             saved = await self.db.update(
                 "signal_performance",
                 {"id": f"eq.{existing_raw['id']}", "user_id": f"eq.{self.user_id}"},
@@ -165,10 +230,22 @@ class PerformanceService:
         if not resolved:
             return None
         module, signal_id, snapshot = resolved
+        snapshot = dict(snapshot or {})
+        snapshot["pick_origin"] = "user"
+        snapshot["user_tracked"] = True
+        snapshot["watchlist_item_id"] = snapshot.get("watchlist_item_id") or item.get("id")
 
         existing = await self.get_outcome(module=module, signal_id=signal_id)
         if existing:
-            return existing
+            # Promote Atlas-only rows to also count as user picks when saved.
+            return await self.log_outcome(
+                module=module,
+                signal_id=signal_id,
+                outcome=str(existing.get("outcome") or "pending"),
+                return_pct=existing.get("return_pct"),
+                resolution_source="watchlist",
+                signal_snapshot=snapshot,
+            )
 
         return await self.log_outcome(
             module=module,
@@ -303,7 +380,7 @@ class PerformanceService:
             "signal_performance",
             filters=filters,
             order="logged_at.desc",
-            limit=500,
+            limit=1000,
         )
         summary = self._compute_summary(rows, days=days, module=module)
         from app.services.calibration_service import CalibrationService
@@ -433,10 +510,21 @@ class PerformanceService:
             [
                 r
                 for r in rows
-                if str(r.get("resolution_source") or "").startswith("auto_")
+                if (
+                    str(r.get("resolution_source") or "").startswith("auto_")
+                    or (isinstance(r.get("scoring_snapshot"), dict) and r["scoring_snapshot"].get("graded_by"))
+                )
                 and r.get("outcome") in ("win", "loss", "scratch")
             ]
         )
+
+        atlas_count = user_count = 0
+        for r in rows:
+            origin = self._pick_origin(r)
+            if origin in ("atlas", "both"):
+                atlas_count += 1
+            if origin in ("user", "both"):
+                user_count += 1
 
         return {
             "days": days,
@@ -451,11 +539,27 @@ class PerformanceService:
             "avg_loss_pct": round(sum(loss_returns) / len(loss_returns), 2) if loss_returns else None,
             "avg_hold_hours": round(sum(hold_hours) / len(hold_hours), 1) if hold_hours else None,
             "auto_resolved": auto_resolved,
+            "atlas_picks": atlas_count,
+            "user_picks": user_count,
             "by_module": by_module,
         }
 
     @staticmethod
+    def _pick_origin(row: dict[str, Any]) -> str:
+        snap = row.get("scoring_snapshot") if isinstance(row.get("scoring_snapshot"), dict) else {}
+        origin = snap.get("pick_origin")
+        if origin in ("atlas", "user", "both"):
+            return str(origin)
+        if snap.get("user_tracked") and snap.get("atlas_tracked"):
+            return "both"
+        if snap.get("user_tracked") or snap.get("watchlist_item_id"):
+            return "user"
+        return _origin_from_source(row.get("resolution_source"))
+
+    @staticmethod
     def _format_entry(row: dict[str, Any]) -> dict[str, Any]:
+        snap = row.get("scoring_snapshot") if isinstance(row.get("scoring_snapshot"), dict) else {}
+        origin = PerformanceService._pick_origin(row)
         return {
             "id": row["id"],
             "module": row["module"],
@@ -469,4 +573,6 @@ class PerformanceService:
             "signal_label": row.get("signal_label"),
             "opportunity_score": row.get("opportunity_score"),
             "confidence_score": row.get("confidence_score"),
+            "pick_origin": origin,
+            "graded_by": snap.get("graded_by"),
         }

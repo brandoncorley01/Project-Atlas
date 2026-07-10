@@ -24,7 +24,7 @@ export default async function PerformancePage() {
       try {
         const [sumData, histData] = await Promise.all([
           apiFetch<PerformanceSummary>("/performance/summary?days=30", token),
-          apiFetch<HistoryResponse>("/performance/history?limit=200", token),
+          apiFetch<HistoryResponse>("/performance/history?limit=1000", token),
         ]);
         summary = sumData;
         history = histData.items;
@@ -38,7 +38,7 @@ export default async function PerformancePage() {
     <>
       <PageHeader
         title="Performance & learning"
-        description="Atlas tracks your results and tightens pick quality over time. Log wins and losses on any pick card — sports auto-grade when games finish."
+        description="Atlas auto-tracks every scanned pick and every watchlist save. Atlas picks and your picks are tracked separately — both auto-grade when events settle."
       />
       <PerformanceView initialSummary={summary} initialHistory={history} />
     </>
