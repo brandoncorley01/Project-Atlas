@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiRequestHeaders, getApiUrl, usesBffProxy } from "@/lib/api-url";
+import { buildClientCoachInsight, type CoachInsight } from "@/lib/performance-coach";
 
 export interface PerformanceEntry {
   id: string;
@@ -43,21 +44,6 @@ interface PerformanceViewProps {
   initialHistory: PerformanceEntry[];
 }
 
-interface CoachInsight {
-  narrative?: string;
-  focus_areas?: string[];
-  by_module?: Record<
-    string,
-    {
-      narrative?: string;
-      win_rate?: number | null;
-      total_signals?: number;
-      pending?: number;
-    }
-  >;
-  source?: string;
-}
-
 const SECTORS = [
   { id: "sports", label: "Sports", canAutoGrade: true },
   { id: "stock", label: "Stocks", canAutoGrade: true },
@@ -76,6 +62,7 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
   const [coachInsight, setCoachInsight] = useState<CoachInsight | null>(null);
   const [coachLoading, setCoachLoading] = useState(true);
   const [coachError, setCoachError] = useState<string | null>(null);
+  const didAutoBackfill = useRef(false);
 
   async function getToken() {
     if (usesBffProxy()) return undefined;
@@ -107,45 +94,102 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
     }
   }, []);
 
-  const loadCoachInsight = useCallback(async (refresh = false) => {
-    setCoachLoading(true);
-    setCoachError(null);
-    const token = await getToken();
-    try {
-      const params = new URLSearchParams({ days: "30" });
-      if (refresh) params.set("refresh", "true");
-      const res = await fetch(`${getApiUrl()}/ai/coach-insight?${params}`, {
-        headers: apiRequestHeaders(token),
-        credentials: usesBffProxy() ? "include" : "same-origin",
-      });
-      const body = await res.json().catch(() => ({}));
-      if (res.ok) {
-        setCoachInsight(body);
-      } else {
-        const detail =
-          typeof body.detail === "string"
-            ? body.detail
-            : "Could not load coach insight — try again in a moment.";
-        setCoachError(detail);
+  const loadCoachInsight = useCallback(
+    async (refresh = false, summarySnapshot?: PerformanceSummary) => {
+      const snapshot = summarySnapshot ?? summary;
+      setCoachInsight(buildClientCoachInsight(snapshot));
+      setCoachError(null);
+      if (refresh) setCoachLoading(true);
+
+      const token = await getToken();
+      try {
+        const params = new URLSearchParams({ days: "30" });
+        if (refresh) params.set("refresh", "true");
+        const res = await fetch(`${getApiUrl()}/ai/coach-insight?${params}`, {
+          headers: apiRequestHeaders(token),
+          credentials: usesBffProxy() ? "include" : "same-origin",
+        });
+        const body = await res.json().catch(() => ({}));
+        if (res.ok && body.narrative) {
+          setCoachInsight(body);
+        } else if (!res.ok) {
+          const detail = typeof body.detail === "string" ? body.detail : null;
+          if (detail && !detail.toLowerCase().includes("not found")) {
+            setCoachError(`Using offline coach — ${detail}`);
+          }
+        }
+      } catch {
+        setCoachError("Using offline coach — API temporarily unavailable.");
       }
-    } catch {
-      setCoachError("Backend not responding — coach insight unavailable.");
-    }
-    setCoachLoading(false);
-  }, []);
+      setCoachLoading(false);
+    },
+    [summary],
+  );
+
+  const runBackfill = useCallback(
+    async (silent = false) => {
+      if (!silent) setLoading(true);
+      if (!silent) setMessage(null);
+      const token = await getToken();
+      try {
+        const res = await fetch(`${getApiUrl()}/ai/backfill-tracking`, {
+          method: "POST",
+          headers: apiRequestHeaders(token),
+          credentials: usesBffProxy() ? "include" : "same-origin",
+        });
+        const body = await res.json().catch(() => ({}));
+        if (res.ok) {
+          const registered = Number(body.registered ?? 0);
+          const byMod = body.by_module as Record<string, { registered?: number }> | undefined;
+          const parts = byMod
+            ? Object.entries(byMod)
+                .filter(([, v]) => (v?.registered ?? 0) > 0)
+                .map(([k, v]) => `${k}: ${v?.registered}`)
+            : [];
+          if (!silent || registered > 0) {
+            setMessage(
+              registered > 0
+                ? `Registered ${registered} pick(s) for tracking${parts.length ? ` (${parts.join(", ")})` : ""}`
+                : "All past picks are already tracked — try Grade on a sector below",
+            );
+          }
+          await refreshSummary();
+          void loadCoachInsight(true);
+        } else if (!silent) {
+          const detail =
+            typeof body.detail === "string" ? body.detail : "Could not register past picks";
+          setMessage(detail);
+        }
+      } catch {
+        if (!silent) setMessage("Backfill failed — backend not responding");
+      }
+      if (!silent) setLoading(false);
+    },
+    [loadCoachInsight, refreshSummary],
+  );
 
   useEffect(() => {
-    void refreshSummary();
+    void refreshSummary().then(() => {
+      void loadCoachInsight(false);
+    });
     function onUpdated() {
       void refreshSummary();
     }
     window.addEventListener("atlas:performance-updated", onUpdated);
     return () => window.removeEventListener("atlas:performance-updated", onUpdated);
-  }, [refreshSummary]);
+  }, [refreshSummary, loadCoachInsight]);
 
   useEffect(() => {
-    void loadCoachInsight(false);
-  }, [loadCoachInsight]);
+    setCoachInsight(buildClientCoachInsight(summary));
+  }, [summary]);
+
+  useEffect(() => {
+    if (didAutoBackfill.current) return;
+    const tracked = (summary.total_signals ?? 0) + (summary.pending ?? 0);
+    if (tracked > 0 || history.length > 0) return;
+    didAutoBackfill.current = true;
+    void runBackfill(true);
+  }, [summary, history.length, runBackfill]);
 
   const historyBySector = useMemo(() => {
     const grouped: Record<SectorId, { graded: PerformanceEntry[]; pending: PerformanceEntry[] }> = {
@@ -263,42 +307,7 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
           </button>
           <button
             type="button"
-            onClick={async () => {
-              setLoading(true);
-              setMessage(null);
-              const token = await getToken();
-              try {
-                const res = await fetch(`${getApiUrl()}/ai/backfill-tracking`, {
-                  method: "POST",
-                  headers: apiRequestHeaders(token),
-                  credentials: usesBffProxy() ? "include" : "same-origin",
-                });
-                const body = await res.json().catch(() => ({}));
-                if (res.ok) {
-                  const registered = Number(body.registered ?? 0);
-                  const byMod = body.by_module as Record<string, { registered?: number }> | undefined;
-                  const parts = byMod
-                    ? Object.entries(byMod)
-                        .filter(([, v]) => (v?.registered ?? 0) > 0)
-                        .map(([k, v]) => `${k}: ${v?.registered}`)
-                    : [];
-                  setMessage(
-                    registered > 0
-                      ? `Registered ${registered} pick(s) for tracking${parts.length ? ` (${parts.join(", ")})` : ""}`
-                      : "All past picks are already tracked — try Grade on a sector below",
-                  );
-                  await refreshSummary();
-                  void loadCoachInsight(true);
-                } else {
-                  const detail =
-                    typeof body.detail === "string" ? body.detail : "Could not register past picks";
-                  setMessage(detail);
-                }
-              } catch {
-                setMessage("Backfill failed — backend not responding");
-              }
-              setLoading(false);
-            }}
+            onClick={() => void runBackfill(false)}
             disabled={loading}
             className="rounded-lg border border-border px-4 py-2 text-sm text-muted hover:bg-surface-hover disabled:opacity-50"
           >
@@ -320,10 +329,9 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
           </p>
           {coachLoading ? (
             <p className="mt-2 text-sm text-muted">Loading your performance insight…</p>
-          ) : coachError ? (
-            <p className="mt-2 text-sm text-danger">{coachError}</p>
           ) : coachInsight?.narrative ? (
             <>
+              {coachError && <p className="mt-2 text-xs text-amber-300/90">{coachError}</p>}
               <p className="mt-2 text-sm leading-relaxed text-foreground/90">{coachInsight.narrative}</p>
               {coachInsight.focus_areas && coachInsight.focus_areas.length > 0 && (
                 <ul className="mt-3 space-y-1 text-sm text-muted">

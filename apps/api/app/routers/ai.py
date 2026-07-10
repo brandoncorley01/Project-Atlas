@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 import logging
+from datetime import UTC, datetime
 
 from app.db.supabase_client import SupabaseClient
 from app.dependencies import get_access_token, get_current_user_id
@@ -79,13 +80,35 @@ async def get_coach_insight(
     user_id: str = Depends(get_current_user_id),
     token: str = Depends(get_access_token),
 ) -> dict:
-    perf = PerformanceService(SupabaseClient(token), user_id)
-    summary = await perf.get_summary(days=days)
-    return await ai_narrative_service.coach_insight(
-        user_id=user_id,
-        summary=summary,
-        refresh=refresh,
-    )
+    summary: dict = {
+        "days": days,
+        "total_signals": 0,
+        "pending": 0,
+        "by_module": {},
+        "learning_notes": [],
+    }
+    try:
+        perf = PerformanceService(SupabaseClient(token), user_id)
+        summary = await perf.get_summary(days=days)
+    except Exception as exc:
+        logger.warning("coach_insight summary failed for %s: %s", user_id, exc)
+
+    try:
+        return await ai_narrative_service.coach_insight(
+            user_id=user_id,
+            summary=summary,
+            refresh=refresh,
+        )
+    except Exception:
+        logger.exception("coach_insight narrative failed for %s", user_id)
+        return {
+            "narrative": ai_narrative_service._template_coach(summary),
+            "focus_areas": ai_narrative_service._coach_focus_areas(summary),
+            "by_module": ai_narrative_service._coach_by_module(summary),
+            "generated_at": datetime.now(UTC).isoformat(),
+            "source": "template",
+            "model": None,
+        }
 
 
 @router.post("/ai/explain")
