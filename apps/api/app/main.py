@@ -12,7 +12,7 @@ from app.routers import ai, alerts, dashboard, engine, health, internal, me, new
 app = FastAPI(
     title="Project Atlas API",
     description="Decision intelligence API for Project Atlas",
-    version="0.1.0",
+    version="0.2.0-one-side",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -84,7 +84,7 @@ app.include_router(internal.router, prefix=API_PREFIX, tags=["internal"])
 async def root() -> dict[str, str]:
     return {
         "name": "Project Atlas API",
-        "version": "0.1.0",
+        "version": "0.2.0-one-side",
         "docs": "/docs",
         "health": f"{API_PREFIX}/health",
     }

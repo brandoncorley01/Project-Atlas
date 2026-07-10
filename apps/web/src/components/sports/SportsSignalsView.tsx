@@ -14,6 +14,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { ListSkeleton } from "@/components/ui/Skeleton";
 import type { SportsCategoryMeta } from "@/lib/sports-categories";
 import {
+  dedupeOneSidePerMarket,
   filterBySport,
   filterByWindow,
   filterSports,
@@ -35,7 +36,7 @@ export function SportsSignalsView({
   initialCategories = [],
 }: SportsSignalsViewProps) {
   const router = useRouter();
-  const [items, setItems] = useState(initialItems);
+  const [items, setItems] = useState(() => dedupeOneSidePerMarket(initialItems));
   const [categories, setCategories] = useState(initialCategories);
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [activeSport, setActiveSport] = useState<string | null>(null);
@@ -69,7 +70,8 @@ export function SportsSignalsView({
   }
 
   const displayedItems = useMemo(() => {
-    let list = filterByWindow(items, window);
+    let list = dedupeOneSidePerMarket(items);
+    list = filterByWindow(list, window);
     list = filterBySport(list, activeSport);
     list = filterSports(list, filter);
     return sortSports(list, sort);
@@ -98,7 +100,7 @@ export function SportsSignalsView({
       });
       if (res.ok) {
         const data = await res.json();
-        setItems(data.items ?? []);
+        setItems(dedupeOneSidePerMarket(data.items ?? []));
       }
     },
     [window],
@@ -115,7 +117,7 @@ export function SportsSignalsView({
     });
     if (res.ok) {
       const data = await res.json();
-      setItems(data.items ?? []);
+      setItems(dedupeOneSidePerMarket(data.items ?? []));
     }
   }
 

@@ -10,7 +10,7 @@ router = APIRouter()
 async def health_check() -> HealthResponse:
     return HealthResponse(
         status="ok",
-        version="0.1.0",
+        version="0.2.0-one-side",
         database="not_connected",
         last_jobs=LAST_JOBS,
     )

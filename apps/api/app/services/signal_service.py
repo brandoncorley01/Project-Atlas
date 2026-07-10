@@ -23,6 +23,7 @@ from app.services.sports_ranking import (
     MONTH_HOURS,
     NEAR_TERM_HOURS,
     WEEK_HOURS,
+    dedupe_one_side_per_market,
     filter_near_term,
     is_futures_row,
     is_within_horizon,
@@ -219,6 +220,7 @@ class SignalService:
         rows = [r for r in rows if _sports_window_match(r, window)]
         if category:
             rows = filter_by_category(rows, category)
+        rows = dedupe_one_side_per_market(rows)
         rows = sort_for_display(rows)
         return rows[offset : offset + limit]
 
@@ -245,7 +247,8 @@ class SignalService:
             order="opportunity_score.desc",
             limit=limit,
         )
-        return [r for r in rows if is_sports_listable(r)]
+        rows = [r for r in rows if is_sports_listable(r)]
+        return dedupe_one_side_per_market(rows)
 
     async def sports_category_catalog(self) -> list[dict]:
         pool = await self.list_all_sports()

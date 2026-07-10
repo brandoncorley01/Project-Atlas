@@ -103,6 +103,33 @@ def sort_for_display(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     )
 
 
+def market_family_key(row: dict[str, Any]) -> str:
+    """One Atlas decision per event + bet type (never both sides of ML/spread/total)."""
+    snap = row.get("scoring_snapshot") or {}
+    lm = row.get("line_movement") or {}
+    event_id = snap.get("event_id") or lm.get("event_id") or row.get("event_name") or row.get("id") or ""
+    bet_type = str(row.get("bet_type") or "moneyline").lower()
+    return f"{event_id}|{bet_type}"
+
+
+def dedupe_one_side_per_market(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep the strongest row per event+bet_type; drop contradicting alternate sides."""
+    if len(rows) <= 1:
+        return rows
+    best_by_key: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for row in rows:
+        key = market_family_key(row)
+        prev = best_by_key.get(key)
+        if prev is None:
+            best_by_key[key] = row
+            order.append(key)
+            continue
+        if composite_score(row) > composite_score(prev):
+            best_by_key[key] = row
+    return [best_by_key[k] for k in order if k in best_by_key]
+
+
 def sort_for_parlay_pool(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     near = [r for r in rows if is_near_term(r)]
     pool = near if len(near) >= 2 else [r for r in rows if is_within_horizon(r) and not is_futures_row(r)]

@@ -141,3 +141,34 @@ export function filterBySport(items: SportsSignal[], sportKey: string | null): S
     return itemNorm.includes(norm) || norm.includes(itemNorm);
   });
 }
+
+function marketFamilyKey(row: SportsSignal): string {
+  const snap = (row as SportsSignal & { scoring_snapshot?: { event_id?: string } }).scoring_snapshot;
+  const eventId =
+    snap?.event_id ||
+    (row.line_movement as { event_id?: string } | undefined)?.event_id ||
+    row.event_name ||
+    row.id;
+  const betType = (row.bet_type || "moneyline").toLowerCase();
+  return `${eventId}|${betType}`;
+}
+
+/** Drop alternate sides of the same event+market so the board never shows both ML/spread/total sides. */
+export function dedupeOneSidePerMarket(items: SportsSignal[]): SportsSignal[] {
+  if (items.length <= 1) return items;
+  const best = new Map<string, SportsSignal>();
+  const order: string[] = [];
+  for (const row of items) {
+    const key = marketFamilyKey(row);
+    const prev = best.get(key);
+    if (!prev) {
+      best.set(key, row);
+      order.push(key);
+      continue;
+    }
+    if (compositeRank(row) > compositeRank(prev)) {
+      best.set(key, row);
+    }
+  }
+  return order.map((k) => best.get(k)!).filter(Boolean);
+}

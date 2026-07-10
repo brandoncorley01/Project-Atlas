@@ -43,10 +43,10 @@ export default async function SportsPage() {
         title="Sports Betting"
         badge={
           <span className="rounded-full bg-violet-600 px-2.5 py-0.5 text-xs font-bold text-white">
-            24/7 GLOBAL
+            ONE SIDE / MARKET
           </span>
         }
-        description="Your scan results stay on this page until the next successful scan — rescore uses 0 credits when cache is warm; Fetch live odds spends API credits."
+        description="One Atlas decision per market (no both-sides). Scan results stay until the next successful scan — Rescore is free when cache is warm; Fetch live odds spends API credits."
       />
       <SportsSignalsView initialItems={items} initialCategories={categories} />
     </>

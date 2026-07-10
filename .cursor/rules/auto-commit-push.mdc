@@ -1,0 +1,16 @@
+---
+description: Automatically commit and push completed work to origin
+alwaysApply: true
+---
+
+# Auto commit and push
+
+After finishing a coherent unit of work (feature, fix, or config change) that the user asked for:
+
+1. **Commit** the relevant changes without waiting to be asked.
+2. **Push** to the current branch’s remote (`origin`) immediately after a successful commit.
+3. Follow the repo’s existing commit-message style (short why-focused subject).
+4. Do **not** commit secrets (`.env`, credentials, API keys) or noisy local caches (e.g. `apps/api/.scores_cache.json`) unless the user explicitly asks.
+5. Do **not** use `--force` push, amend pushed commits, skip hooks, or change git config.
+6. If commit or push fails, fix the issue and retry; report the failure clearly if it still cannot complete.
+7. After push, briefly tell the user what was committed and that it was pushed (include the commit subject).

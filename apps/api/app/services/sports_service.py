@@ -15,8 +15,10 @@ from app.providers.sports.team_stats import build_stats_index, lookup_match_stat
 from app.services.freshness import filter_upcoming_events, hours_until_event, is_sports_actionable
 from app.services.sports_ranking import (
     composite_score,
+    dedupe_one_side_per_market,
     is_near_term,
     is_within_horizon,
+    market_family_key,
     sort_for_display,
     timing_tier,
 )
@@ -84,22 +86,16 @@ def _select_diverse_setups(setups: list[dict[str, Any]], *, limit: int) -> list[
     selected: list[dict[str, Any]] = []
     seen: set[str] = set()
 
-    def _market_key(row: dict[str, Any]) -> str:
-        snap = row.get("scoring_snapshot") or {}
-        event_id = snap.get("event_id") or row.get("event_name") or ""
-        bet_type = row.get("bet_type") or "moneyline"
-        return f"{event_id}|{bet_type}"
-
     for sport in sorted(by_sport.keys()):
         for row in by_sport[sport][:per_sport]:
-            k = _market_key(row)
+            k = market_family_key(row)
             if k not in seen:
                 selected.append(row)
                 seen.add(k)
 
     if len(selected) < limit:
         for row in sorted(pool, key=composite_score, reverse=True):
-            k = _market_key(row)
+            k = market_family_key(row)
             if k in seen:
                 continue
             selected.append(row)
@@ -107,13 +103,41 @@ def _select_diverse_setups(setups: list[dict[str, Any]], *, limit: int) -> list[
             if len(selected) >= limit:
                 break
 
-    return sort_for_display(selected)[:limit]
+    return sort_for_display(dedupe_one_side_per_market(selected))[:limit]
 
 
 class SportsRefreshService:
     def __init__(self, db: SupabaseClient, user_id: str) -> None:
         self.db = db
         self.user_id = user_id
+
+    async def _purge_contradicting_sides(self) -> int:
+        """Expire alternate sides still sitting in active picks from older scans."""
+        rows = await self.db.select(
+            "sports_signals",
+            filters={"user_id": f"eq.{self.user_id}", "status": "eq.active"},
+            order="opportunity_score.desc",
+            limit=300,
+        )
+        if len(rows) <= 1:
+            return 0
+        keep_ids = {str(r.get("id")) for r in dedupe_one_side_per_market(rows) if r.get("id")}
+        losers = [r for r in rows if str(r.get("id")) not in keep_ids]
+        purged = 0
+        for row in losers:
+            sid = row.get("id")
+            if not sid:
+                continue
+            try:
+                await self.db.update(
+                    "sports_signals",
+                    {"id": f"eq.{sid}", "user_id": f"eq.{self.user_id}"},
+                    {"status": "expired"},
+                )
+                purged += 1
+            except Exception as exc:
+                logger.warning("Failed to expire contradicting sports pick %s: %s", sid, exc)
+        return purged
 
     async def refresh_sports(
         self,
@@ -251,24 +275,33 @@ class SportsRefreshService:
         sports_in_results = sorted({str(r.get("sport")) for r in setups})
 
         if replace and not setups:
+            purged = await self._purge_contradicting_sides()
             existing = await self.db.select(
                 "sports_signals",
                 filters={"user_id": f"eq.{self.user_id}", "status": "eq.active"},
                 limit=1,
             )
-            kept_msg = (
-                "No new +EV edges in this scan — your current picks are unchanged. "
-                "Use Fetch live odds only when you want fresh lines from the API."
-            )
+            if purged:
+                kept_msg = (
+                    f"No new +EV edges this scan — removed {purged} contradicting alternate-side "
+                    "pick(s) so Atlas keeps one decision per market. "
+                    "Use Fetch live odds when you want a fresh slate."
+                )
+            else:
+                kept_msg = (
+                    "No new +EV edges in this scan — your current picks are unchanged. "
+                    "Use Fetch live odds only when you want fresh lines from the API."
+                )
             return {
                 "signals_created": 0,
                 "signals_kept": len(existing) > 0,
+                "contradictions_purged": purged,
                 "events_scanned": len(events),
                 "stats": fetch_stats,
                 "top_opportunity": None,
                 "parlays_invalidated": False,
                 "calibration": calibration,
-                "message": kept_msg if existing else self._result_message(
+                "message": kept_msg if existing or purged else self._result_message(
                     setups, fetch_stats, parlays_invalidated=False, calibration=calibration
                 ),
             }
