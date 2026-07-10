@@ -2,7 +2,7 @@ import { apiRequestHeaders, getApiUrl, usesBffProxy } from "@/lib/api-url";
 import { registerPerformanceForItem } from "@/lib/performance-api";
 import { addWatchlistItemDirect, fetchWatchlistDirect } from "@/lib/watchlist-direct";
 import type { WatchlistItem, WatchlistItemType } from "@/lib/watchlist-types";
-import { effectiveItemType, normalizeWatchlistSymbol } from "@/lib/watchlist-types";
+import { normalizeWatchlistItem, normalizeWatchlistSymbol } from "@/lib/watchlist-types";
 
 export { watchlistItemKey } from "@/lib/watchlist-types";
 
@@ -39,12 +39,13 @@ function toApiPayload(payload: {
 }
 
 function normalizeItem(item: WatchlistItem): WatchlistItem {
-  const kind = effectiveItemType(item);
-  return {
-    ...item,
-    symbol: normalizeWatchlistSymbol(item.symbol, kind === "ticker" ? "ticker" : undefined),
-    item_type: kind,
-  };
+  return normalizeWatchlistItem({
+    id: item.id,
+    item_type: String(item.item_type),
+    symbol: item.symbol,
+    metadata: item.metadata ?? {},
+    created_at: item.created_at,
+  });
 }
 
 function parseApiError(body: unknown, fallback: string): string {

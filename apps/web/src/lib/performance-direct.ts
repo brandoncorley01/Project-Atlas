@@ -1,6 +1,9 @@
 import { createClient } from "@/lib/supabase/client";
 import type { PerformanceEntry, PerformanceSummary } from "@/components/performance/PerformanceView";
 import {
+  effectiveItemType,
+  normalizeWatchlistItem,
+  normalizeWatchlistSymbol,
   performanceTrackingForItem,
   type WatchlistItem,
 } from "@/lib/watchlist-types";
@@ -397,43 +400,78 @@ export async function backfillTrackingDirect(): Promise<{
 export async function syncWatchlistDirect(): Promise<{
   synced: number;
   skipped: number;
+  alreadyTracked: number;
   total: number;
+  trackable: number;
+  errors: string[];
 }> {
   const { supabase, userId, email } = await getSession();
   if (!userId) {
-    return { synced: 0, skipped: 0, total: 0 };
+    return {
+      synced: 0,
+      skipped: 0,
+      alreadyTracked: 0,
+      total: 0,
+      trackable: 0,
+      errors: ["Not signed in"],
+    };
   }
 
   await ensureProfile(supabase, userId, email);
 
-  const { data: watchlistItems } = await supabase
+  const { data: watchlistItems, error: queryError } = await supabase
     .from("watchlist_items")
-    .select("id, item_type, symbol, metadata")
+    .select("id, item_type, symbol, metadata, created_at")
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(300);
 
-  const items = watchlistItems ?? [];
-  let synced = 0;
-  let skipped = 0;
+  if (queryError) {
+    return {
+      synced: 0,
+      skipped: 0,
+      alreadyTracked: 0,
+      total: 0,
+      trackable: 0,
+      errors: [queryError.message],
+    };
+  }
 
-  for (const row of items) {
-    const item: WatchlistItem = {
+  const items = (watchlistItems ?? []).map((row) =>
+    normalizeWatchlistItem({
       id: String(row.id),
       item_type: String(row.item_type),
       symbol: String(row.symbol),
       metadata: (row.metadata as Record<string, unknown>) ?? {},
-    };
+      created_at: typeof row.created_at === "string" ? row.created_at : undefined,
+    }),
+  );
+
+  let synced = 0;
+  let skipped = 0;
+  let alreadyTracked = 0;
+  let trackable = 0;
+  const errors: string[] = [];
+
+  for (const item of items) {
     const tracking = performanceTrackingForItem(item);
-    if (!tracking || !isUuid(tracking.signalId)) {
+    if (!tracking) {
       skipped += 1;
       continue;
     }
+    if (!isUuid(tracking.signalId)) {
+      skipped += 1;
+      errors.push(`${effectiveItemType(item)}: invalid signal id`);
+      continue;
+    }
+    trackable += 1;
+
     const existing = await getOutcomeDirect(tracking.module, tracking.signalId);
     if (existing) {
-      skipped += 1;
+      alreadyTracked += 1;
       continue;
     }
+
     try {
       const saved = await logOutcomeDirect({
         module: tracking.module,
@@ -443,13 +481,19 @@ export async function syncWatchlistDirect(): Promise<{
         signalSnapshot: tracking.signalSnapshot,
       });
       if (saved) synced += 1;
-      else skipped += 1;
-    } catch {
+      else {
+        skipped += 1;
+        errors.push(`${effectiveItemType(item)}: save returned empty`);
+      }
+    } catch (err) {
       skipped += 1;
+      errors.push(
+        `${effectiveItemType(item)}: ${err instanceof Error ? err.message : "save failed"}`,
+      );
     }
   }
 
-  return { synced, skipped, total: items.length };
+  return { synced, skipped, alreadyTracked, total: items.length, trackable, errors };
 }
 
 export async function updateOutcomeDirect(

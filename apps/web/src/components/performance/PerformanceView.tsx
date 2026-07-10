@@ -7,6 +7,7 @@ import {
   backfillPerformanceTracking,
   fetchPerformanceHistory,
   fetchPerformanceSummary,
+  formatWatchlistSyncMessage,
   syncWatchlistToPerformance,
   updatePerformanceOutcome,
 } from "@/lib/performance-api";
@@ -162,21 +163,36 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
 
   const syncWatchlist = useCallback(
     async (silent = true) => {
+      if (!silent) {
+        setLoading(true);
+        setMessage(null);
+      }
       try {
         const result = await syncWatchlistToPerformance();
-        if (result.synced > 0) {
-          await refreshSummary();
-          void loadCoachInsight(true);
-          if (!silent) {
-            const via = result.source === "direct" ? " (direct)" : "";
-            setMessage(
-              `Synced ${result.synced} watchlist pick(s) to performance${via}`,
-            );
-          }
+        await refreshSummary();
+        void loadCoachInsight(true);
+        if (result.source === "direct") {
+          setDataSource("direct");
+        }
+        if (!silent || result.synced > 0) {
+          setMessage(formatWatchlistSyncMessage(result));
         }
         return result;
-      } catch {
-        return { synced: 0, skipped: 0, total: 0, source: "direct" as const };
+      } catch (err) {
+        if (!silent) {
+          setMessage(err instanceof Error ? err.message : "Watchlist sync failed");
+        }
+        return {
+          synced: 0,
+          skipped: 0,
+          alreadyTracked: 0,
+          total: 0,
+          trackable: 0,
+          errors: [],
+          source: "direct" as const,
+        };
+      } finally {
+        if (!silent) setLoading(false);
       }
     },
     [loadCoachInsight, refreshSummary],

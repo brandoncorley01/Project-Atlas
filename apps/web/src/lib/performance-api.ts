@@ -14,6 +14,16 @@ import {
   type WatchlistItem,
 } from "@/lib/watchlist-types";
 
+export interface WatchlistSyncResult {
+  synced: number;
+  skipped: number;
+  alreadyTracked: number;
+  total: number;
+  trackable: number;
+  errors: string[];
+  source: "api" | "direct";
+}
+
 function notifyPerformanceUpdated() {
   if (typeof window !== "undefined") {
     window.dispatchEvent(new Event("atlas:performance-updated"));
@@ -199,35 +209,68 @@ export async function registerPerformanceForItem(
   }
 }
 
-/** Sync all watchlist items into performance tracking. */
-export async function syncWatchlistToPerformance(): Promise<{
-  synced: number;
-  skipped: number;
-  total: number;
-  source: "api" | "direct";
-}> {
+/** Sync all watchlist items into performance tracking (direct Supabase first). */
+export async function syncWatchlistToPerformance(): Promise<WatchlistSyncResult> {
+  const direct = await syncWatchlistDirect();
+
+  if (direct.synced > 0 || direct.errors.length > 0 || direct.total === 0) {
+    if (direct.synced > 0) notifyPerformanceUpdated();
+    return { ...direct, source: "direct" };
+  }
+
   const token = await getToken();
   try {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 20_000);
     const res = await fetch(`${getApiUrl()}/performance/sync-watchlist`, {
       method: "POST",
       ...fetchInit(token),
+      signal: controller.signal,
     });
+    window.clearTimeout(timeout);
     const body = await res.json().catch(() => ({}));
     if (res.ok) {
-      const result = {
-        synced: Number(body.synced ?? 0),
+      const synced = Number(body.synced ?? 0);
+      const result: WatchlistSyncResult = {
+        synced,
         skipped: Number(body.skipped ?? 0),
+        alreadyTracked: Math.max(0, Number(body.total ?? 0) - synced),
         total: Number(body.total ?? 0),
-        source: "api" as const,
+        trackable: Number(body.total ?? 0),
+        errors: [],
+        source: "api",
       };
-      if (result.synced > 0) notifyPerformanceUpdated();
+      if (synced > 0) notifyPerformanceUpdated();
       return result;
     }
   } catch {
     /* fall through */
   }
 
-  const direct = await syncWatchlistDirect();
-  if (direct.synced > 0) notifyPerformanceUpdated();
+  if (direct.alreadyTracked > 0) notifyPerformanceUpdated();
   return { ...direct, source: "direct" };
+}
+
+/** User-facing message for a watchlist sync result. */
+export function formatWatchlistSyncMessage(result: WatchlistSyncResult): string {
+  if (result.errors.length > 0 && result.synced === 0 && result.total === 0) {
+    return result.errors[0] ?? "Could not read watchlist";
+  }
+  if (result.total === 0) {
+    return "No picks on your watchlist yet — save plays from Sports, Stocks, or Options first.";
+  }
+  if (result.trackable === 0) {
+    return "Watchlist has items but none are trackable picks (plain tickers are scan-only).";
+  }
+  if (result.synced > 0) {
+    const via = result.source === "direct" ? " via Supabase" : "";
+    return `Synced ${result.synced} watchlist pick(s) to performance${via}.`;
+  }
+  if (result.alreadyTracked > 0) {
+    return `All ${result.alreadyTracked} trackable watchlist pick(s) are already in performance.`;
+  }
+  if (result.errors.length > 0) {
+    return `Sync failed: ${result.errors[0]}`;
+  }
+  return "Could not sync watchlist picks — try Register all past picks.";
 }

@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/client";
-import { registerPerformanceForItem } from "@/lib/performance-api";
+import { logOutcomeDirect } from "@/lib/performance-direct";
 import type { WatchlistItem, WatchlistItemType } from "@/lib/watchlist-types";
-import { effectiveItemType, normalizeWatchlistSymbol } from "@/lib/watchlist-types";
+import { normalizeWatchlistItem, normalizeWatchlistSymbol, performanceTrackingForItem } from "@/lib/watchlist-types";
 
 /** Map UI types to DB-safe storage types (legacy schema compatibility). */
 function toStoragePayload(payload: {
@@ -36,14 +36,32 @@ function toStoragePayload(payload: {
 }
 
 function formatRow(row: Record<string, unknown>): WatchlistItem {
-  const item: WatchlistItem = {
+  return normalizeWatchlistItem({
     id: String(row.id),
     item_type: String(row.item_type),
     symbol: String(row.symbol),
     metadata: (row.metadata as Record<string, unknown>) ?? {},
     created_at: typeof row.created_at === "string" ? row.created_at : undefined,
-  };
-  return { ...item, item_type: effectiveItemType(item) };
+  });
+}
+
+async function registerItemPerformance(item: WatchlistItem): Promise<void> {
+  const tracking = performanceTrackingForItem(item);
+  if (!tracking) return;
+  try {
+    await logOutcomeDirect({
+      module: tracking.module,
+      signalId: tracking.signalId,
+      outcome: "pending",
+      resolutionSource: "watchlist",
+      signalSnapshot: tracking.signalSnapshot,
+    });
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event("atlas:performance-updated"));
+    }
+  } catch {
+    /* saved to watchlist even if performance row fails */
+  }
 }
 
 async function ensureProfile(
@@ -151,7 +169,7 @@ export async function addWatchlistItemDirect(payload: {
 
       if (error) return formatRow(existing as Record<string, unknown>);
       const item = formatRow((updated ?? existing) as Record<string, unknown>);
-      await registerPerformanceForItem(item);
+      await registerItemPerformance(item);
       return item;
     }
 
@@ -169,7 +187,7 @@ export async function addWatchlistItemDirect(payload: {
 
     if (error || !saved) return null;
     const item = formatRow(saved as Record<string, unknown>);
-    await registerPerformanceForItem(item);
+    await registerItemPerformance(item);
     return item;
   } catch {
     return null;

@@ -91,21 +91,37 @@ export function performanceTrackingForItem(
 
   const snapshot = { ...meta, watchlist_item_id: item.id, symbol: item.symbol };
 
+  const signalFromMetaOrSymbol = (): string | null => {
+    if (typeof meta.signal_id === "string" && meta.signal_id.trim()) {
+      return normalizeWatchlistSymbol(meta.signal_id);
+    }
+    if (UUID_RE.test(item.symbol)) {
+      return normalizeWatchlistSymbol(item.symbol);
+    }
+    return null;
+  };
+
   switch (kind) {
-    case "sport_bet":
-      return typeof meta.signal_id === "string"
-        ? { module: "sports", signalId: normalizeWatchlistSymbol(meta.signal_id), signalSnapshot: snapshot }
+    case "sport_bet": {
+      const signalId = signalFromMetaOrSymbol();
+      return signalId
+        ? { module: "sports", signalId, signalSnapshot: snapshot }
         : null;
-    case "stock_signal":
-      return typeof meta.signal_id === "string"
-        ? { module: "stock", signalId: normalizeWatchlistSymbol(meta.signal_id), signalSnapshot: snapshot }
+    }
+    case "stock_signal": {
+      const signalId = signalFromMetaOrSymbol();
+      return signalId
+        ? { module: "stock", signalId, signalSnapshot: snapshot }
         : null;
-    case "option_signal":
-      return typeof meta.signal_id === "string"
-        ? { module: "options", signalId: normalizeWatchlistSymbol(meta.signal_id), signalSnapshot: snapshot }
+    }
+    case "option_signal": {
+      const signalId = signalFromMetaOrSymbol();
+      return signalId
+        ? { module: "options", signalId, signalSnapshot: snapshot }
         : null;
+    }
     case "parlay":
-      if (typeof meta.parlay_id === "string") {
+      if (typeof meta.parlay_id === "string" && meta.parlay_id.trim()) {
         return {
           module: "parlay",
           signalId: normalizeWatchlistSymbol(meta.parlay_id),
@@ -116,4 +132,27 @@ export function performanceTrackingForItem(
     default:
       return null;
   }
+}
+
+/** Normalize a raw watchlist DB row for UI + performance routing. */
+export function normalizeWatchlistItem(row: {
+  id: string;
+  item_type: string;
+  symbol: string;
+  metadata?: Record<string, unknown> | null;
+  created_at?: string;
+}): WatchlistItem {
+  const raw: WatchlistItem = {
+    id: row.id,
+    item_type: row.item_type,
+    symbol: row.symbol,
+    metadata: row.metadata ?? {},
+    created_at: row.created_at,
+  };
+  const kind = effectiveItemType(raw);
+  return {
+    ...raw,
+    item_type: kind,
+    symbol: normalizeWatchlistSymbol(raw.symbol, kind === "ticker" ? "ticker" : undefined),
+  };
 }
