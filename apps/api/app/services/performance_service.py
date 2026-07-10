@@ -6,6 +6,8 @@ import re
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
+from fastapi import HTTPException
+
 from app.db.supabase_client import SupabaseClient
 from app.services.calibration_service import SIGNAL_TABLES
 
@@ -77,10 +79,43 @@ class PerformanceService:
                 {"id": f"eq.{existing_raw['id']}", "user_id": f"eq.{self.user_id}"},
                 update_values,
             )
-            return self._format_entry(saved[0])
+            if saved:
+                return self._format_entry(saved[0])
+            # Row exists but PATCH returned nothing — fall through to upsert.
 
-        saved = await self.db.insert("signal_performance", [row])
-        return self._format_entry(saved[0])
+        try:
+            saved = await self.db.upsert(
+                "signal_performance",
+                [row],
+                on_conflict="user_id,module,signal_id",
+            )
+            if saved:
+                return self._format_entry(saved[0])
+        except HTTPException as exc:
+            detail = str(exc.detail or "")
+            if "duplicate" not in detail.lower() and "23505" not in detail:
+                raise
+            existing_raw = existing_raw or await self._fetch_outcome_row(
+                module=module, signal_id=signal_id
+            )
+            if not existing_raw:
+                raise
+
+        if existing_raw:
+            update_values = {k: v for k, v in row.items() if k not in ("user_id", "module", "signal_id")}
+            saved = await self.db.update(
+                "signal_performance",
+                {"id": f"eq.{existing_raw['id']}", "user_id": f"eq.{self.user_id}"},
+                update_values,
+            )
+            if saved:
+                return self._format_entry(saved[0])
+            refetched = await self._fetch_outcome_row(module=module, signal_id=signal_id)
+            if refetched:
+                return self._format_entry(refetched)
+            raise ValueError("Outcome save failed — row not found after update")
+
+        raise ValueError("Outcome save failed — could not insert or update")
 
     async def update_outcome(
         self,

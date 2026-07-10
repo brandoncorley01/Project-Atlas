@@ -1,4 +1,5 @@
 import { apiRequestHeaders, getApiUrl, usesBffProxy } from "@/lib/api-url";
+import { registerPerformanceForItem } from "@/lib/performance-api";
 import { addWatchlistItemDirect, fetchWatchlistDirect } from "@/lib/watchlist-direct";
 import type { WatchlistItem, WatchlistItemType } from "@/lib/watchlist-types";
 import { effectiveItemType, normalizeWatchlistSymbol } from "@/lib/watchlist-types";
@@ -125,8 +126,13 @@ export async function addWatchlistItem(payload: {
     });
     const body = await res.json().catch(() => ({}));
     if (res.ok && body.item) {
+      const item = normalizeItem(body.item as WatchlistItem);
+      const apiItem = body.item as WatchlistItem & { tracking?: unknown };
+      if (!apiItem.tracking) {
+        void registerPerformanceForItem(item);
+      }
       notifyWatchlistUpdated();
-      return { ok: true, item: normalizeItem(body.item as WatchlistItem) };
+      return { ok: true, item };
     }
 
     const apiError = parseApiError(body, "Failed to add");

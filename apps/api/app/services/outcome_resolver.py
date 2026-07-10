@@ -89,7 +89,7 @@ class OutcomeResolverService:
             "sports_signals",
             filters={
                 "user_id": f"eq.{self.user_id}",
-                "status": "in.(expired,active)",
+                "status": "in.(expired,active,closed)",
             },
             order="event_start.asc",
             limit=limit * 3,
@@ -184,7 +184,7 @@ class OutcomeResolverService:
             "stock_signals",
             filters={
                 "user_id": f"eq.{self.user_id}",
-                "status": "in.(expired,active)",
+                "status": "in.(expired,active,closed)",
             },
             order="data_as_of.asc",
             limit=limit * 3,

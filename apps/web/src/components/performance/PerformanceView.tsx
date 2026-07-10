@@ -181,11 +181,18 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
       const body = await res.json().catch(() => ({}));
       if (res.ok) {
         const resolved = body.resolved ?? 0;
-        setMessage(
+        const skipped = body.skipped ?? 0;
+        const modResult = body.by_module?.[sectorId] as { resolved?: number; pending?: number } | undefined;
+        let msg =
           resolved > 0
             ? `Auto-graded ${resolved} ${sector?.label.toLowerCase() ?? sectorId} pick(s)`
-            : `No new ${sector?.label.toLowerCase() ?? sectorId} picks to grade yet`,
-        );
+            : skipped > 0
+              ? `No new grades — ${skipped} ${sector?.label.toLowerCase() ?? sectorId} pick(s) still awaiting final data`
+              : `No ${sector?.label.toLowerCase() ?? sectorId} picks ready to grade yet`;
+        if (modResult && resolved === 0 && (modResult.pending ?? 0) > 0) {
+          msg += ` (${modResult.pending} pending in this sector)`;
+        }
+        setMessage(msg);
         await refreshSummary();
         void loadCoachInsight(true);
       } else {
@@ -258,6 +265,7 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
             type="button"
             onClick={async () => {
               setLoading(true);
+              setMessage(null);
               const token = await getToken();
               try {
                 const res = await fetch(`${getApiUrl()}/ai/backfill-tracking`, {
@@ -265,13 +273,29 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
                   headers: apiRequestHeaders(token),
                   credentials: usesBffProxy() ? "include" : "same-origin",
                 });
+                const body = await res.json().catch(() => ({}));
                 if (res.ok) {
-                  setMessage("Historical picks registered for tracking");
+                  const registered = Number(body.registered ?? 0);
+                  const byMod = body.by_module as Record<string, { registered?: number }> | undefined;
+                  const parts = byMod
+                    ? Object.entries(byMod)
+                        .filter(([, v]) => (v?.registered ?? 0) > 0)
+                        .map(([k, v]) => `${k}: ${v?.registered}`)
+                    : [];
+                  setMessage(
+                    registered > 0
+                      ? `Registered ${registered} pick(s) for tracking${parts.length ? ` (${parts.join(", ")})` : ""}`
+                      : "All past picks are already tracked — try Grade on a sector below",
+                  );
                   await refreshSummary();
                   void loadCoachInsight(true);
+                } else {
+                  const detail =
+                    typeof body.detail === "string" ? body.detail : "Could not register past picks";
+                  setMessage(detail);
                 }
               } catch {
-                setMessage("Backfill failed");
+                setMessage("Backfill failed — backend not responding");
               }
               setLoading(false);
             }}

@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 TRACKING_SOURCE = "auto_scan"
 MODULES = ("options", "stock", "sports")
+PARLAY_MODULE = "parlay"
 
 
 class SignalRegistryService:
@@ -47,7 +48,7 @@ class SignalRegistryService:
         return {"registered": registered, "skipped": skipped}
 
     async def backfill_all(self, *, limit_per_module: int = 120) -> dict[str, Any]:
-        """Register any signals missing from signal_performance (historical catch-up)."""
+        """Register signals missing from signal_performance (scans, parlays, watchlist)."""
         totals = {"registered": 0, "skipped": 0, "by_module": {}}
         tracked = await self._tracked_ids()
 
@@ -68,7 +69,7 @@ class SignalRegistryService:
             mod_registered = 0
             mod_skipped = 0
             for row in rows:
-                sid = str(row.get("id") or "")
+                sid = PerformanceService._normalize_signal_id(str(row.get("id") or ""))
                 if not sid or (module, sid) in tracked:
                     mod_skipped += 1
                     continue
@@ -86,7 +87,136 @@ class SignalRegistryService:
             totals["registered"] += mod_registered
             totals["skipped"] += mod_skipped
 
+        parlay_stats = await self._backfill_parlays(tracked, limit=limit_per_module)
+        totals["by_module"][PARLAY_MODULE] = parlay_stats
+        totals["registered"] += parlay_stats["registered"]
+        totals["skipped"] += parlay_stats["skipped"]
+
+        watchlist_stats = await self._backfill_watchlist(tracked, limit=limit_per_module * 2)
+        totals["by_module"]["watchlist"] = watchlist_stats
+        totals["registered"] += watchlist_stats["registered"]
+        totals["skipped"] += watchlist_stats["skipped"]
+
         return totals
+
+    async def _backfill_parlays(
+        self, tracked: set[tuple[str, str]], *, limit: int
+    ) -> dict[str, int]:
+        registered = 0
+        skipped = 0
+        try:
+            rows = await self.db.select(
+                "parlays",
+                filters={"user_id": f"eq.{self.user_id}"},
+                order="created_at.desc",
+                limit=limit,
+            )
+        except Exception as exc:
+            logger.warning("Backfill parlays: %s", exc)
+            return {"registered": 0, "skipped": 0, "error": str(exc)}
+
+        for row in rows:
+            sid = PerformanceService._normalize_signal_id(str(row.get("id") or ""))
+            if not sid or (PARLAY_MODULE, sid) in tracked:
+                skipped += 1
+                continue
+            try:
+                existing = await self.performance.get_outcome(module=PARLAY_MODULE, signal_id=sid)
+                if existing:
+                    skipped += 1
+                    tracked.add((PARLAY_MODULE, sid))
+                    continue
+                await self.performance.log_outcome(
+                    module=PARLAY_MODULE,
+                    signal_id=sid,
+                    outcome="pending",
+                    resolution_source=TRACKING_SOURCE,
+                    signal_snapshot=row,
+                )
+                registered += 1
+                tracked.add((PARLAY_MODULE, sid))
+            except Exception as exc:
+                logger.warning("Backfill parlay %s: %s", sid[:8], exc)
+                skipped += 1
+        return {"registered": registered, "skipped": skipped}
+
+    async def _backfill_watchlist(
+        self, tracked: set[tuple[str, str]], *, limit: int
+    ) -> dict[str, int]:
+        registered = 0
+        skipped = 0
+        try:
+            rows = await self.db.select(
+                "watchlist_items",
+                filters={"user_id": f"eq.{self.user_id}"},
+                order="created_at.desc",
+                limit=limit,
+            )
+        except Exception as exc:
+            logger.warning("Backfill watchlist: %s", exc)
+            return {"registered": 0, "skipped": 0, "error": str(exc)}
+
+        for row in rows:
+            item = {
+                "id": row.get("id"),
+                "item_type": row.get("item_type"),
+                "symbol": row.get("symbol"),
+                "metadata": row.get("metadata") or {},
+            }
+            try:
+                before = await self._tracking_key_for_item(item)
+                if not before:
+                    skipped += 1
+                    continue
+                mod, sid = before
+                if (mod, sid) in tracked:
+                    skipped += 1
+                    continue
+                result = await self.performance.register_from_watchlist(item=item)
+                if result:
+                    registered += 1
+                    tracked.add((mod, sid))
+                else:
+                    skipped += 1
+            except Exception as exc:
+                logger.warning("Backfill watchlist item %s: %s", row.get("id"), exc)
+                skipped += 1
+        return {"registered": registered, "skipped": skipped}
+
+    async def _tracking_key_for_item(self, item: dict[str, Any]) -> tuple[str, str] | None:
+        meta = item.get("metadata") or {}
+        kind = meta.get("watchlist_kind") or item.get("item_type")
+
+        module_map: dict[str, str] = {
+            "sport_bet": "sports",
+            "sport_event": "sports",
+            "stock_signal": "stock",
+            "option_signal": "options",
+            "parlay": PARLAY_MODULE,
+        }
+        module = module_map.get(str(kind))
+        if not module:
+            if meta.get("signal_id") and meta.get("underlying"):
+                module = "options"
+            elif meta.get("signal_id") and meta.get("ticker"):
+                module = "stock"
+            elif meta.get("signal_id") or meta.get("bet_type"):
+                module = "sports"
+            elif meta.get("legs"):
+                module = PARLAY_MODULE
+            else:
+                return None
+
+        if kind == "parlay" or item.get("item_type") == "parlay" or meta.get("legs"):
+            signal_id = str(meta.get("parlay_id") or item.get("id") or "")
+        elif meta.get("signal_id"):
+            signal_id = str(meta["signal_id"])
+        else:
+            signal_id = str(item.get("id") or "")
+
+        if not signal_id:
+            return None
+        return module, PerformanceService._normalize_signal_id(signal_id)
 
     async def tracking_stats(self) -> dict[str, Any]:
         """Counts for auto-tracked vs manually logged picks."""
@@ -134,6 +264,7 @@ class SignalRegistryService:
         }
 
     async def _register_one(self, module: str, signal_id: str, row: dict[str, Any]) -> bool:
+        signal_id = PerformanceService._normalize_signal_id(signal_id)
         existing = await self.performance.get_outcome(module=module, signal_id=signal_id)
         if existing:
             return False
@@ -153,7 +284,10 @@ class SignalRegistryService:
             limit=2000,
         )
         return {
-            (str(r.get("module") or ""), str(r.get("signal_id") or ""))
+            (
+                str(r.get("module") or ""),
+                PerformanceService._normalize_signal_id(str(r.get("signal_id") or "")),
+            )
             for r in rows
             if r.get("module") and r.get("signal_id")
         }

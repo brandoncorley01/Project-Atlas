@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/client";
+import { registerPerformanceForItem } from "@/lib/performance-api";
 import type { WatchlistItem, WatchlistItemType } from "@/lib/watchlist-types";
 import { effectiveItemType, normalizeWatchlistSymbol } from "@/lib/watchlist-types";
 
@@ -135,7 +136,9 @@ export async function addWatchlistItemDirect(payload: {
         .single();
 
       if (error) return formatRow(existing as Record<string, unknown>);
-      return formatRow((updated ?? existing) as Record<string, unknown>);
+      const item = formatRow((updated ?? existing) as Record<string, unknown>);
+      void registerPerformanceForItem(item);
+      return item;
     }
 
     const { data: saved, error } = await supabase
@@ -151,7 +154,9 @@ export async function addWatchlistItemDirect(payload: {
       .single();
 
     if (error || !saved) return null;
-    return formatRow(saved as Record<string, unknown>);
+    const item = formatRow(saved as Record<string, unknown>);
+    void registerPerformanceForItem(item);
+    return item;
   } catch {
     return null;
   }
