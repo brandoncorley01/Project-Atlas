@@ -63,7 +63,7 @@ def _odds_error_message(exc: OddsApiError | str) -> str:
 
 
 def _select_diverse_setups(setups: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
-    """Prefer near-term plays; ensure each sport with edges is represented."""
+    """Prefer near-term plays; one Atlas decision per event+market; diversify sports."""
     if not setups:
         return []
 
@@ -84,19 +84,22 @@ def _select_diverse_setups(setups: list[dict[str, Any]], *, limit: int) -> list[
     selected: list[dict[str, Any]] = []
     seen: set[str] = set()
 
-    def _key(row: dict[str, Any]) -> str:
-        return f"{row.get('sport')}|{row.get('event_name')}|{row.get('selection')}"
+    def _market_key(row: dict[str, Any]) -> str:
+        snap = row.get("scoring_snapshot") or {}
+        event_id = snap.get("event_id") or row.get("event_name") or ""
+        bet_type = row.get("bet_type") or "moneyline"
+        return f"{event_id}|{bet_type}"
 
     for sport in sorted(by_sport.keys()):
         for row in by_sport[sport][:per_sport]:
-            k = _key(row)
+            k = _market_key(row)
             if k not in seen:
                 selected.append(row)
                 seen.add(k)
 
     if len(selected) < limit:
         for row in sorted(pool, key=composite_score, reverse=True):
-            k = _key(row)
+            k = _market_key(row)
             if k in seen:
                 continue
             selected.append(row)

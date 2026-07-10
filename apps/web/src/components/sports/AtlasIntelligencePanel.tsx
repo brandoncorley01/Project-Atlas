@@ -219,7 +219,43 @@ export function AtlasIntelligencePanel({ signalId }: { signalId: string }) {
         </div>
       )}
 
-      {(data.analyst_cards?.length ?? 0) > 0 && (
+      {(data.supporting_analysts?.length ?? 0) > 0 ? (
+        <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4">
+          <p className="text-xs font-bold uppercase tracking-wider text-emerald-300">
+            Analysts Backing Atlas
+          </p>
+          <p className="mt-1 text-xs text-muted">
+            Only sources that support Atlas on {rec?.selection ?? "this pick"}
+          </p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            {data.supporting_analysts!.slice(0, 6).map((card, idx) => (
+              <article
+                key={`${card.source}-support-${idx}`}
+                className="rounded-lg border border-border/50 bg-surface/60 p-3 text-sm"
+              >
+                <p className="text-xs text-muted">
+                  {card.source}
+                  {card.analyst ? ` · ${card.analyst}` : ""}
+                </p>
+                {card.pick && <p className="mt-1 font-medium text-emerald-200">{card.pick}</p>}
+                {(card.title || card.reasoning?.[0]) && (
+                  <p className="mt-1 text-muted line-clamp-3">{card.title || card.reasoning?.[0]}</p>
+                )}
+                {card.url && (
+                  <a
+                    href={card.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-2 inline-block text-xs text-accent hover:underline"
+                  >
+                    View source
+                  </a>
+                )}
+              </article>
+            ))}
+          </div>
+        </div>
+      ) : (data.analyst_cards?.length ?? 0) > 0 ? (
         <div className="rounded-xl border border-border/60 bg-background/40 p-4">
           <p className="text-xs font-bold uppercase tracking-wider text-muted">
             What Analysts Are Saying
@@ -252,7 +288,7 @@ export function AtlasIntelligencePanel({ signalId }: { signalId: string }) {
             ))}
           </div>
         </div>
-      )}
+      ) : null}
 
       {(data.news_updates?.length ?? 0) > 0 && (
         <div className="rounded-xl border border-sky-500/30 bg-sky-500/5 p-4">

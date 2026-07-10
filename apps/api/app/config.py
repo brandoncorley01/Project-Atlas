@@ -45,8 +45,8 @@ class Settings(BaseSettings):
     environment: str = "development"
     default_user_id: str = ""
 
-    # Sports Expert Intelligence Layer (feature-flagged; default off)
-    atlas_expert_intelligence_enabled: bool = False
+    # Sports Expert Intelligence Layer — analyst support under each pick
+    atlas_expert_intelligence_enabled: bool = True
     atlas_intelligence_learning_mode: str = "observe"
     atlas_max_expert_confidence_adjustment: float = 8.0
     atlas_max_news_confidence_adjustment: float = 6.0

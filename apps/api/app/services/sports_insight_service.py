@@ -110,6 +110,9 @@ def _market_context(signal: dict[str, Any], formatted: dict[str, Any]) -> dict[s
         "invalidation": signal.get("invalidation") or formatted.get("invalidation"),
         "suggested_action": signal.get("suggested_action") or formatted.get("suggested_action"),
         "stats_support": snap.get("stats_support") or formatted.get("stats_support"),
+        "rejected_side": snap.get("rejected_side"),
+        "decision_margin": snap.get("decision_margin"),
+        "atlas_decision": snap.get("atlas_decision"),
     }
 
 
@@ -181,10 +184,17 @@ def _build_pick_thesis(
     sport = market.get("sport") or "sports"
 
     parts: list[str] = []
-    parts.append(
-        f"Atlas ranks {selection} ({bet_type}) on {event} ({sport}) because the available "
-        "market and form data line up better than the other side."
-    )
+    rejected = market.get("rejected_side")
+    if rejected:
+        parts.append(
+            f"Atlas ranks {selection} ({bet_type}) on {event} ({sport}) over {rejected} "
+            "after comparing market edge, form/H2H, and opportunity — one best decision for this market."
+        )
+    else:
+        parts.append(
+            f"Atlas ranks {selection} ({bet_type}) on {event} ({sport}) as the best available "
+            "side for this market using price, form, and news context."
+        )
 
     odds = market.get("odds_american")
     ev = market.get("expected_value")
@@ -441,6 +451,13 @@ class SportsInsightService:
         market = context.get("market") or {}
         stats = context.get("stats_comparison") or {}
 
+        if market.get("rejected_side"):
+            margin = market.get("decision_margin")
+            margin_txt = f" (margin {float(margin):.1f})" if margin is not None else ""
+            bullets.insert(
+                0,
+                f"Chose {market.get('selection')} over {market['rejected_side']}{margin_txt}.",
+            )
         if market.get("expected_value") is not None:
             try:
                 bullets.append(f"Expected value {float(market['expected_value']):+.1f}%.")

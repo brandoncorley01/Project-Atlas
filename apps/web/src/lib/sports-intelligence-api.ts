@@ -48,6 +48,21 @@ export interface AtlasIntelligencePayload {
     published_at?: string | null;
     url?: string | null;
     source_type?: string;
+    title?: string | null;
+    supports_atlas?: boolean;
+  }>;
+  supporting_analysts?: Array<{
+    source: string;
+    analyst?: string | null;
+    pick?: string | null;
+    market?: string | null;
+    reasoning?: string[];
+    confidence?: number | null;
+    published_at?: string | null;
+    url?: string | null;
+    source_type?: string;
+    title?: string | null;
+    supports_atlas?: boolean;
   }>;
   news_updates?: Array<{
     title?: string;

@@ -193,22 +193,23 @@ def _build_verdict(
 ) -> str:
     if not consensus_pick:
         return (
-            "Limited analyst coverage for this event. Atlas leans on market model, "
-            "form, and verified headlines only."
+            f"Atlas decision: {model_selection}. Limited analyst coverage — "
+            "lean on market edge, form, and verified headlines."
         )
     if agreement == "agrees":
         return (
-            f"Atlas agrees with the weighted expert lean toward {consensus_pick}. "
-            f"Consensus strength is {strength:.0f}/100 — confirm line value before entry."
+            f"Atlas decision: {model_selection}. Agrees with the weighted expert lean "
+            f"toward {consensus_pick} (strength {strength:.0f}/100). Confirm line value before entry."
         )
     if agreement == "disagrees":
         return (
-            f"Most tracked experts favor {consensus_pick}, but Atlas disagrees based on "
-            f"market edge and model factors. Review both cases before betting."
+            f"Atlas decision: {model_selection}. Most tracked experts favor {consensus_pick}, "
+            f"but Atlas keeps {model_selection} on market edge + model factors — "
+            "review both cases before betting."
         )
     return (
-        f"Expert signals are mixed. Atlas keeps its model selection on {model_selection} "
-        f"with reduced intelligence weight."
+        f"Atlas decision: {model_selection}. Expert signals are mixed; "
+        f"Atlas keeps the model selection with reduced intelligence weight."
     )
 
 

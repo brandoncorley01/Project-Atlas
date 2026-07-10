@@ -10,6 +10,7 @@ import { AddToWatchlistButton } from "@/components/watchlist/AddToWatchlistButto
 import { LogOutcomeButtons } from "@/components/performance/LogOutcomeButtons";
 import { PickPerformanceBadge } from "@/components/performance/PickPerformanceBadge";
 import { AtlasExplainButton } from "@/components/ai/AtlasExplainButton";
+import { AnalystPickSection } from "@/components/sports/AnalystPickSection";
 import { sportBetMetadata } from "@/lib/watchlist-api";
 import { CATEGORY_SLUG_LABELS } from "@/lib/sports-categories";
 import { getSportMeta } from "@/lib/sport-meta";
@@ -112,12 +113,14 @@ export function SportsSignalCard({
   parlaySelected,
   onParlayToggle,
   hideSelection = false,
+  showAnalystPicks = true,
 }: {
   row: SportsSignal;
   rank: number;
   parlaySelected?: boolean;
   onParlayToggle?: (id: string) => void;
   hideSelection?: boolean;
+  showAnalystPicks?: boolean;
 }) {
   const [expanded, setExpanded] = useState(rank === 1);
   const edge = row.line_movement?.edge_pct ?? row.context?.edge_pct;
@@ -256,6 +259,10 @@ export function SportsSignalCard({
 
       {bookOdds.length > 0 && (
         <BookOddsStrip books={bookOdds} preferredBook={preferredBook} compact={!expanded} />
+      )}
+
+      {showAnalystPicks && (
+        <AnalystPickSection signalId={row.id} atlasSelection={row.selection} />
       )}
 
       <div className="mt-4 flex flex-wrap items-center gap-3">

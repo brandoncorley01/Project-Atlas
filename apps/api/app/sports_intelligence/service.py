@@ -254,21 +254,28 @@ class SportsIntelligenceService:
         items: list[dict[str, Any]],
         consensus_row: dict[str, Any] | None,
     ) -> dict[str, Any]:
+        model_sel = str(signal.get("selection") or "")
         analysts = [
             {
-                "source": (i.get("raw_metadata") or {}).get("source_name") or "Source",
+                "source": (i.get("raw_metadata") or {}).get("source_name")
+                or i.get("author_name")
+                or "Source",
                 "analyst": i.get("author_name"),
                 "pick": i.get("predicted_selection"),
                 "market": i.get("predicted_market"),
-                "reasoning": (i.get("key_arguments") or [i.get("summary")])[:2],
+                "reasoning": (i.get("key_arguments") or [i.get("summary") or i.get("title")])[:2],
                 "confidence": i.get("confidence_score"),
                 "published_at": i.get("published_at"),
                 "url": i.get("source_url"),
                 "source_type": i.get("source_type"),
+                "title": i.get("title"),
+                "supports_atlas": _item_supports_atlas(i, model_sel),
             }
             for i in items
             if i.get("status") == "active"
-        ][:10]
+        ][:12]
+
+        supporting_analysts = [a for a in analysts if a.get("supports_atlas")][:6]
 
         news_updates = [
             {
@@ -279,22 +286,16 @@ class SportsIntelligenceService:
                 "type": i.get("source_type"),
             }
             for i in items
-            if i.get("source_type") in ("news_article", "injury_update", "official_team_update")
+            if i.get("source_type")
+            in ("news_article", "injury_update", "official_team_update", "analyst_pick")
             and i.get("status") == "active"
         ][:8]
 
-        model_sel = str(signal.get("selection") or "")
-        agrees = sum(
-            1
-            for i in items
-            if i.get("predicted_selection")
-            and str(i.get("predicted_selection")).lower() in model_sel.lower()
-        )
+        agrees = sum(1 for a in analysts if a.get("supports_atlas"))
         disagrees = sum(
             1
             for i in items
-            if i.get("predicted_selection")
-            and str(i.get("predicted_selection")).lower() not in model_sel.lower()
+            if i.get("predicted_selection") and not _item_supports_atlas(i, model_sel)
         )
 
         generated_at = (consensus_row or {}).get("generated_at") or (consensus_row or {}).get(
@@ -321,7 +322,7 @@ class SportsIntelligenceService:
                 "confidence_label": consensus.confidence_label,
                 "expected_value": signal.get("expected_value"),
                 "risk_score": signal.get("risk_score"),
-                "primary_reasons": consensus.majority_reasoning[:4] or [signal.get("recommendation")],
+                "primary_reasons": _atlas_primary_reasons(signal, consensus),
                 "invalidation": signal.get("invalidation"),
             },
             "expert_consensus": {
@@ -337,9 +338,21 @@ class SportsIntelligenceService:
                 "model_agreement": consensus.model_agreement_status,
             },
             "analyst_cards": analysts,
+            "supporting_analysts": supporting_analysts,
             "news_updates": news_updates,
-            "bull_case": signal.get("bull_case") or (consensus.majority_reasoning[0] if consensus.majority_reasoning else None),
-            "bear_case": signal.get("bear_case") or (consensus.minority_reasoning[0] if consensus.minority_reasoning else None),
+            "bull_case": signal.get("bull_case")
+            or (
+                consensus.majority_reasoning[0]
+                if consensus.majority_reasoning
+                and consensus.model_agreement_status in {"agrees", "lean_agrees"}
+                else (consensus.minority_reasoning[0] if consensus.minority_reasoning else None)
+            ),
+            "bear_case": signal.get("bear_case")
+            or (
+                consensus.majority_reasoning[0]
+                if consensus.majority_reasoning and consensus.model_agreement_status == "disagrees"
+                else (consensus.minority_reasoning[0] if consensus.minority_reasoning else None)
+            ),
             "verdict": consensus.verdict,
             "adjustment": {
                 "expert": adjustment.expert_consensus_adjustment,
@@ -354,6 +367,24 @@ class SportsIntelligenceService:
                 "Verify lines, injuries, and rules before wagering."
             ),
         }
+
+
+def _item_supports_atlas(item: dict[str, Any], model_selection: str) -> bool:
+    """True when the source's predicted side matches Atlas's pick."""
+    if not model_selection:
+        return False
+    if (item.get("raw_metadata") or {}).get("supports_atlas") is True:
+        return True
+    predicted = str(item.get("predicted_selection") or "").strip()
+    if not predicted:
+        return False
+    model = model_selection.lower()
+    pred = predicted.lower()
+    if pred in model or model in pred:
+        return True
+    model_tokens = {t for t in re.split(r"[\s/+-]+", model) if len(t) > 2}
+    pred_tokens = {t for t in re.split(r"[\s/+-]+", pred) if len(t) > 2}
+    return bool(model_tokens & pred_tokens)
 
 
 def _participants(signal: dict[str, Any]) -> tuple[str, str, str | None]:
@@ -381,6 +412,47 @@ def _float(value: Any) -> float | None:
         return float(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _atlas_primary_reasons(signal: dict[str, Any], consensus: Any) -> list[str]:
+    """Reasons that support Atlas's pick — never opposing expert majority when they disagree."""
+    reasons: list[str] = []
+    agreement = str(getattr(consensus, "model_agreement_status", "") or "")
+    if agreement in {"agrees", "lean_agrees"}:
+        reasons.extend(list(getattr(consensus, "majority_reasoning", None) or [])[:3])
+    elif agreement == "disagrees":
+        # Experts favor the other side — lead with Atlas model case, then note the dissent.
+        if signal.get("bull_case"):
+            reasons.append(str(signal["bull_case"])[:240])
+        if signal.get("explanation"):
+            reasons.append(str(signal["explanation"])[:240])
+        minority = list(getattr(consensus, "minority_reasoning", None) or [])[:2]
+        reasons.extend(minority)
+        top = getattr(consensus, "top_consensus_pick", None)
+        if top:
+            reasons.append(
+                f"Tracked experts lean {top}; Atlas still prefers "
+                f"{signal.get('selection')} on market edge + model factors."
+            )
+    else:
+        if signal.get("bull_case"):
+            reasons.append(str(signal["bull_case"])[:240])
+        reasons.extend(list(getattr(consensus, "minority_reasoning", None) or [])[:2])
+        reasons.extend(list(getattr(consensus, "majority_reasoning", None) or [])[:1])
+
+    if signal.get("recommendation") and not reasons:
+        reasons.append(str(signal["recommendation"]))
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    out: list[str] = []
+    for r in reasons:
+        text = str(r or "").strip()
+        if text and text not in seen:
+            seen.add(text)
+            out.append(text)
+        if len(out) >= 4:
+            break
+    return out or [str(signal.get("recommendation") or "Atlas model selection")]
 
 
 def _minority_from_items(items: list[dict[str, Any]], majority: str | None) -> str | None:

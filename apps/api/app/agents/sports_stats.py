@@ -98,21 +98,29 @@ def compute_pick_support(
 
 
 def apply_stats_to_setup(setup: SportsBetSetup, support: float, details: dict[str, Any]) -> None:
-    """Adjust scores and copy using historical context."""
-    if not details or abs(support) < 1:
+    """Adjust scores and copy using historical context — always attach evidence when present."""
+    if not details and abs(support) < 1:
         return
 
     boost = max(-12.0, min(12.0, support * 0.12))
     setup.confidence_score = round(min(90.0, max(20.0, setup.confidence_score + boost * 0.7)), 1)
     setup.opportunity_score = round(min(95.0, max(0.0, setup.opportunity_score + boost * 0.5)), 1)
 
+    # Always persist form evidence so the card/insight can explain support or conflict.
+    if details:
+        setup.scoring_snapshot["stats_support"] = round(support, 1)
+        setup.scoring_snapshot["team_stats"] = details
+
+    # Strongly countering form demotes weak edges off the board.
     if boost <= -8 and setup.opportunity_score < 42:
+        setup.opportunity_score = round(max(0.0, setup.opportunity_score - 6), 1)
+        setup.bear_case = (
+            f"{setup.bear_case} Recent form/H2H leans against this side "
+            f"({details.get('form_note') or details.get('summary') or 'form conflict'})."
+        ).strip()
         return
 
-    setup.scoring_snapshot["stats_support"] = round(support, 1)
-    setup.scoring_snapshot["team_stats"] = details
-
-    form_note = details.get("form_note") or details.get("summary")
+    form_note = (details or {}).get("form_note") or (details or {}).get("summary")
     if not form_note:
         return
 

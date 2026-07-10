@@ -523,9 +523,9 @@ def analyze_event(
     for cand in candidates:
         edge = float(cand["edge"])
         has_fanduel = any(b.get("key") == PREFERRED_BOOK_KEY for b in cand.get("book_odds") or [])
+        # Prefer multi-book confirmation; FanDuel-only still needs a real edge.
         min_books = 1 if has_fanduel else 2
-        effective_min_edge = 0.0 if has_fanduel and cand["book_count"] < 2 else min_edge
-        if edge < effective_min_edge or cand["book_count"] < min_books:
+        if edge < min_edge or cand["book_count"] < min_books:
             continue
 
         bet_type = cand["bet_type"]
@@ -548,8 +548,9 @@ def analyze_event(
         # Longer-dated games need a bit more edge, but stay visible for early value.
         if hours is not None and hours > NEAR_TERM_HOURS:
             opportunity -= min(8.0, (hours - NEAR_TERM_HOURS) * 0.03)
+        # Single-book FanDuel lines get a small haircut — not a free pass to the board.
         if has_fanduel and cand["book_count"] < 2:
-            opportunity = max(opportunity, min_opportunity)
+            opportunity -= 4.0
         if opportunity < min_opportunity:
             continue
 
@@ -657,7 +658,74 @@ def analyze_event(
         )
         apply_stats_to_setup(setups[-1], support, stats_detail)
 
-    return setups
+    # Drop plays that form demotion pushed below the opportunity floor.
+    setups = [s for s in setups if s.opportunity_score >= min_opportunity]
+    return _select_best_per_market(setups)
+
+
+def _setup_decision_score(setup: SportsBetSetup) -> float:
+    """Combined score for choosing one side of a market — edge + form + confidence."""
+    snap = setup.scoring_snapshot or {}
+    edge = float(snap.get("edge_pct") or 0)
+    support = float(snap.get("stats_support") or 0)
+    return (
+        float(setup.opportunity_score)
+        + edge * 0.5
+        + support * 0.15
+        + float(setup.confidence_score) * 0.1
+        - float(setup.risk_score) * 0.05
+    )
+
+
+def _select_best_per_market(setups: list[SportsBetSetup]) -> list[SportsBetSetup]:
+    """Keep one Atlas decision per event + bet type — never both sides of the same market."""
+    if len(setups) <= 1:
+        return setups
+
+    by_family: dict[str, list[SportsBetSetup]] = {}
+    for setup in setups:
+        snap = setup.scoring_snapshot or {}
+        event_id = str(snap.get("event_id") or setup.event_name or "")
+        family = str(setup.bet_type or "moneyline")
+        key = f"{event_id}|{family}"
+        by_family.setdefault(key, []).append(setup)
+
+    winners: list[SportsBetSetup] = []
+    for group in by_family.values():
+        group.sort(key=_setup_decision_score, reverse=True)
+        best = group[0]
+        if len(group) > 1:
+            runner = group[1]
+            best_score = _setup_decision_score(best)
+            runner_score = _setup_decision_score(runner)
+            margin = round(best_score - runner_score, 1)
+            # Require a clear winner — if nearly tied, keep only if best has real edge/support.
+            snap = best.scoring_snapshot
+            edge = float(snap.get("edge_pct") or 0)
+            support = float(snap.get("stats_support") or 0)
+            if margin < 1.5 and edge < 2.0 and support < 10:
+                continue
+            rejected = runner.selection
+            snap["rejected_side"] = rejected
+            snap["decision_margin"] = margin
+            snap["atlas_decision"] = "best_of_market"
+            best.explanation = (
+                f"{best.explanation} Atlas chose {best.selection} over {rejected} "
+                f"(decision margin {margin:.1f}) after comparing edge, form, and opportunity."
+            )
+            best.bull_case = (
+                f"{best.bull_case} Beats the alternate {rejected} on combined market + form score."
+            )
+            if runner.opportunity_score >= best.opportunity_score - 5:
+                best.bear_case = (
+                    f"{best.bear_case} Close call vs {rejected} — recheck if the line moves."
+                )
+        else:
+            best.scoring_snapshot["atlas_decision"] = "sole_qualifier"
+        winners.append(best)
+
+    winners.sort(key=_setup_decision_score, reverse=True)
+    return winners
 
 
 def setup_to_row(user_id: str, setup: SportsBetSetup) -> dict[str, Any]:
