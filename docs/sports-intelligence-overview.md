@@ -10,11 +10,13 @@ Set in `apps/api/.env`:
 ATLAS_EXPERT_INTELLIGENCE_ENABLED=true
 ```
 
-When `false` (default in production):
+When `false`:
 
 - Existing sports scans and picks behave unchanged
 - Intelligence API routes return 404
 - UI panels are hidden
+
+Default is **on** in current code/`render.yaml` so analyst support can show under picks.
 
 ## Architecture
 

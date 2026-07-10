@@ -31,6 +31,12 @@ services:
         sync: false
       - key: ODDS_API_KEY
         sync: false
+      - key: ODDS_SCAN_SCOPE
+        value: full
+      - key: ODDS_MAX_SPORTS_PER_SCAN
+        value: "0"
+      - key: ATLAS_EXPERT_INTELLIGENCE_ENABLED
+        value: "true"
       - key: OPENAI_API_KEY
         sync: false
       - key: DEFAULT_USER_ID
@@ -62,6 +68,12 @@ services:
         sync: false
       - key: ODDS_API_KEY
         sync: false
+      - key: ODDS_SCAN_SCOPE
+        value: full
+      - key: ODDS_MAX_SPORTS_PER_SCAN
+        value: "0"
+      - key: ATLAS_EXPERT_INTELLIGENCE_ENABLED
+        value: "true"
       - key: OPENAI_API_KEY
         sync: false
       - key: DEFAULT_USER_ID

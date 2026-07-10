@@ -168,6 +168,8 @@ Keep localhost URLs if you still develop locally.
 | CORS errors | Set `CORS_ORIGINS` on Render to your Vercel domain |
 | Odds scan fails | `ODDS_API_KEY` only on **Render**, not in browser env. Paste **all** keys comma-separated in Render → Environment, redeploy, then rescan. |
 | Odds credits exhausted | Add another free key at [the-odds-api.com](https://the-odds-api.com), append to `ODDS_API_KEY` (comma-separated), update Render, redeploy. |
+| Still seeing old sports UI / few leagues | Confirm Vercel + Render redeployed latest `main`. On Render set `ODDS_SCAN_SCOPE=full`, `ODDS_MAX_SPORTS_PER_SCAN=0`, `ATLAS_EXPERT_INTELLIGENCE_ENABLED=true`, then **Manual Deploy**. On phone: hard-refresh, open Sports, tap **Fetch live odds** / Rescore so picks rebuild. |
+| No Analyst picks under cards | Same Render flag `ATLAS_EXPERT_INTELLIGENCE_ENABLED=true`. Run Supabase migration `20250710000001_sports_intelligence.sql` if not applied. |
 | AI briefing says "Smart summary" | Add `OPENAI_API_KEY` on Render, redeploy API. Template briefings still work without a key. |
 | Cron job skipped / fails | Set `DEFAULT_USER_ID` and `SUPABASE_SERVICE_ROLE_KEY` on **both** atlas-api and atlas-learning-cron in Render. |
 
