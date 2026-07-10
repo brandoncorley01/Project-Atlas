@@ -15,14 +15,16 @@ from app.providers.sports.team_stats import (
     match_stats_payload,
 )
 from app.services.llm_service import llm_service
+from app.services.sport_key_metrics import build_key_metrics_comparison
 
 logger = logging.getLogger(__name__)
 
 _SPORTS_INSIGHT_SYSTEM = """You are Atlas, explaining why you ranked a sports pick.
 Write a clear pick thesis using whatever facts are in the payload — market edge, EV, odds,
-line movement, confidence/risk/opportunity scores, team form, H2H, and headlines.
+line movement, confidence/risk/opportunity scores, and especially sport-specific key metrics
+(PPG / run differential / goals for-against / form / H2H) comparing both sides.
 Never invent injuries, lineups, scores, or odds that are not in the payload.
-If event-specific news is thin, lean on market + form data and say so honestly.
+If recent-score sample is thin, say so and lean on the keys that are present plus market data.
 Tone: direct, formative, decision-oriented. Explain WHY this pick over the other side."""
 
 
@@ -121,47 +123,52 @@ def _template_stats_comparison(
     stats_payload: dict[str, Any] | None,
     support: float,
 ) -> dict[str, Any]:
-    home, away, _ = _participants_from_signal(signal)
+    home, away, sport_key = _participants_from_signal(signal)
     selection = str(signal.get("selection") or "")
     bet_type = str(signal.get("bet_type") or "moneyline")
+    sport_label = str(signal.get("sport") or "")
+
+    home_team = (stats_payload or {}).get("home") or {"name": home}
+    away_team = (stats_payload or {}).get("away") or {"name": away}
+    h2h = (stats_payload or {}).get("h2h") or {}
+
+    if home and not home_team.get("name"):
+        home_team = {**home_team, "name": home}
+    if away and not away_team.get("name"):
+        away_team = {**away_team, "name": away}
+
+    key_metrics = build_key_metrics_comparison(
+        sport_key=sport_key,
+        sport_label=sport_label,
+        home=home_team if stats_payload else {"name": home},
+        away=away_team if stats_payload else {"name": away},
+        selection=selection,
+        bet_type=bet_type,
+        h2h=h2h if h2h.get("games") else None,
+        pick_support=support,
+    )
 
     if not stats_payload:
         return {
-            "summary": (
-                f"Historical form sample is limited for {home or 'home'} vs {away or 'away'}. "
-                "Atlas leans on market edge, expected value, and scan scores for this pick."
-            ),
-            "home": _format_team_side("home", None),
-            "away": _format_team_side("away", None),
+            "summary": key_metrics["analysis"],
+            "analysis": key_metrics["analysis"],
+            "home": _format_team_side(home or "home", {"name": home} if home else None),
+            "away": _format_team_side(away or "away", {"name": away} if away else None),
             "h2h": None,
             "pick_support": support,
             "selection": selection,
             "bet_type": bet_type,
             "available": False,
+            "sport_family": key_metrics["sport_family"],
+            "title": key_metrics["title"],
+            "key_metrics": key_metrics["rows"],
+            "metric_labels": key_metrics["metric_labels"],
         }
 
-    home_team = stats_payload.get("home") or {}
-    away_team = stats_payload.get("away") or {}
-    h2h = stats_payload.get("h2h") or {}
     summary = str(stats_payload.get("summary") or stats_payload.get("form_note") or "")
-
-    if support >= 12:
-        lean = f"Recent form supports {selection}."
-    elif support <= -12:
-        lean = f"Recent form leans against {selection} — market edge must carry more weight."
-    else:
-        lean = "Recent form is mixed; market pricing and edge drive the ranking."
-
-    h2h_note = ""
-    if h2h.get("games"):
-        h2h_note = (
-            f" Head-to-head: {h2h.get('home_wins', 0)}-{h2h.get('away_wins', 0)}"
-            + (f"-{h2h['draws']}" if h2h.get("draws") else "")
-            + f" over {h2h['games']} meetings."
-        )
-
     return {
-        "summary": f"{summary}. {lean}{h2h_note}".strip(),
+        "summary": key_metrics["analysis"] if key_metrics.get("analysis") else summary,
+        "analysis": key_metrics["analysis"],
         "home": _format_team_side(home_team.get("name") or home, home_team),
         "away": _format_team_side(away_team.get("name") or away, away_team),
         "h2h": h2h if h2h.get("games") else None,
@@ -169,6 +176,12 @@ def _template_stats_comparison(
         "selection": selection,
         "bet_type": bet_type,
         "available": True,
+        "sport_family": key_metrics["sport_family"],
+        "title": key_metrics["title"],
+        "key_metrics": key_metrics["rows"],
+        "metric_labels": key_metrics["metric_labels"],
+        "home_edges": key_metrics.get("home_edges"),
+        "away_edges": key_metrics.get("away_edges"),
     }
 
 
@@ -407,7 +420,9 @@ class SportsInsightService:
                 "weave market edge, scores, form/H2H if present, and headlines; be specific),\n"
                 "bullets (4-6 short strings citing concrete numbers or headlines from the payload),\n"
                 "risks (2-3 strings: what could invalidate the pick),\n"
-                "stats_comparison_summary (1-2 sentences comparing participants using available stats).\n\n"
+                "stats_comparison_summary (2-4 sentences: compare both sides on the sport's key "
+                "prediction stats from stats_comparison.key_metrics — e.g. PPG/Opp PPG/net for basketball, "
+                "runs for baseball, goals for soccer/hockey — and say which keys support the Atlas pick).\n\n"
                 f"PICK RESEARCH PAYLOAD:\n{facts}"
             ),
             max_tokens=1200,

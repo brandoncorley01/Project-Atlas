@@ -27,16 +27,34 @@ interface TeamSide {
   avg_scored?: number;
   avg_allowed?: number;
   form?: string;
+  home_record?: string;
+  away_record?: string;
+  games_sampled?: number;
+}
+
+interface KeyMetricRow {
+  key?: string;
+  label?: string;
+  home?: string | number | null;
+  away?: string | number | null;
+  edge?: "home" | "away" | "even" | null;
+  delta?: number | null;
+  note?: string;
 }
 
 interface StatsComparison {
   summary?: string;
+  analysis?: string;
+  title?: string;
+  sport_family?: string;
   home?: TeamSide;
   away?: TeamSide;
   h2h?: { home_wins?: number; away_wins?: number; draws?: number; games?: number };
   pick_support?: number;
   selection?: string;
   available?: boolean;
+  key_metrics?: KeyMetricRow[];
+  metric_labels?: Record<string, string>;
 }
 
 interface MarketContext {
@@ -202,35 +220,100 @@ export function AtlasExplainButton({ module, signalId, className }: AtlasExplain
               {module === "sports" && stats && (
                 <div className="mt-3 rounded-md border border-border/60 bg-background/40 p-2.5">
                   <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-                    Stats & form
+                    {stats.title || "Stats & form"} · key matchup metrics
                   </p>
-                  {stats.summary && (
-                    <p className="mt-1.5 text-sm leading-relaxed text-foreground/90">{stats.summary}</p>
+                  {(stats.analysis || stats.summary) && (
+                    <p className="mt-1.5 text-sm leading-relaxed text-foreground/90">
+                      {stats.analysis || stats.summary}
+                    </p>
                   )}
-                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                    {[stats.home, stats.away].map(
-                      (side) =>
-                        side?.name && (
-                          <div key={side.name} className="rounded border border-border/50 px-2 py-1.5 text-xs">
-                            <p className="font-medium">{side.name}</p>
-                            {side.record && <p className="text-muted">Record: {side.record}</p>}
-                            {side.form && <p className="text-muted">Form: {side.form}</p>}
-                            {side.win_pct != null && <p className="text-muted">Win %: {side.win_pct}%</p>}
-                            {side.avg_scored != null && side.avg_allowed != null && (
-                              <p className="text-muted">
-                                Avg {side.avg_scored} scored · {side.avg_allowed} allowed
-                              </p>
-                            )}
-                          </div>
-                        ),
-                    )}
-                  </div>
+
+                  {stats.key_metrics && stats.key_metrics.length > 0 ? (
+                    <div className="mt-3 overflow-x-auto">
+                      <table className="w-full min-w-[280px] text-left text-xs">
+                        <thead>
+                          <tr className="border-b border-border/50 text-muted">
+                            <th className="py-1.5 pr-2 font-medium">Key</th>
+                            <th className="py-1.5 pr-2 font-medium">
+                              {stats.home?.name || "Home"}
+                            </th>
+                            <th className="py-1.5 pr-2 font-medium">
+                              {stats.away?.name || "Away"}
+                            </th>
+                            <th className="py-1.5 font-medium">Edge</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {stats.key_metrics.map((row) => (
+                            <tr key={row.key || row.label} className="border-b border-border/30">
+                              <td className="py-1.5 pr-2 text-muted">{row.label}</td>
+                              <td
+                                className={`py-1.5 pr-2 ${
+                                  row.edge === "home" ? "font-semibold text-emerald-200" : "text-foreground/90"
+                                }`}
+                              >
+                                {row.home ?? "—"}
+                              </td>
+                              <td
+                                className={`py-1.5 pr-2 ${
+                                  row.edge === "away" ? "font-semibold text-emerald-200" : "text-foreground/90"
+                                }`}
+                              >
+                                {row.away ?? "—"}
+                              </td>
+                              <td className="py-1.5 text-muted">
+                                {row.edge === "home"
+                                  ? stats.home?.name?.split(" ").slice(-1)[0] || "Home"
+                                  : row.edge === "away"
+                                    ? stats.away?.name?.split(" ").slice(-1)[0] || "Away"
+                                    : row.edge === "even"
+                                      ? "Even"
+                                      : "—"}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                      {[stats.home, stats.away].map(
+                        (side) =>
+                          side?.name && (
+                            <div
+                              key={side.name}
+                              className="rounded border border-border/50 px-2 py-1.5 text-xs"
+                            >
+                              <p className="font-medium">{side.name}</p>
+                              {side.record && <p className="text-muted">Record: {side.record}</p>}
+                              {side.form && <p className="text-muted">Form: {side.form}</p>}
+                              {side.win_pct != null && (
+                                <p className="text-muted">Win %: {side.win_pct}%</p>
+                              )}
+                              {side.avg_scored != null && side.avg_allowed != null && (
+                                <p className="text-muted">
+                                  Avg {side.avg_scored} scored · {side.avg_allowed} allowed
+                                </p>
+                              )}
+                            </div>
+                          ),
+                      )}
+                    </div>
+                  )}
+
                   {stats.h2h?.games ? (
                     <p className="mt-2 text-xs text-muted">
                       H2H: {stats.h2h.home_wins}-{stats.h2h.away_wins}
                       {stats.h2h.draws ? `-${stats.h2h.draws}` : ""} ({stats.h2h.games} games)
                     </p>
                   ) : null}
+                  {stats.available === false && (
+                    <p className="mt-2 text-[11px] text-muted">
+                      Recent completed-score sample is thin for this league window — Atlas still
+                      frames the sport&apos;s key comparison metrics and leans on market edge until
+                      more results land.
+                    </p>
+                  )}
                 </div>
               )}
 

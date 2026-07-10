@@ -327,7 +327,10 @@ def _team_form_dict(form: TeamForm) -> dict[str, Any]:
 
 
 def match_stats_payload(stats: MatchStats | None) -> dict[str, Any] | None:
-    if stats is None or stats.sample_games < 2:
+    if stats is None:
+        return None
+    # Show whatever sample we have — insight compares keys even on thin recent scores.
+    if stats.sample_games < 1 and stats.home.games_sampled < 1 and stats.away.games_sampled < 1:
         return None
     return {
         "home": _team_form_dict(stats.home),
@@ -339,6 +342,7 @@ def match_stats_payload(stats: MatchStats | None) -> dict[str, Any] | None:
             "games": stats.h2h_games,
         },
         "summary": stats.summary(),
+        "sample_games": stats.sample_games,
     }
 
 

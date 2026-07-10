@@ -20,7 +20,7 @@ def compute_pick_support(
     How much recent results support this pick (-100 to +100).
     Positive = historical trend aligns with the bet.
     """
-    if stats is None or stats.sample_games < 2:
+    if stats is None or (stats.sample_games < 1 and stats.home.games_sampled < 1 and stats.away.games_sampled < 1):
         return 0.0, {}
 
     home_key = normalize_team(home)
