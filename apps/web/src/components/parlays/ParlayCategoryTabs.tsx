@@ -22,7 +22,7 @@ export function ParlayCategoryTabs({
   return (
     <FilterTabs
       label="Browse by time window"
-      hint="24–48h = games starting soon. Multi-day = legs spread across several days."
+      hint="Today = all legs kick off today (Eastern). 24–48h = soon but not same-day. Multi-day = legs spread across several days."
       allLabel="All parlays"
       accent="orange"
       activeId={activeSlug ?? null}

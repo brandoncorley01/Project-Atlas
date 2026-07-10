@@ -46,7 +46,7 @@ export default async function ParlaysPage() {
     <>
       <PageHeader
         title="Cross-Sport Parlays"
-        description="Dozens of parlay options from your sports plays — conservative, balanced, and aggressive tiers in 24–48h and multi-day windows. Build after each sports scan for the latest lines."
+        description="Dozens of parlay options from your sports plays — Today (same-day), 24–48h, and multi-day windows across conservative, balanced, and aggressive tiers. Build after each sports scan for the latest lines."
       />
       <ParlaysView initialItems={items} initialCategories={categories} />
     </>

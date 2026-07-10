@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
-from app.services.freshness import hours_until_event
+from app.services.freshness import hours_until_event, parse_iso
 
 NEAR_TERM_HOURS = 48
 SOON_HOURS = 24
@@ -15,9 +17,34 @@ MONTH_HOURS = 720  # 30 days — longer-dated game lines
 MAX_SCAN_HORIZON_HOURS = 2160
 STRONG_NEWS_MIN_SCORE = 4.0
 
+# US sports slate day — "Today" parlays use Eastern calendar date.
+ATLAS_SPORTS_TZ = ZoneInfo("America/New_York")
+
 
 def hours_to_start(row: dict[str, Any]) -> float | None:
     return hours_until_event(row.get("event_start"))
+
+
+def event_local_date(event_start: str | None, *, tz: ZoneInfo = ATLAS_SPORTS_TZ) -> date | None:
+    parsed = parse_iso(event_start)
+    if not parsed:
+        return None
+    return parsed.astimezone(tz).date()
+
+
+def sports_today(*, tz: ZoneInfo = ATLAS_SPORTS_TZ) -> date:
+    return datetime.now(tz).date()
+
+
+def is_calendar_today(row: dict[str, Any], *, tz: ZoneInfo = ATLAS_SPORTS_TZ) -> bool:
+    """True when the game kicks off later today (Eastern calendar day)."""
+    hours = hours_to_start(row)
+    if hours is None or hours <= 0:
+        return False
+    if is_futures_row(row):
+        return False
+    event_day = event_local_date(row.get("event_start"), tz=tz)
+    return event_day is not None and event_day == sports_today(tz=tz)
 
 
 def is_near_term(row: dict[str, Any], *, max_hours: float = NEAR_TERM_HOURS) -> bool:
@@ -47,10 +74,12 @@ def timing_tier(row: dict[str, Any]) -> str:
         return "past"
     if is_futures_row(row):
         return "futures"
+    if is_calendar_today(row):
+        return "calendar_today"
     if hours <= SOON_HOURS:
         return "live_soon"
     if hours <= NEAR_TERM_HOURS:
-        return "today"
+        return "next_48h"
     if hours <= WEEK_HOURS:
         return "this_week"
     if hours <= MONTH_HOURS:
@@ -89,14 +118,15 @@ def composite_score(row: dict[str, Any]) -> float:
         # Soft penalty so future game lines remain visible when edge is strong.
         soon_penalty = min(12.0, (hours - NEAR_TERM_HOURS) * 0.04)
     stats_support = float(snap.get("stats_support") or 0)
-    return opp + boost + edge * 0.35 - soon_penalty + stats_support * 0.2
+    today_boost = 4.0 if is_calendar_today(row) else 0.0
+    return opp + boost + edge * 0.35 - soon_penalty + stats_support * 0.2 + today_boost
 
 
 def sort_for_display(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(
         rows,
         key=lambda r: (
-            0 if is_near_term(r) else (1 if not is_futures_row(r) else 2),
+            0 if is_calendar_today(r) else (1 if is_near_term(r) else (2 if not is_futures_row(r) else 3)),
             -composite_score(r),
             hours_to_start(r) if hours_to_start(r) is not None else 9999,
         ),
@@ -131,6 +161,10 @@ def dedupe_one_side_per_market(rows: list[dict[str, Any]]) -> list[dict[str, Any
 
 
 def sort_for_parlay_pool(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    today = [r for r in rows if is_calendar_today(r)]
+    if len(today) >= 2:
+        near = [r for r in rows if is_near_term(r) and not is_calendar_today(r)]
+        return sort_for_display(today + near)
     near = [r for r in rows if is_near_term(r)]
     pool = near if len(near) >= 2 else [r for r in rows if is_within_horizon(r) and not is_futures_row(r)]
     return sort_for_display(pool)
@@ -138,3 +172,7 @@ def sort_for_parlay_pool(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def filter_near_term(rows: list[dict[str, Any]], *, max_hours: float = NEAR_TERM_HOURS) -> list[dict[str, Any]]:
     return [r for r in rows if is_near_term(r, max_hours=max_hours)]
+
+
+def filter_calendar_today(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [r for r in rows if is_calendar_today(r)]

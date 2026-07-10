@@ -6,21 +6,31 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.services.freshness import hours_until_event, is_sports_actionable, parse_iso
+from app.services.sports_ranking import ATLAS_SPORTS_TZ, sports_today
 
 NEAR_TERM_MAX_HOURS = 48
 MULTI_DAY_SPAN_HOURS = 48
 
-PARLAY_CATEGORY_ORDER = ("next_48h", "multi_day")
+PARLAY_CATEGORY_ORDER = ("today", "next_48h", "multi_day")
 
 PARLAY_CATEGORY_CATALOG: dict[str, dict[str, str]] = {
+    "today": {
+        "title": "Today",
+        "short_label": "Today",
+        "description": "Every leg kicks off today (US/Eastern) — same-day slate only.",
+        "guide": (
+            "Same-day parlays: all legs start on today's Eastern calendar date. "
+            "Atlas builds up to six options per risk tier from today's sports picks only — "
+            "ideal when you want the whole ticket to settle tonight."
+        ),
+    },
     "next_48h": {
         "title": "Next 24–48 Hours",
         "short_label": "24–48h",
-        "description": "All legs kick off within the next 48 hours — same-weekend or back-to-back slate.",
+        "description": "All legs kick off within the next 48 hours, spanning more than today.",
         "guide": (
-            "Quick-turn parlays: every leg starts within 48 hours. Atlas builds up to six options per "
-            "risk tier (conservative, balanced, aggressive) ranked by edge, payout, and sport diversity. "
-            "Ideal when you want results this weekend."
+            "Quick-turn parlays: every leg starts within 48 hours but not all on the same day. "
+            "Atlas builds up to six options per risk tier ranked by edge, payout, and sport diversity."
         ),
     },
     "multi_day": {
@@ -80,6 +90,21 @@ def is_parlay_actionable(
     return True
 
 
+def _all_legs_today(starts: list[datetime]) -> bool:
+    """True when every kickoff is later today on the Eastern sports calendar."""
+    if not starts:
+        return False
+    today = sports_today(tz=ATLAS_SPORTS_TZ)
+    now = datetime.now(UTC)
+    dates = set()
+    for start in starts:
+        if (start - now).total_seconds() <= 0:
+            return False
+        local = start.astimezone(ATLAS_SPORTS_TZ).date()
+        dates.add(local)
+    return len(dates) == 1 and next(iter(dates)) == today
+
+
 def compute_parlay_time_meta(
     legs: list[dict[str, Any]],
     signal_map: dict[str, dict[str, Any]],
@@ -102,8 +127,11 @@ def compute_parlay_time_meta(
     hours_to_first = (earliest - now).total_seconds() / 3600
     hours_to_last = (latest - now).total_seconds() / 3600
 
+    # Exclusive windows so Today / 24–48h / Multi-day sections don't duplicate tickets.
     categories: list[str] = []
-    if hours_to_first > 0 and hours_to_last <= NEAR_TERM_MAX_HOURS:
+    if _all_legs_today(starts):
+        categories.append("today")
+    elif hours_to_first > 0 and hours_to_last <= NEAR_TERM_MAX_HOURS:
         categories.append("next_48h")
     if span_hours > MULTI_DAY_SPAN_HOURS:
         categories.append("multi_day")

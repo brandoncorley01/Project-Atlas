@@ -8,7 +8,7 @@ from typing import Any, Callable
 from app.agents.parlay_categories import compute_parlay_time_meta
 from app.agents.sports_analyst import PREFERRED_BOOK_KEY, PREFERRED_BOOK_TITLE, primary_odds_from_signal
 from app.services.freshness import hours_until_event
-from app.services.sports_ranking import is_near_term, sort_for_parlay_pool
+from app.services.sports_ranking import is_calendar_today, is_near_term, sort_for_parlay_pool
 
 STYLE_ORDER = ("conservative", "balanced", "aggressive")
 
@@ -37,9 +37,12 @@ STYLE_CONFIG: dict[str, dict[str, Any]] = {
 }
 
 TIME_LABELS = {
+    "today": "Today",
     "next_48h": "24–48h",
     "multi_day": "Multi-day",
 }
+
+TIME_CATEGORY_ORDER = ("today", "next_48h")
 
 TOP_SIGNALS_FOR_COMBOS = 16
 MAX_COMBOS_TO_SCORE = 500
@@ -198,7 +201,12 @@ def _assemble_parlay(
         )
 
     correlation_warning = detect_correlation(leg_details)
-    slate_hint = "all legs start within 48h" if all(is_near_term(p) for p in picks) else "near-term slate"
+    if time_category == "today" or all(is_calendar_today(p) for p in picks):
+        slate_hint = "all legs start today"
+    elif all(is_near_term(p) for p in picks):
+        slate_hint = "all legs start within 48h"
+    else:
+        slate_hint = "near-term slate"
     explanation = (
         f"{cfg['label']} {len(picks)}-leg parlay ({slate_hint}) across {', '.join(sports_list)}. "
         f"FanDuel combined {combined_american:+d} ({combined_decimal:.2f}x) — "
@@ -274,12 +282,14 @@ def _rank_for_bucket(
 
 
 def build_all_parlays(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Build near-term parlays (next 48h legs only)."""
+    """Build Today (same calendar day) and next-48h parlays from the sports pool."""
     if len(signals) < 2:
         return []
 
-    signals = [s for s in sort_for_parlay_pool(signals) if is_near_term(s)]
-    if len(signals) < 2:
+    pool = sort_for_parlay_pool(signals)
+    today_signals = [s for s in pool if is_calendar_today(s)]
+    near_signals = [s for s in pool if is_near_term(s)]
+    if len(today_signals) < 2 and len(near_signals) < 2:
         return []
 
     built: list[dict[str, Any]] = []
@@ -288,24 +298,35 @@ def build_all_parlays(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for style in STYLE_ORDER:
         cfg = STYLE_CONFIG[style]
         leg_count = int(cfg["legs"])
-        eligible = [s for s in signals if _eligible_for_style(style, s)]
-        if len(eligible) < leg_count:
-            continue
 
-        combos = _generate_combos(eligible, leg_count)
         buckets: dict[str, list[tuple[tuple[dict[str, Any], ...], dict[str, float]]]] = {
+            "today": [],
             "next_48h": [],
         }
 
-        for combo in combos:
-            if not all(is_near_term(p) for p in combo):
-                continue
-            metrics = _score_picks(combo, style)
-            if not metrics:
-                continue
-            buckets["next_48h"].append((combo, metrics))
+        # Same-day tickets first — only legs that kick off today (Eastern).
+        today_eligible = [s for s in today_signals if _eligible_for_style(style, s)]
+        if len(today_eligible) >= leg_count:
+            for combo in _generate_combos(today_eligible, leg_count):
+                if not all(is_calendar_today(p) for p in combo):
+                    continue
+                metrics = _score_picks(combo, style)
+                if metrics:
+                    buckets["today"].append((combo, metrics))
 
-        for time_category in ("next_48h",):
+        # 24–48h tickets that are not pure same-day (today already covered above).
+        near_eligible = [s for s in near_signals if _eligible_for_style(style, s)]
+        if len(near_eligible) >= leg_count:
+            for combo in _generate_combos(near_eligible, leg_count):
+                if not all(is_near_term(p) for p in combo):
+                    continue
+                if all(is_calendar_today(p) for p in combo):
+                    continue
+                metrics = _score_picks(combo, style)
+                if metrics:
+                    buckets["next_48h"].append((combo, metrics))
+
+        for time_category in TIME_CATEGORY_ORDER:
             bucket = buckets[time_category]
             if not bucket:
                 continue
@@ -344,7 +365,9 @@ def build_all_parlays(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
     built.sort(
         key=lambda p: (
             STYLE_ORDER.index(p["style"]) if p["style"] in STYLE_ORDER else 99,
-            p.get("time_category") or "",
+            TIME_CATEGORY_ORDER.index(p["time_category"])
+            if p.get("time_category") in TIME_CATEGORY_ORDER
+            else 99,
             -float(p.get("opportunity_score") or 0),
         ),
     )

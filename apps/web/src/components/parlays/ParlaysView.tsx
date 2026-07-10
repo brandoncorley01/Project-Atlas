@@ -37,7 +37,7 @@ interface ParlaySection {
 
 function buildSections(items: Parlay[]): ParlaySection[] {
   const styleOrder = ["conservative", "balanced", "aggressive"] as const;
-  const catOrder = ["next_48h", "multi_day"] as const;
+  const catOrder = ["today", "next_48h", "multi_day"] as const;
   const sections: ParlaySection[] = [];
 
   for (const style of styleOrder) {
@@ -196,7 +196,7 @@ export function ParlaysView({
 
       if (created > 0) {
         setMessage(
-          `Built ${created} parlay options from ${pool ?? "?"} sports plays — conservative, balanced & aggressive across 24–48h and multi-day windows.`,
+          `Built ${created} parlay options from ${pool ?? "?"} sports plays — Today, 24–48h, and multi-day across conservative, balanced & aggressive.`,
         );
         setActiveCategory(null);
         setActiveStyle(null);
@@ -251,7 +251,7 @@ export function ParlaysView({
       <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm text-muted">
           Atlas builds many parlay tickets from every sports play — conservative (2-leg), balanced
-          (3-leg), and aggressive (4-leg) in both <strong>24–48h</strong> and{" "}
+          (3-leg), and aggressive (4-leg) in <strong>Today</strong>, <strong>24–48h</strong>, and{" "}
           <strong>multi-day</strong> windows. Small stake → large payout when all legs hit.
         </p>
         <button

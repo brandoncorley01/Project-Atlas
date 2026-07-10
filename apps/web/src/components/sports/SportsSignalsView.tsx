@@ -342,7 +342,7 @@ export function SportsSignalsView({
           title={activeCategory || activeSport || filter !== "all" ? "No plays match these filters" : "No upcoming sports plays"}
           description={
             activeCategory || activeSport || filter !== "all"
-              ? "Try All leagues, widen the date window (Next 30 days / Futures / All dates), or scan for a fresh slate."
+              ? "Try All leagues, set Window to Today for same-day parlays, or widen (Next 48h / Next 30 days), then scan."
               : "Global leagues run 24/7 — scan sports odds for WNBA, MLB, soccer, tennis, MMA, futures, and more."
           }
           action={

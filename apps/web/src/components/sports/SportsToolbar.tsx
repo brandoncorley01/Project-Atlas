@@ -33,6 +33,7 @@ const FILTER_OPTIONS: { value: SportsFilterKey; label: string }[] = [
 ];
 
 const WINDOW_OPTIONS: { value: SportsWindowKey; label: string }[] = [
+  { value: "today", label: "Today" },
   { value: "soon", label: "Next 48h" },
   { value: "week", label: "This week" },
   { value: "month", label: "Next 30 days" },
@@ -42,6 +43,8 @@ const WINDOW_OPTIONS: { value: SportsWindowKey; label: string }[] = [
 
 function windowHint(window: SportsWindowKey): string {
   switch (window) {
+    case "today":
+      return "today (Eastern)";
     case "soon":
       return "next 48 hours";
     case "week":

@@ -84,6 +84,10 @@ function formatEventStart(iso?: string | null) {
 }
 
 function formatTimeWindow(row: Parlay) {
+  const cats = row.categories ?? [];
+  if (cats.includes("today")) {
+    return "All legs today";
+  }
   if (row.hours_to_first_leg != null && row.hours_to_last_leg != null) {
     if (row.hours_to_last_leg <= 48) {
       return `All legs within ${row.hours_to_last_leg.toFixed(0)}h`;

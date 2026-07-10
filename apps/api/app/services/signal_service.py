@@ -25,6 +25,7 @@ from app.services.sports_ranking import (
     WEEK_HOURS,
     dedupe_one_side_per_market,
     filter_near_term,
+    is_calendar_today,
     is_futures_row,
     is_within_horizon,
     sort_for_display,
@@ -40,6 +41,8 @@ def _sports_window_match(row: dict, window: str) -> bool:
         return is_futures_row(row) and window in {"all", "futures", "month"}
     if hours <= 0:
         return True
+    if window == "today":
+        return is_calendar_today(row)
     if window == "soon":
         return hours <= NEAR_TERM_HOURS and not is_futures_row(row)
     if window == "week":
@@ -202,7 +205,7 @@ class SignalService:
         skip_expire: bool = False,
     ) -> list[dict]:
         # Sports picks persist until the user runs a new scan — never auto-expire on list load.
-        fetch_limit = 300 if category or window in {"all", "month", "futures"} else max(limit * 3, 80)
+        fetch_limit = 300 if category or window in {"all", "month", "futures", "today", "week"} else max(limit * 3, 80)
         rows = await self.db.select(
             "sports_signals",
             filters={

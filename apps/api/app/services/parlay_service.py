@@ -55,7 +55,7 @@ class ParlayService:
                 "parlays_created": 0,
                 "legs_created": 0,
                 "items": [],
-                "message": "Need at least 2 upcoming plays in the next 48h. Scan sports odds first.",
+                "message": "Need at least 2 upcoming plays today or in the next 48h. Scan sports odds first.",
                 "styles_built": [],
                 "sports_pool": len(signals),
             }

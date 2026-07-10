@@ -10,14 +10,24 @@ export interface ParlayCategoryMeta {
 /** Static catalog — tabs always render even if the categories API is unavailable. */
 export const PARLAY_CATEGORY_DEFINITIONS: Omit<ParlayCategoryMeta, "count">[] = [
   {
+    slug: "today",
+    title: "Today",
+    short_label: "Today",
+    description:
+      "Every leg kicks off today (US/Eastern) — same-day slate only.",
+    guide:
+      "Same-day parlays: all legs start on today's Eastern calendar date. " +
+      "Atlas builds up to six options per risk tier from today's sports picks only.",
+  },
+  {
     slug: "next_48h",
     title: "Next 24–48 Hours",
     short_label: "24–48h",
     description:
-      "All legs kick off within the next 48 hours — same-weekend or back-to-back slate.",
+      "All legs kick off within the next 48 hours, spanning more than today.",
     guide:
-      "Quick-turn parlays: every leg starts within 48 hours. Atlas builds up to six options per " +
-      "risk tier ranked by edge, payout, and sport diversity.",
+      "Quick-turn parlays: every leg starts within 48 hours but not all on the same day. " +
+      "Atlas builds up to six options per risk tier ranked by edge, payout, and sport diversity.",
   },
   {
     slug: "multi_day",
@@ -33,6 +43,7 @@ export const PARLAY_CATEGORY_DEFINITIONS: Omit<ParlayCategoryMeta, "count">[] = 
 ];
 
 export const PARLAY_CATEGORY_LABELS: Record<string, string> = {
+  today: "Today",
   next_48h: "24–48h",
   multi_day: "Multi-day",
 };

@@ -15,11 +15,12 @@ export type SportsFilterKey =
   | "futures"
   | "steam"
   | "value";
-export type SportsWindowKey = "soon" | "week" | "month" | "futures" | "all";
+export type SportsWindowKey = "today" | "soon" | "week" | "month" | "futures" | "all";
 
 const NEAR_TERM_HOURS = 48;
 const WEEK_HOURS = 168;
 const MONTH_HOURS = 720;
+const SPORTS_TZ = "America/New_York";
 
 function getEdge(row: SportsSignal): number {
   return Number(row.line_movement?.edge_pct ?? row.context?.edge_pct ?? 0);
@@ -38,6 +39,27 @@ function isFutures(row: SportsSignal): boolean {
   return bet === "futures" || bet === "outright";
 }
 
+function easternDayKey(iso: string | Date): string {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: SPORTS_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(typeof iso === "string" ? new Date(iso) : iso);
+}
+
+/** Same Eastern calendar day as now — for Today parlays / sports window. */
+export function isSportsCalendarToday(row: SportsSignal): boolean {
+  if (!row.event_start || isFutures(row)) return false;
+  const hours = row.hours_until_start ?? 9999;
+  if (hours <= 0) return false;
+  try {
+    return easternDayKey(row.event_start) === easternDayKey(new Date());
+  } catch {
+    return false;
+  }
+}
+
 function compositeRank(row: SportsSignal): number {
   const opp = row.opportunity_score ?? 0;
   const edge = getEdge(row);
@@ -47,13 +69,17 @@ function compositeRank(row: SportsSignal): number {
     !isFutures(row) && hours > NEAR_TERM_HOURS
       ? Math.min(12, (hours - NEAR_TERM_HOURS) * 0.04)
       : 0;
-  return opp + soonBoost + edge * 0.35 - latePenalty;
+  const todayBoost = isSportsCalendarToday(row) ? 4 : 0;
+  return opp + soonBoost + edge * 0.35 - latePenalty + todayBoost;
 }
 
 export function filterByWindow(items: SportsSignal[], window: SportsWindowKey): SportsSignal[] {
   const started = items.filter((i) => (i.hours_until_start ?? 0) <= 0);
   if (window === "all") {
     return items;
+  }
+  if (window === "today") {
+    return items.filter((i) => isSportsCalendarToday(i));
   }
   if (window === "futures") {
     return items.filter((i) => isFutures(i) || (i.hours_until_start ?? 0) > WEEK_HOURS);
