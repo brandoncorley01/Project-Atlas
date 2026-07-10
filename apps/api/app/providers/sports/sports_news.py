@@ -343,6 +343,87 @@ def match_news_to_signal(
     return [item for _, _, item in scored[:limit]]
 
 
+def match_news_for_insight(
+    signal: dict[str, Any],
+    news_pool: list[dict[str, Any]],
+    *,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    """
+    Broader matching for Atlas insight — team/selection hits first, then sport-context
+    headlines so the model always has general data to reason from.
+    """
+    direct = match_news_to_signal(signal, news_pool, limit=limit)
+    if len(direct) >= 3:
+        return direct
+
+    sport = str(signal.get("sport") or "")
+    event_name = str(signal.get("event_name") or "")
+    selection = str(signal.get("selection") or "")
+    tokens = extract_event_tokens(event_name, selection)
+    sport_words = _sport_keywords(sport)
+    seen = {str(n.get("url") or n.get("title") or "") for n in direct}
+    soft: list[tuple[float, dict[str, Any]]] = []
+
+    for item in news_pool:
+        key = str(item.get("url") or item.get("title") or "")
+        if key in seen:
+            continue
+        hay = f"{item.get('title', '')} {item.get('summary', '')}".lower()
+        if _has_sport_conflict(sport, hay):
+            continue
+
+        score, primary_hits, matched = _score_headline(hay, tokens, sport_words)
+        # Soft: any team token OR clear sport keyword
+        sport_hit = any(_contains_phrase(hay, w) for w in sport_words)
+        if primary_hits >= 1 or (sport_hit and score >= 2.0):
+            soft.append(
+                (
+                    score + (10 if primary_hits else 0),
+                    {
+                        **item,
+                        "relevance_score": _match_percent(max(score, 3.0), max(primary_hits, 0)),
+                        "matched_tokens": matched,
+                        "context_tier": "team" if primary_hits else "sport",
+                    },
+                )
+            )
+
+    soft.sort(key=lambda x: x[0], reverse=True)
+    for _, item in soft:
+        key = str(item.get("url") or item.get("title") or "")
+        if key in seen:
+            continue
+        direct.append(item)
+        seen.add(key)
+        if len(direct) >= limit:
+            break
+
+    # Still thin — attach top sport-tagged headlines as general context
+    if len(direct) < 3 and sport_words:
+        for item in news_pool:
+            if len(direct) >= limit:
+                break
+            key = str(item.get("url") or item.get("title") or "")
+            if key in seen:
+                continue
+            hay = f"{item.get('title', '')} {item.get('summary', '')}".lower()
+            if _has_sport_conflict(sport, hay):
+                continue
+            if any(_contains_phrase(hay, w) for w in sport_words):
+                direct.append(
+                    {
+                        **item,
+                        "relevance_score": 40,
+                        "matched_tokens": [],
+                        "context_tier": "sport",
+                    }
+                )
+                seen.add(key)
+
+    return direct[:limit]
+
+
 def build_news_analysis(
     signal: dict[str, Any],
     news_items: list[dict[str, Any]],

@@ -16,6 +16,7 @@ interface NewsArticle {
   url?: string;
   source?: string;
   summary?: string | null;
+  context_tier?: string;
 }
 
 interface TeamSide {
@@ -25,6 +26,7 @@ interface TeamSide {
   win_pct?: number;
   avg_scored?: number;
   avg_allowed?: number;
+  form?: string;
 }
 
 interface StatsComparison {
@@ -34,14 +36,30 @@ interface StatsComparison {
   h2h?: { home_wins?: number; away_wins?: number; draws?: number; games?: number };
   pick_support?: number;
   selection?: string;
+  available?: boolean;
+}
+
+interface MarketContext {
+  selection?: string;
+  bet_type?: string;
+  odds_american?: number;
+  expected_value?: number;
+  edge_pct?: number;
+  opportunity?: number;
+  confidence?: number;
+  risk?: number;
+  sharp_indicator?: string | null;
 }
 
 interface ExplainResponse {
   explanation?: string;
+  why_atlas?: string;
+  pick_thesis?: string;
   bullets?: string[];
   risks?: string[];
   news_articles?: NewsArticle[];
   stats_comparison?: StatsComparison;
+  market?: MarketContext;
   source?: string;
 }
 
@@ -71,7 +89,7 @@ export function AtlasExplainButton({ module, signalId, className }: AtlasExplain
       const result = await apiFetch<ExplainResponse>("/ai/explain", token, {
         method: "POST",
         body: JSON.stringify({ module, signal_id: signalId }),
-        timeoutMs: module === "sports" ? 45_000 : 25_000,
+        timeoutMs: module === "sports" ? 55_000 : 25_000,
       });
       setData(result);
     } catch (err) {
@@ -83,6 +101,9 @@ export function AtlasExplainButton({ module, signalId, className }: AtlasExplain
 
   const stats = data?.stats_comparison;
   const news = data?.news_articles ?? [];
+  const market = data?.market;
+  const whyAtlas =
+    data?.why_atlas || data?.pick_thesis || data?.explanation || "";
 
   return (
     <div className={className}>
@@ -104,7 +125,7 @@ export function AtlasExplainButton({ module, signalId, className }: AtlasExplain
           {loading && (
             <p className="text-sm text-muted">
               {module === "sports"
-                ? "Searching headlines, pulling team stats, and building insight…"
+                ? "Pulling market data, team form, headlines, and building why Atlas chose this pick…"
                 : "Building explanation from scan data…"}
             </p>
           )}
@@ -122,16 +143,66 @@ export function AtlasExplainButton({ module, signalId, className }: AtlasExplain
           )}
           {data && !loading && (
             <>
-              {data.source === "openai" && (
-                <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-sky-200/70">
-                  AI insight
+              <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-sky-200/70">
+                {data.source === "openai" ? "Why Atlas chose this pick" : "Atlas pick thesis"}
+              </p>
+
+              {module === "sports" && market && (
+                <div className="mb-3 flex flex-wrap gap-1.5 text-[11px]">
+                  {market.odds_american != null && (
+                    <span className="rounded bg-background/60 px-1.5 py-0.5 text-muted">
+                      Odds {market.odds_american > 0 ? "+" : ""}
+                      {market.odds_american}
+                    </span>
+                  )}
+                  {market.expected_value != null && (
+                    <span className="rounded bg-background/60 px-1.5 py-0.5 text-muted">
+                      EV {market.expected_value >= 0 ? "+" : ""}
+                      {Number(market.expected_value).toFixed(1)}%
+                    </span>
+                  )}
+                  {market.edge_pct != null && (
+                    <span className="rounded bg-background/60 px-1.5 py-0.5 text-muted">
+                      Edge {Number(market.edge_pct) >= 0 ? "+" : ""}
+                      {Number(market.edge_pct).toFixed(1)}%
+                    </span>
+                  )}
+                  {market.opportunity != null && (
+                    <span className="rounded bg-background/60 px-1.5 py-0.5 text-muted">
+                      Opp {Number(market.opportunity).toFixed(0)}
+                    </span>
+                  )}
+                  {market.confidence != null && (
+                    <span className="rounded bg-background/60 px-1.5 py-0.5 text-muted">
+                      Conf {Number(market.confidence).toFixed(0)}
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {whyAtlas && (
+                <p className="text-sm leading-relaxed text-foreground/90 whitespace-pre-wrap">
+                  {whyAtlas}
                 </p>
               )}
 
-              {module === "sports" && stats && (
-                <div className="mb-3 rounded-md border border-border/60 bg-background/40 p-2.5">
+              {data.bullets && data.bullets.length > 0 && (
+                <div className="mt-3">
                   <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-                    Stats comparison
+                    Key factors
+                  </p>
+                  <ul className="mt-1.5 space-y-1 text-sm text-muted">
+                    {data.bullets.map((b) => (
+                      <li key={b}>· {b}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {module === "sports" && stats && (
+                <div className="mt-3 rounded-md border border-border/60 bg-background/40 p-2.5">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                    Stats & form
                   </p>
                   {stats.summary && (
                     <p className="mt-1.5 text-sm leading-relaxed text-foreground/90">{stats.summary}</p>
@@ -143,6 +214,7 @@ export function AtlasExplainButton({ module, signalId, className }: AtlasExplain
                           <div key={side.name} className="rounded border border-border/50 px-2 py-1.5 text-xs">
                             <p className="font-medium">{side.name}</p>
                             {side.record && <p className="text-muted">Record: {side.record}</p>}
+                            {side.form && <p className="text-muted">Form: {side.form}</p>}
                             {side.win_pct != null && <p className="text-muted">Win %: {side.win_pct}%</p>}
                             {side.avg_scored != null && side.avg_allowed != null && (
                               <p className="text-muted">
@@ -163,8 +235,10 @@ export function AtlasExplainButton({ module, signalId, className }: AtlasExplain
               )}
 
               {module === "sports" && news.length > 0 && (
-                <div className="mb-3">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-muted">Related news</p>
+                <div className="mt-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                    News & context
+                  </p>
                   <ul className="mt-1.5 space-y-2">
                     {news.map((article) => (
                       <li key={article.url ?? article.title} className="text-sm">
@@ -180,9 +254,10 @@ export function AtlasExplainButton({ module, signalId, className }: AtlasExplain
                         ) : (
                           <span className="font-medium">{article.title}</span>
                         )}
-                        {article.source && (
-                          <span className="ml-1 text-xs text-muted">· {article.source}</span>
-                        )}
+                        <span className="ml-1 text-xs text-muted">
+                          {article.source ? `· ${article.source}` : ""}
+                          {article.context_tier === "sport" ? " · sport context" : ""}
+                        </span>
                         {article.summary && (
                           <p className="mt-0.5 text-xs text-muted line-clamp-2">{article.summary}</p>
                         )}
@@ -192,25 +267,9 @@ export function AtlasExplainButton({ module, signalId, className }: AtlasExplain
                 </div>
               )}
 
-              {module === "sports" && news.length === 0 && (
-                <p className="mb-3 text-xs text-muted">
-                  No closely matched headlines right now — check lineups before kickoff.
-                </p>
-              )}
-
-              {data.explanation && (
-                <p className="text-sm leading-relaxed text-foreground/90">{data.explanation}</p>
-              )}
-              {data.bullets && data.bullets.length > 0 && (
-                <ul className="mt-2 space-y-1 text-sm text-muted">
-                  {data.bullets.map((b) => (
-                    <li key={b}>· {b}</li>
-                  ))}
-                </ul>
-              )}
               {data.risks && data.risks.length > 0 && (
                 <div className="mt-3 border-t border-border/50 pt-2">
-                  <p className="text-xs font-semibold text-amber-200/80">Risks</p>
+                  <p className="text-xs font-semibold text-amber-200/80">What could go wrong</p>
                   <ul className="mt-1 space-y-1 text-xs text-muted">
                     {data.risks.map((r) => (
                       <li key={r}>· {r}</li>

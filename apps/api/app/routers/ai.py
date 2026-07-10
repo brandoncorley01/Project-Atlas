@@ -139,16 +139,20 @@ async def explain_signal(
             result = await sports_insight_service.explain_pick(signal=row, formatted=formatted)
         except Exception:
             logger.exception("Sports insight failed for %s", body.signal_id)
-            context = await sports_insight_service.gather_context(row)
+            context = await sports_insight_service.gather_context(row, formatted)
+            thesis = context.get("pick_thesis") or str(
+                formatted.get("explanation") or row.get("explanation")
+                or "Insight is limited right now — scan data is still available above."
+            )
             result = {
-                "explanation": str(
-                    formatted.get("explanation") or row.get("explanation")
-                    or "Insight is limited right now — scan data is still available above."
-                ),
+                "explanation": thesis,
+                "why_atlas": thesis,
+                "pick_thesis": thesis,
                 "bullets": sports_insight_service._template_bullets(formatted, row, context),
                 "risks": sports_insight_service._template_risks(formatted, row, context),
                 "news_articles": context["news_articles"],
                 "stats_comparison": context["stats_comparison"],
+                "market": context.get("market"),
                 "source": "template",
                 "model": None,
             }
