@@ -26,7 +26,7 @@ class SignalRegistryService:
 
     async def register_batch(self, module: str, rows: list[dict[str, Any]]) -> dict[str, int]:
         """Register a batch of freshly saved signals (idempotent)."""
-        if module not in MODULES:
+        if module not in MODULES and module != PARLAY_MODULE:
             return {"registered": 0, "skipped": 0}
 
         registered = 0

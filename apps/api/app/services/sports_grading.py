@@ -159,3 +159,24 @@ def scores_from_game(game: dict[str, Any]) -> tuple[int, int, str, str] | None:
     if home_score is None or away_score is None:
         return None
     return home_score, away_score, home_team, away_team
+
+
+def grade_parlay_from_legs(
+    leg_outcomes: list[str],
+    *,
+    combined_odds_american: int | None = None,
+) -> tuple[str, float] | None:
+    """Combine per-leg outcomes into a parlay result.
+
+    Any loss → loss. All wins → win. Scratches with no losses → scratch.
+    """
+    if not leg_outcomes:
+        return None
+    if any(o == "loss" for o in leg_outcomes):
+        return "loss", -100.0
+    if any(o == "scratch" for o in leg_outcomes):
+        return "scratch", 0.0
+    if all(o == "win" for o in leg_outcomes):
+        odds = int(combined_odds_american or -110)
+        return "win", unit_bet_return_pct(odds, True)
+    return None

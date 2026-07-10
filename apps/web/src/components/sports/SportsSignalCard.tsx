@@ -8,6 +8,7 @@ import { SportsNewsPanel, type SportsNewsItem } from "@/components/sports/Sports
 import { ParlayLegToggle } from "@/components/sports/ManualParlayBuilder";
 import { AddToWatchlistButton } from "@/components/watchlist/AddToWatchlistButton";
 import { LogOutcomeButtons } from "@/components/performance/LogOutcomeButtons";
+import { PickPerformanceBadge } from "@/components/performance/PickPerformanceBadge";
 import { AtlasExplainButton } from "@/components/ai/AtlasExplainButton";
 import { sportBetMetadata } from "@/lib/watchlist-api";
 import { CATEGORY_SLUG_LABELS } from "@/lib/sports-categories";
@@ -172,6 +173,7 @@ export function SportsSignalCard({
               {CATEGORY_SLUG_LABELS[slug] ?? slug}
             </span>
           ))}
+          <PickPerformanceBadge module="sports" signalId={row.id} />
         </div>
       </div>
 

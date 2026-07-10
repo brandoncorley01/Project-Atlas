@@ -1,4 +1,4 @@
-"""Auto-grade expired picks across sports, stocks, and options."""
+"""Auto-grade expired picks across sports, stocks, options, and parlays."""
 
 from __future__ import annotations
 
@@ -11,7 +11,12 @@ from app.db.supabase_client import SupabaseClient
 from app.providers.sports.team_stats import fetch_scores_by_sport
 from app.providers.stocks.bars import fetch_daily_bars
 from app.services.performance_service import PerformanceService
-from app.services.sports_grading import grade_sports_pick, match_completed_game, scores_from_game
+from app.services.sports_grading import (
+    grade_parlay_from_legs,
+    grade_sports_pick,
+    match_completed_game,
+    scores_from_game,
+)
 from app.services.stock_options_grading import (
     grade_options_pick,
     grade_stock_pick,
@@ -59,9 +64,16 @@ class OutcomeResolverService:
         else:
             options = empty
 
-        resolved = sports["resolved"] + stocks["resolved"] + options["resolved"]
-        skipped = sports["skipped"] + stocks["skipped"] + options["skipped"]
-        pending = sports["pending"] + stocks["pending"] + options["pending"]
+        if module in (None, "parlay"):
+            parlay_limit = limit if module == "parlay" else max(8, limit // 3)
+            parlays = await self._resolve_parlays(limit=parlay_limit)
+            by_module["parlay"] = parlays
+        else:
+            parlays = empty
+
+        resolved = sports["resolved"] + stocks["resolved"] + options["resolved"] + parlays["resolved"]
+        skipped = sports["skipped"] + stocks["skipped"] + options["skipped"] + parlays["skipped"]
+        pending = sports["pending"] + stocks["pending"] + options["pending"] + parlays["pending"]
 
         return {
             "resolved": resolved,
@@ -322,3 +334,189 @@ class OutcomeResolverService:
             "skipped": skipped,
             "pending": max(0, len(candidates) - resolved - skipped),
         }
+
+    async def _resolve_parlays(self, *, limit: int) -> dict[str, Any]:
+        """Grade parlays once every leg's event has a final score."""
+        graded_ids = await self._graded_ids("parlay")
+        parlays = await self.db.select(
+            "parlays",
+            filters={"user_id": f"eq.{self.user_id}"},
+            order="created_at.asc",
+            limit=limit * 3,
+        )
+
+        candidates = [
+            row
+            for row in parlays
+            if PerformanceService._normalize_signal_id(str(row.get("id"))) not in graded_ids
+        ][:limit]
+
+        if not candidates:
+            return {"resolved": 0, "skipped": 0, "pending": 0}
+
+        for row in candidates:
+            sid = str(row.get("id") or "")
+            if not sid:
+                continue
+            existing = await self.performance.get_outcome(module="parlay", signal_id=sid)
+            if not existing:
+                try:
+                    await self.performance.log_outcome(
+                        module="parlay",
+                        signal_id=sid,
+                        outcome="pending",
+                        resolution_source="auto_scan",
+                        signal_snapshot=row,
+                    )
+                except Exception as exc:
+                    logger.warning("Register parlay %s for grading: %s", sid[:8], exc)
+
+        resolved = 0
+        skipped = 0
+        pending = 0
+
+        for row in candidates:
+            parlay_id = str(row.get("id") or "")
+            if not parlay_id:
+                skipped += 1
+                continue
+            try:
+                result = await self._grade_one_parlay(row)
+            except Exception as exc:
+                logger.warning("Auto-grade parlay %s: %s", parlay_id[:8], exc)
+                skipped += 1
+                continue
+            if result is None:
+                pending += 1
+                continue
+            outcome, return_pct = result
+            try:
+                await self.performance.log_outcome(
+                    module="parlay",
+                    signal_id=parlay_id,
+                    outcome=outcome,
+                    return_pct=return_pct,
+                    resolution_source="auto_parlay",
+                    signal_snapshot=row,
+                )
+                if str(row.get("status") or "") == "active":
+                    await self.db.update(
+                        "parlays",
+                        {"id": f"eq.{parlay_id}"},
+                        {"status": "closed"},
+                    )
+                resolved += 1
+            except Exception as exc:
+                logger.warning("Log parlay grade %s: %s", parlay_id[:8], exc)
+                skipped += 1
+
+        return {"resolved": resolved, "skipped": skipped, "pending": pending}
+
+    async def _grade_one_parlay(self, parlay: dict[str, Any]) -> tuple[str, float] | None:
+        parlay_id = str(parlay["id"])
+        legs = await self.db.select(
+            "parlay_legs",
+            filters={
+                "parlay_id": f"eq.{parlay_id}",
+                "user_id": f"eq.{self.user_id}",
+            },
+            order="leg_order.asc",
+            limit=12,
+        )
+        if not legs:
+            return None
+
+        signal_ids = [
+            str(leg.get("sports_signal_id"))
+            for leg in legs
+            if leg.get("sports_signal_id")
+        ]
+        signal_map: dict[str, dict[str, Any]] = {}
+        if signal_ids:
+            try:
+                rows = await self.db.select(
+                    "sports_signals",
+                    filters={
+                        "user_id": f"eq.{self.user_id}",
+                        "id": f"in.({','.join(signal_ids)})",
+                    },
+                    limit=len(signal_ids),
+                )
+                signal_map = {
+                    PerformanceService._normalize_signal_id(str(r["id"])): r for r in rows
+                }
+            except Exception as exc:
+                logger.warning("Load parlay leg signals: %s", exc)
+
+        now = datetime.now(UTC)
+        sport_keys: set[str] = set()
+        leg_signals: list[dict[str, Any]] = []
+
+        for leg in legs:
+            sid = leg.get("sports_signal_id")
+            sig = (
+                signal_map.get(PerformanceService._normalize_signal_id(str(sid)))
+                if sid
+                else None
+            )
+            if not sig:
+                sig = {
+                    "id": sid,
+                    "bet_type": leg.get("bet_type"),
+                    "selection": leg.get("selection"),
+                    "odds_american": leg.get("odds_american"),
+                    "event_name": leg.get("event_name"),
+                    "event_start": None,
+                    "scoring_snapshot": {"sport_key": None},
+                }
+            event_start = sig.get("event_start")
+            if event_start:
+                try:
+                    text = str(event_start).replace("Z", "+00:00")
+                    start = datetime.fromisoformat(text)
+                    if start.tzinfo is None:
+                        start = start.replace(tzinfo=UTC)
+                    if start > now:
+                        return None
+                except (TypeError, ValueError):
+                    pass
+            snap = sig.get("scoring_snapshot") or {}
+            key = snap.get("sport_key") or leg.get("sport")
+            if key:
+                sport_keys.add(str(key))
+            leg_signals.append(sig)
+
+        scores_by_sport = await fetch_scores_by_sport(sport_keys) if sport_keys else {}
+
+        leg_outcomes: list[str] = []
+        for sig in leg_signals:
+            snap = sig.get("scoring_snapshot") or {}
+            sport_key = str(snap.get("sport_key") or "")
+            games = list(scores_by_sport.get(sport_key) or [])
+            if not games and scores_by_sport:
+                for g_list in scores_by_sport.values():
+                    games.extend(g_list)
+            game = match_completed_game(sig, games)
+            if not game:
+                return None
+            parsed = scores_from_game(game)
+            if not parsed:
+                return None
+            home_score, away_score, home_team, away_team = parsed
+            graded = grade_sports_pick(
+                sig,
+                home_score=home_score,
+                away_score=away_score,
+                home_team=home_team,
+                away_team=away_team,
+            )
+            if not graded:
+                return None
+            leg_outcomes.append(graded[0])
+
+        odds = parlay.get("combined_odds_american")
+        try:
+            odds_int = int(odds) if odds is not None else None
+        except (TypeError, ValueError):
+            odds_int = None
+        return grade_parlay_from_legs(leg_outcomes, combined_odds_american=odds_int)

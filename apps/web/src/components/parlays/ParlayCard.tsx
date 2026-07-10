@@ -5,6 +5,8 @@ import { useState } from "react";
 import { ScoreBadge } from "@/components/ui/ScoreBadge";
 import { BookOddsStrip, type BookOddsLine } from "@/components/sports/BookOddsStrip";
 import { AddToWatchlistButton } from "@/components/watchlist/AddToWatchlistButton";
+import { LogOutcomeButtons } from "@/components/performance/LogOutcomeButtons";
+import { PickPerformanceBadge } from "@/components/performance/PickPerformanceBadge";
 import { parlayMetadata } from "@/lib/watchlist-api";
 import { PARLAY_CATEGORY_LABELS } from "@/lib/parlay-categories";
 
@@ -117,6 +119,7 @@ export function ParlayCard({ row, rank }: { row: Parlay; rank: number }) {
             {PARLAY_CATEGORY_LABELS[slug] ?? slug}
           </span>
         ))}
+        <PickPerformanceBadge module="parlay" signalId={row.id} />
       </div>
 
       <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(220px,260px)] lg:items-start">
@@ -187,6 +190,8 @@ export function ParlayCard({ row, rank }: { row: Parlay; rank: number }) {
           My saved parlays →
         </Link>
       </div>
+
+      <LogOutcomeButtons module="parlay" signalId={row.id} compact className="mt-3" />
 
       {expanded && (
         <div className="mt-4 space-y-3 border-t border-border pt-4">

@@ -1,11 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { LogOutcomeButtons } from "@/components/performance/LogOutcomeButtons";
+import {
+  WatchlistPerformanceControls,
+  performanceEntryKey,
+  performanceStatusKey,
+} from "@/components/watchlist/WatchlistPerformanceControls";
 import { useWatchlist } from "@/components/watchlist/WatchlistProvider";
 import { FilterTabs } from "@/components/ui/FilterTabs";
+import type { PerformanceEntry } from "@/components/performance/PerformanceView";
+import { fetchPerformanceHistory } from "@/lib/performance-api";
 import { addWatchlistItem, removeWatchlistItem } from "@/lib/watchlist-api";
 import {
   effectiveItemType,
@@ -101,6 +107,15 @@ function badgeColor(type: string) {
   return "bg-background text-muted";
 }
 
+function buildStatusMap(rows: PerformanceEntry[]): Record<string, PerformanceEntry> {
+  const map: Record<string, PerformanceEntry> = {};
+  for (const row of rows) {
+    if (!row.module || !row.signal_id) continue;
+    map[performanceEntryKey(row.module, row.signal_id)] = row;
+  }
+  return map;
+}
+
 export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps) {
   const { items, markSaved, markRemoved, loading: watchlistLoading } = useWatchlist();
   const searchParams = useSearchParams();
@@ -109,6 +124,7 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [statusMap, setStatusMap] = useState<Record<string, PerformanceEntry>>({});
   const [activeTab, setActiveTab] = useState<WatchlistTab>(
     ["all", "stocks", "options", "bets", "parlays"].includes(initialTab) ? initialTab : "all",
   );
@@ -116,6 +132,38 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
   const displayItems = items.length > 0 ? items : initialItems;
   const counts = useMemo(() => watchlistTabCounts(displayItems), [displayItems]);
   const displayed = useMemo(() => filterWatchlistByTab(displayItems, activeTab), [displayItems, activeTab]);
+
+  const refreshStatuses = useCallback(async () => {
+    try {
+      const history = await fetchPerformanceHistory(400);
+      setStatusMap(buildStatusMap(history));
+    } catch {
+      /* non-fatal */
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshStatuses();
+    function onUpdated() {
+      void refreshStatuses();
+    }
+    window.addEventListener("atlas:performance-updated", onUpdated);
+    return () => window.removeEventListener("atlas:performance-updated", onUpdated);
+  }, [refreshStatuses]);
+
+  const trackedCount = useMemo(() => {
+    let n = 0;
+    for (const item of displayItems) {
+      const key = performanceStatusKey(item);
+      if (key && statusMap[key]) n += 1;
+    }
+    return n;
+  }, [displayItems, statusMap]);
+
+  const trackableCount = useMemo(
+    () => displayItems.filter((item) => performanceTrackingForItem(item) != null).length,
+    [displayItems],
+  );
 
   async function syncToPerformance() {
     setSyncing(true);
@@ -126,8 +174,7 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
       );
       const result = await syncWatchlistToPerformance();
       setMessage(formatWatchlistSyncMessage(result));
-      // syncWatchlistToPerformance already notifies performance; do not re-fire
-      // atlas:watchlist-updated here — that re-triggers sync and can loop.
+      await refreshStatuses();
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Could not sync watchlist");
     }
@@ -186,7 +233,7 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
 
       <FilterTabs
         label="Filter by type"
-        hint="Everything you save from Sports, Parlays, Options, and Stocks lands here and is tracked in Performance."
+        hint="Saved picks can be sent to Performance one-by-one or in bulk. Scanned picks outside the watchlist are tracked and auto-graded when they settle."
         allLabel="All"
         items={TAB_ITEMS.map((t) => ({ id: t.id, label: t.label, count: counts[t.id as WatchlistTab] }))}
         activeId={activeTab === "all" ? null : activeTab}
@@ -206,7 +253,7 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
           disabled={syncing || loading || displayItems.length === 0}
           className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
         >
-          {syncing ? "Syncing…" : "Sync to Performance"}
+          {syncing ? "Syncing…" : "Sync all to Performance"}
         </button>
         <Link
           href="/performance"
@@ -215,7 +262,9 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
           Open Performance →
         </Link>
         <p className="text-xs text-muted">
-          Pushes saved bets, stocks, options, and parlays into Performance for grading.
+          {trackableCount > 0
+            ? `${trackedCount} of ${trackableCount} trackable picks in Performance`
+            : "Save bets, stocks, options, or parlays to track them here."}
         </p>
       </div>
 
@@ -252,7 +301,8 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
             const href = itemHref(item);
             const badge = itemBadge(item);
             const meta = item.metadata ?? {};
-            const tracking = performanceTrackingForItem(item);
+            const key = performanceStatusKey(item);
+            const entry = key ? statusMap[key] ?? null : null;
             return (
               <li key={item.id} className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0 flex-1">
@@ -266,11 +316,6 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
                       </Link>
                     ) : (
                       <span className="font-medium">{itemTitle(item)}</span>
-                    )}
-                    {tracking && (
-                      <span className="rounded-full bg-accent/15 px-2 py-0.5 text-[10px] font-medium text-accent">
-                        Tracking
-                      </span>
                     )}
                   </div>
                   <p className="mt-0.5 truncate text-sm text-muted">{itemSubtitle(item)}</p>
@@ -296,16 +341,16 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
                       Opportunity {Number(meta.opportunity_score).toFixed(0)}
                     </p>
                   )}
-                  {tracking && (
-                    <div className="mt-3 rounded-lg border border-border/60 bg-surface-elevated p-3">
-                      <LogOutcomeButtons
-                        module={tracking.module}
-                        signalId={tracking.signalId}
-                        signalSnapshot={tracking.signalSnapshot}
-                        compact
-                      />
-                    </div>
-                  )}
+                  <WatchlistPerformanceControls
+                    item={item}
+                    entry={entry}
+                    onRegistered={(next) => {
+                      const k = performanceStatusKey(item);
+                      if (!k) return;
+                      setStatusMap((prev) => ({ ...prev, [k]: next }));
+                      void refreshStatuses();
+                    }}
+                  />
                 </div>
                 <button
                   type="button"
@@ -339,11 +384,7 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
             <Link href="/stocks" className="text-accent hover:underline">
               Stocks
             </Link>
-            . Saved picks are tracked in{" "}
-            <Link href="/performance" className="text-accent hover:underline">
-              Performance
-            </Link>
-            .
+            . Use <strong className="text-foreground">Send to Performance</strong> on each pick, or sync all.
           </p>
         </div>
       )}

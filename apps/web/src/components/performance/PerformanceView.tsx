@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { LogOutcomeButtons } from "@/components/performance/LogOutcomeButtons";
 import { buildClientCoachInsight, type CoachInsight } from "@/lib/performance-coach";
 import {
   backfillPerformanceTracking,
@@ -56,7 +57,7 @@ const SECTORS = [
   { id: "sports", label: "Sports", canAutoGrade: true },
   { id: "stock", label: "Stocks", canAutoGrade: true },
   { id: "options", label: "Options", canAutoGrade: true },
-  { id: "parlay", label: "Parlays", canAutoGrade: false },
+  { id: "parlay", label: "Parlays", canAutoGrade: true },
 ] as const;
 
 type SectorId = (typeof SECTORS)[number]["id"];
@@ -255,7 +256,19 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
       await refreshSummary();
       if (cancelled) return;
       void loadCoachInsight(false);
-      // One bootstrap sync — then backfill only if still empty
+      // Auto-grade settled picks (sports/stocks/options/parlays) on page load
+      try {
+        const token = await getToken();
+        await fetch(`${getApiUrl()}/engine/resolve-outcomes`, {
+          method: "POST",
+          headers: apiRequestHeaders(token),
+          credentials: usesBffProxy() ? "include" : "same-origin",
+        });
+        if (!cancelled) await refreshSummary();
+      } catch {
+        /* non-fatal — manual Grade buttons still work */
+      }
+      if (cancelled) return;
       const sync = await syncWatchlist(true);
       if (cancelled || didAutoBackfill.current) return;
       didAutoBackfill.current = true;
@@ -270,8 +283,7 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
       void refreshSummary();
     }
     function onWatchlistUpdated() {
-      // Refresh only — full sync is explicit (button / mount). Re-syncing here
-      // re-entered after notify and blew the stack with summary recursion.
+      // Refresh only — full sync is explicit (button / mount).
       void refreshSummary();
     }
     window.addEventListener("atlas:performance-updated", onUpdated);
@@ -379,9 +391,9 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
       <section className="rounded-xl border border-violet-500/30 bg-violet-500/5 p-4">
         <h2 className="text-sm font-semibold text-foreground">How Atlas learns</h2>
         <p className="mt-2 text-sm text-muted">
-          Tap <strong className="text-foreground">Win</strong> or <strong className="text-foreground">Loss</strong> on
-          any pick card after it settles. <strong className="text-foreground">Every scan is auto-tracked</strong> — Atlas
-          also grades sports, stocks, and options when they expire. After enough results, thresholds tighten automatically.
+          Every scanned pick is auto-tracked. Sports, stocks, options, and parlays auto-grade after
+          the event or expiration window. Watchlist picks show a status chip and can be sent to
+          Performance one-by-one. Results below feed the coach and tighten future thresholds.
         </p>
         {summary.learning_active && learningNotes.length > 0 ? (
           <ul className="mt-3 space-y-1 text-sm text-violet-200">
@@ -578,14 +590,7 @@ function SectorSection({
           >
             {isGrading ? "Grading…" : `Grade ${sector.label.toLowerCase()}`}
           </button>
-        ) : (
-          <Link
-            href="/watchlist"
-            className="rounded-lg border border-border px-4 py-2 text-sm text-muted hover:bg-surface-hover"
-          >
-            Grade on watchlist
-          </Link>
-        )}
+        ) : null}
       </div>
 
       {coachNarrative && (
@@ -613,24 +618,15 @@ function SectorSection({
       ) : (
         <div className="mt-4 rounded-lg border border-dashed border-border bg-background/30 p-6 text-center text-sm text-muted">
           <p>No graded {sector.label.toLowerCase()} picks yet.</p>
-          {sector.canAutoGrade ? (
-            <p className="mt-2">
-              Tap <strong className="text-foreground">Grade {sector.label.toLowerCase()}</strong> when games or
-              positions settle, or log Win/Loss on your{" "}
-              <Link href="/watchlist" className="text-accent hover:underline">
-                watchlist
-              </Link>
-              .
-            </p>
-          ) : (
-            <p className="mt-2">
-              Save parlays to your{" "}
-              <Link href="/watchlist" className="text-accent hover:underline">
-                watchlist
-              </Link>{" "}
-              and tap Win/Loss when they settle.
-            </p>
-          )}
+          <p className="mt-2">
+            Tap <strong className="text-foreground">Grade {sector.label.toLowerCase()}</strong> when
+            games or positions settle. Scanned picks auto-track; watchlist picks can be sent
+            individually from{" "}
+            <Link href="/watchlist" className="text-accent hover:underline">
+              Watchlist
+            </Link>
+            .
+          </p>
         </div>
       )}
 
@@ -639,15 +635,25 @@ function SectorSection({
           <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">
             Awaiting grade ({pending.length})
           </h3>
-          <ul className="mt-2 space-y-1 text-sm text-muted">
-            {pending.slice(0, 5).map((row) => (
-              <li key={row.id} className="flex justify-between gap-2 border-b border-border/40 py-1">
-                <span>{row.signal_label ?? row.signal_id.slice(0, 8)}</span>
-                <span className="shrink-0 text-xs">pending</span>
+          <ul className="mt-2 divide-y divide-border/40 rounded-lg border border-border/60">
+            {pending.slice(0, 12).map((row) => (
+              <li key={row.id} className="px-3 py-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-sm text-foreground">
+                    {row.signal_label ?? row.signal_id.slice(0, 8)}
+                  </span>
+                  <span className="text-[10px] uppercase tracking-wide text-sky-300">pending</span>
+                </div>
+                <LogOutcomeButtons
+                  module={sector.id}
+                  signalId={row.signal_id}
+                  compact
+                  className="mt-2"
+                />
               </li>
             ))}
-            {pending.length > 5 && (
-              <li className="text-xs text-muted">+ {pending.length - 5} more on watchlist</li>
+            {pending.length > 12 && (
+              <li className="px-3 py-2 text-xs text-muted">+ {pending.length - 12} more tracked</li>
             )}
           </ul>
         </div>

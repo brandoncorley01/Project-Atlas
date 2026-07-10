@@ -6,6 +6,7 @@ import { BudgetTag } from "@/components/ui/BudgetTag";
 import { TradePlanPanel, type TradePlan } from "@/components/options/TradePlanPanel";
 import { AddToWatchlistButton } from "@/components/watchlist/AddToWatchlistButton";
 import { LogOutcomeButtons } from "@/components/performance/LogOutcomeButtons";
+import { PickPerformanceBadge } from "@/components/performance/PickPerformanceBadge";
 import { AtlasExplainButton } from "@/components/ai/AtlasExplainButton";
 import { optionSignalMetadata } from "@/lib/watchlist-api";
 import { useState } from "react";
@@ -85,6 +86,7 @@ export function OptionSignalCard({ row, rank }: { row: OptionSignal; rank: numbe
                 📰 Catalyst
               </span>
             )}
+            <PickPerformanceBadge module="options" signalId={row.id} />
           </div>
           <h2 className="mt-1 text-xl font-bold">
             {row.underlying} {optionType} ${Number(row.strike ?? 0).toFixed(0)}

@@ -140,7 +140,11 @@ class ParlayService:
 
         if saved_parlays:
             from app.services.alert_service import AlertService
+            from app.services.signal_registry_service import SignalRegistryService
 
+            await SignalRegistryService(self.db, self.user_id).register_batch(
+                "parlay", saved_parlays
+            )
             await AlertService(self.db, self.user_id).notify_high_score_signals(
                 "parlay",
                 saved_parlays,
@@ -484,6 +488,12 @@ class ParlayService:
             if leg.get("sports_signal_id")
         ]
         signal_map = await self._load_signals_for_ids(signal_ids)
+
+        from app.services.signal_registry_service import SignalRegistryService
+
+        await SignalRegistryService(self.db, self.user_id).register_batch(
+            "parlay", [parlay_row]
+        )
         return self.format_parlay(parlay_row, proposal["legs"], signal_map=signal_map)
 
     async def get_legs(self, parlay_id: str) -> list[dict[str, Any]]:

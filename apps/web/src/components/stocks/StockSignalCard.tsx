@@ -4,6 +4,7 @@ import { ScoreBadge } from "@/components/ui/ScoreBadge";
 import { StockChart, type ChartBar } from "@/components/charts/StockChart";
 import { AddToWatchlistButton } from "@/components/watchlist/AddToWatchlistButton";
 import { LogOutcomeButtons } from "@/components/performance/LogOutcomeButtons";
+import { PickPerformanceBadge } from "@/components/performance/PickPerformanceBadge";
 import { AtlasExplainButton } from "@/components/ai/AtlasExplainButton";
 import { stockSignalMetadata } from "@/lib/watchlist-api";
 import { formatRiskReward, midpoint, riskRewardRatio } from "@/lib/trade-metrics";
@@ -105,6 +106,7 @@ export function StockSignalCard({
             📰 Catalyst
           </span>
         )}
+        {canSaveOutcome && <PickPerformanceBadge module="stock" signalId={row.id} />}
       </div>
 
       <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(220px,260px)] lg:items-start">
