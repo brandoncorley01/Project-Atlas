@@ -46,6 +46,16 @@ function formatRow(row: Record<string, unknown>): WatchlistItem {
   return { ...item, item_type: effectiveItemType(item) };
 }
 
+async function ensureProfile(
+  supabase: ReturnType<typeof createClient>,
+  userId: string,
+  email: string,
+): Promise<void> {
+  const { data } = await supabase.from("profiles").select("id").eq("id", userId).maybeSingle();
+  if (data?.id) return;
+  await supabase.from("profiles").insert({ id: userId, email });
+}
+
 async function ensureDefaultWatchlist(
   supabase: ReturnType<typeof createClient>,
   userId: string,
@@ -81,6 +91,8 @@ export async function fetchWatchlistDirect(): Promise<{
     } = await supabase.auth.getSession();
     if (!session?.user) return null;
 
+    await ensureProfile(supabase, session.user.id, session.user.email ?? "");
+
     const watchlistId = await ensureDefaultWatchlist(supabase, session.user.id);
     if (!watchlistId) return null;
 
@@ -113,6 +125,8 @@ export async function addWatchlistItemDirect(payload: {
       data: { session },
     } = await supabase.auth.getSession();
     if (!session?.user) return null;
+
+    await ensureProfile(supabase, session.user.id, session.user.email ?? "");
 
     const watchlistId = await ensureDefaultWatchlist(supabase, session.user.id);
     if (!watchlistId) return null;

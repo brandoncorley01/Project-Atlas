@@ -1,7 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { apiRequestHeaders, getApiUrl, usesBffProxy } from "@/lib/api-url";
+import {
+  getPerformanceOutcome,
+  logPerformanceOutcome,
+} from "@/lib/performance-api";
 
 type Outcome = "win" | "loss" | "scratch";
 
@@ -27,18 +30,6 @@ function normalizeSignalId(signalId: string): string {
   return UUID_RE.test(trimmed) ? trimmed.toLowerCase() : trimmed;
 }
 
-async function getToken() {
-  if (usesBffProxy()) return undefined;
-  const { createClient } = await import("@/lib/supabase/client");
-  const { data } = await createClient().auth.getSession();
-  return data.session?.access_token ?? undefined;
-}
-
-const fetchInit = (token?: string): RequestInit => ({
-  headers: apiRequestHeaders(token),
-  credentials: usesBffProxy() ? "include" : "same-origin",
-});
-
 export function LogOutcomeButtons({
   module,
   signalId,
@@ -52,14 +43,9 @@ export function LogOutcomeButtons({
   const [message, setMessage] = useState<string | null>(null);
 
   const loadOutcome = useCallback(async () => {
-    const token = await getToken();
     try {
-      const params = new URLSearchParams({ module, signal_id: normalizedId });
-      const res = await fetch(`${getApiUrl()}/performance/outcome?${params}`, fetchInit(token));
-      if (res.ok) {
-        const data = await res.json();
-        setEntry(data.outcome ?? null);
-      }
+      const row = await getPerformanceOutcome(module, normalizedId);
+      setEntry(row);
     } catch {
       /* non-fatal */
     }
@@ -72,30 +58,24 @@ export function LogOutcomeButtons({
   async function log(outcome: Outcome) {
     setLoading(true);
     setMessage(null);
-    const token = await getToken();
     try {
-      const res = await fetch(`${getApiUrl()}/performance`, {
-        method: "POST",
-        ...fetchInit(token),
-        body: JSON.stringify({
-          module,
-          signal_id: normalizedId,
-          outcome,
-          resolution_source: "manual",
-          signal_snapshot: signalSnapshot,
-        }),
+      const saved = await logPerformanceOutcome({
+        module,
+        signalId: normalizedId,
+        outcome,
+        resolutionSource: "manual",
+        signalSnapshot,
       });
-      const body = await res.json();
-      if (!res.ok) {
-        setMessage(typeof body.detail === "string" ? body.detail : "Could not log");
+      if (!saved) {
+        setMessage("Could not log — sign in and try again");
         setLoading(false);
         return;
       }
-      setEntry(body.entry);
+      setEntry(saved);
       setMessage("Logged — Atlas will use this to improve future picks");
       window.dispatchEvent(new Event("atlas:performance-updated"));
-    } catch {
-      setMessage("Backend not responding");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Backend not responding");
     }
     setLoading(false);
   }

@@ -2,8 +2,14 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { apiRequestHeaders, getApiUrl, usesBffProxy } from "@/lib/api-url";
 import { buildClientCoachInsight, type CoachInsight } from "@/lib/performance-coach";
+import {
+  backfillPerformanceTracking,
+  fetchPerformanceHistory,
+  fetchPerformanceSummary,
+  updatePerformanceOutcome,
+} from "@/lib/performance-api";
+import { apiRequestHeaders, getApiUrl, usesBffProxy } from "@/lib/api-url";
 
 export interface PerformanceEntry {
   id: string;
@@ -62,6 +68,7 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
   const [coachInsight, setCoachInsight] = useState<CoachInsight | null>(null);
   const [coachLoading, setCoachLoading] = useState(true);
   const [coachError, setCoachError] = useState<string | null>(null);
+  const [dataSource, setDataSource] = useState<"api" | "direct" | null>(null);
   const didAutoBackfill = useRef(false);
 
   async function getToken() {
@@ -74,23 +81,38 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
   const refreshSummary = useCallback(async () => {
     const token = await getToken();
     const creds = usesBffProxy() ? "include" : ("same-origin" as RequestCredentials);
-    const sumRes = await fetch(`${getApiUrl()}/performance/summary?days=30`, {
-      headers: apiRequestHeaders(token),
-      cache: "no-store",
-      credentials: creds,
-    });
-    if (sumRes.ok) {
-      setSummary(await sumRes.json());
+
+    let usedApi = false;
+    try {
+      const sumRes = await fetch(`${getApiUrl()}/performance/summary?days=30`, {
+        headers: apiRequestHeaders(token),
+        cache: "no-store",
+        credentials: creds,
+      });
+      const histRes = await fetch(`${getApiUrl()}/performance/history?limit=200`, {
+        headers: apiRequestHeaders(token),
+        cache: "no-store",
+        credentials: creds,
+      });
+      if (sumRes.ok && histRes.ok) {
+        setSummary(await sumRes.json());
+        const data = await histRes.json();
+        setHistory(data.items ?? []);
+        setDataSource("api");
+        usedApi = true;
+      }
+    } catch {
+      /* fall through */
     }
 
-    const histRes = await fetch(`${getApiUrl()}/performance/history?limit=200`, {
-      headers: apiRequestHeaders(token),
-      cache: "no-store",
-      credentials: creds,
-    });
-    if (histRes.ok) {
-      const data = await histRes.json();
-      setHistory(data.items ?? []);
+    if (!usedApi) {
+      const [sum, hist] = await Promise.all([
+        fetchPerformanceSummary(30),
+        fetchPerformanceHistory(200),
+      ]);
+      setSummary(sum);
+      setHistory(hist);
+      setDataSource("direct");
     }
   }, []);
 
@@ -130,38 +152,29 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
     async (silent = false) => {
       if (!silent) setLoading(true);
       if (!silent) setMessage(null);
-      const token = await getToken();
       try {
-        const res = await fetch(`${getApiUrl()}/ai/backfill-tracking`, {
-          method: "POST",
-          headers: apiRequestHeaders(token),
-          credentials: usesBffProxy() ? "include" : "same-origin",
-        });
-        const body = await res.json().catch(() => ({}));
-        if (res.ok) {
-          const registered = Number(body.registered ?? 0);
-          const byMod = body.by_module as Record<string, { registered?: number }> | undefined;
-          const parts = byMod
-            ? Object.entries(byMod)
-                .filter(([, v]) => (v?.registered ?? 0) > 0)
-                .map(([k, v]) => `${k}: ${v?.registered}`)
-            : [];
-          if (!silent || registered > 0) {
-            setMessage(
-              registered > 0
-                ? `Registered ${registered} pick(s) for tracking${parts.length ? ` (${parts.join(", ")})` : ""}`
-                : "All past picks are already tracked — try Grade on a sector below",
-            );
-          }
-          await refreshSummary();
-          void loadCoachInsight(true);
-        } else if (!silent) {
-          const detail =
-            typeof body.detail === "string" ? body.detail : "Could not register past picks";
-          setMessage(detail);
+        const result = await backfillPerformanceTracking();
+        if (result.source === "direct") {
+          setDataSource("direct");
         }
-      } catch {
-        if (!silent) setMessage("Backfill failed — backend not responding");
+        const registered = result.registered;
+        const parts = Object.entries(result.by_module)
+          .filter(([, v]) => (v?.registered ?? 0) > 0)
+          .map(([k, v]) => `${k}: ${v?.registered}`);
+        if (!silent || registered > 0) {
+          const via = result.source === "direct" ? " (saved directly)" : "";
+          setMessage(
+            registered > 0
+              ? `Registered ${registered} pick(s) for tracking${via}${parts.length ? ` — ${parts.join(", ")}` : ""}`
+              : "All past picks are already tracked — try Grade on a sector below",
+          );
+        }
+        await refreshSummary();
+        void loadCoachInsight(true);
+      } catch (err) {
+        if (!silent) {
+          setMessage(err instanceof Error ? err.message : "Could not register past picks");
+        }
       }
       if (!silent) setLoading(false);
     },
@@ -349,6 +362,11 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
         </div>
 
         {message && <p className="mt-3 text-sm text-muted">{message}</p>}
+        {dataSource === "direct" && (
+          <p className="mt-2 text-xs text-amber-300/80">
+            Tracking via Supabase directly — API backend unreachable. Grading and saves still work.
+          </p>
+        )}
       </section>
 
       <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
@@ -579,26 +597,13 @@ function OutcomeRow({
     setSaving(true);
     setError(null);
     try {
-      const { apiRequestHeaders, getApiUrl, usesBffProxy } = await import("@/lib/api-url");
-      let token: string | undefined;
-      if (!usesBffProxy()) {
-        const { createClient } = await import("@/lib/supabase/client");
-        const { data } = await createClient().auth.getSession();
-        token = data.session?.access_token ?? undefined;
-      }
-      const body: Record<string, unknown> = { outcome };
-      if (returnPct.trim() !== "") {
-        body.return_pct = Number(returnPct);
-      }
-      const res = await fetch(`${getApiUrl()}/performance/${row.id}`, {
-        method: "PATCH",
-        headers: apiRequestHeaders(token),
-        credentials: usesBffProxy() ? "include" : "same-origin",
-        body: JSON.stringify(body),
+      const returnVal = returnPct.trim() !== "" ? Number(returnPct) : undefined;
+      const saved = await updatePerformanceOutcome(row.id, {
+        outcome,
+        returnPct: returnVal,
       });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error((data as { detail?: string }).detail ?? "Update failed");
+      if (!saved) {
+        throw new Error("Update failed");
       }
       setEditing(false);
       await onUpdated();
