@@ -172,6 +172,7 @@ class AiNarrativeService:
         template = {
             "narrative": self._template_coach(summary),
             "focus_areas": self._coach_focus_areas(summary),
+            "by_module": self._coach_by_module(summary),
             "generated_at": datetime.now(UTC).isoformat(),
             "source": "template",
             "model": None,
@@ -207,6 +208,7 @@ class AiNarrativeService:
             result = {
                 "narrative": str(llm_result.get("narrative") or template["narrative"])[:800],
                 "focus_areas": [str(f)[:120] for f in (llm_result.get("focus_areas") or [])[:3]],
+                "by_module": template.get("by_module") or {},
                 "generated_at": datetime.now(UTC).isoformat(),
                 "source": "openai",
                 "model": llm_service.model,
@@ -282,6 +284,41 @@ class AiNarrativeService:
         else:
             parts.append("Keep grading picks consistently — calibration kicks in after 8 closed results.")
         return " ".join(parts)
+
+    @staticmethod
+    def _coach_by_module(summary: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        by_mod = summary.get("by_module") or {}
+        result: dict[str, dict[str, Any]] = {}
+        for mod, data in by_mod.items():
+            if not isinstance(data, dict):
+                continue
+            total = data.get("total_signals") or 0
+            pending = data.get("pending") or 0
+            win_rate = data.get("win_rate")
+            wins = data.get("wins") or 0
+            losses = data.get("losses") or 0
+            if total == 0 and pending == 0:
+                continue
+            parts: list[str] = []
+            if total > 0:
+                parts.append(f"{total} graded pick{'s' if total != 1 else ''} in the last 30 days.")
+                if win_rate is not None:
+                    parts.append(f"Win rate {win_rate}%.")
+                elif wins or losses:
+                    parts.append(f"Record: {wins}W / {losses}L.")
+            if pending > 0:
+                parts.append(f"{pending} still awaiting a grade.")
+            if losses > wins and total >= 3:
+                parts.append("Review recent losses — tighten entries or reduce size.")
+            elif not parts:
+                parts.append("Save picks to your watchlist to start tracking this sector.")
+            result[str(mod)] = {
+                "narrative": " ".join(parts),
+                "win_rate": win_rate,
+                "total_signals": total,
+                "pending": pending,
+            }
+        return result
 
     @staticmethod
     def _coach_focus_areas(summary: dict[str, Any]) -> list[str]:

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.db.supabase_client import SupabaseClient
 from app.dependencies import get_access_token, get_current_user_id
@@ -90,9 +90,15 @@ async def resolve_outcomes(
     user_id: str = Depends(get_current_user_id),
     token: str = Depends(get_access_token),
     limit: int = 25,
+    module: str | None = None,
 ) -> dict:
     """Auto-grade finished sports, stock, and options picks for Atlas learning."""
-    result = await run_resolve_outcomes_job(user_id, token, limit=limit)
+    if module is not None and module not in ("sports", "stock", "options"):
+        raise HTTPException(
+            status_code=400,
+            detail="module must be one of: sports, stock, options",
+        )
+    result = await run_resolve_outcomes_job(user_id, token, limit=limit, module=module)
     set_last_job("resolve_outcomes")
     return result
 

@@ -34,11 +34,30 @@ class OutcomeResolverService:
         self.user_id = user_id
         self.performance = PerformanceService(db, user_id)
 
-    async def resolve_pending(self, *, limit: int = 40) -> dict[str, Any]:
+    async def resolve_pending(self, *, limit: int = 40, module: str | None = None) -> dict[str, Any]:
         """Grade expired signals that have no logged outcome yet."""
-        sports = await self._resolve_sports(limit=limit)
-        stocks = await self._resolve_stocks(limit=limit // 2)
-        options = await self._resolve_options(limit=limit // 2)
+        empty = {"resolved": 0, "skipped": 0, "pending": 0}
+        by_module: dict[str, dict[str, Any]] = {}
+
+        if module in (None, "sports"):
+            sports = await self._resolve_sports(limit=limit if module == "sports" else limit)
+            by_module["sports"] = sports
+        else:
+            sports = empty
+
+        if module in (None, "stock"):
+            stock_limit = limit if module == "stock" else limit // 2
+            stocks = await self._resolve_stocks(limit=stock_limit)
+            by_module["stock"] = stocks
+        else:
+            stocks = empty
+
+        if module in (None, "options"):
+            options_limit = limit if module == "options" else limit // 2
+            options = await self._resolve_options(limit=options_limit)
+            by_module["options"] = options
+        else:
+            options = empty
 
         resolved = sports["resolved"] + stocks["resolved"] + options["resolved"]
         skipped = sports["skipped"] + stocks["skipped"] + options["skipped"]
@@ -48,11 +67,8 @@ class OutcomeResolverService:
             "resolved": resolved,
             "skipped": skipped,
             "pending": pending,
-            "by_module": {
-                "sports": sports,
-                "stock": stocks,
-                "options": options,
-            },
+            "module": module,
+            "by_module": by_module,
         }
 
     async def _graded_ids(self, module: str | None = None) -> set[str]:
