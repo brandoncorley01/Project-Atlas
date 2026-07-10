@@ -56,8 +56,18 @@ Open [http://localhost:8000/docs](http://localhost:8000/docs)
 ### Database
 
 1. Create a Supabase project at [supabase.com](https://supabase.com)
-2. Run `supabase/migrations/20250629000000_initial_schema.sql` in the SQL editor
+2. Run migrations in `supabase/migrations/` (including `20250710000001_sports_intelligence.sql` for expert intelligence)
 3. Copy URL and keys into `.env` files
+
+### Sports Intelligence (optional)
+
+Enable in `apps/api/.env`:
+
+```env
+ATLAS_EXPERT_INTELLIGENCE_ENABLED=true
+```
+
+See [docs/sports-intelligence-overview.md](docs/sports-intelligence-overview.md).
 
 ## Documentation
 
@@ -71,6 +81,8 @@ Open [http://localhost:8000/docs](http://localhost:8000/docs)
 | [docs/06-data-providers.md](docs/06-data-providers.md) | External APIs |
 | [docs/07-ui-blueprint.md](docs/07-ui-blueprint.md) | UI wireframes |
 | [docs/08-build-roadmap.md](docs/08-build-roadmap.md) | Build milestones |
+| [docs/sports-intelligence-overview.md](docs/sports-intelligence-overview.md) | Expert intelligence layer |
+| [docs/atlas-intelligence-layer-plan.md](docs/atlas-intelligence-layer-plan.md) | Implementation plan |
 
 ## Disclaimer
 

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Header, HTTPException, status
 
 from app.config import settings
 from app.jobs.nightly_learning import run_nightly_learning_job
+from app.jobs.refresh_sports_intelligence import run_refresh_sports_intelligence_job
 
 router = APIRouter()
 
@@ -28,6 +29,15 @@ async def trigger_nightly_learning(
     """Backfill tracking, auto-grade picks, rollup performance, refresh AI intelligence."""
     _verify_cron_secret(x_cron_secret)
     return await run_nightly_learning_job()
+
+
+@router.post("/internal/jobs/refresh-sports-intelligence")
+async def trigger_refresh_sports_intelligence(
+    x_cron_secret: Annotated[str | None, Header(alias="X-Cron-Secret")] = None,
+) -> dict:
+    """Refresh cached expert/news intelligence for active sports signals."""
+    _verify_cron_secret(x_cron_secret)
+    return await run_refresh_sports_intelligence_job()
 
 
 @router.get("/internal/jobs/health")

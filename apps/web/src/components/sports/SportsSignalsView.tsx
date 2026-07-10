@@ -23,6 +23,7 @@ import {
   type SportsWindowKey,
 } from "@/lib/sports-filters";
 import { apiRequestHeaders, getApiUrl, usesBffProxy } from "@/lib/api-url";
+import { fetchIntelligenceStatus } from "@/lib/sports-intelligence-api";
 
 interface SportsSignalsViewProps {
   initialItems: SportsSignal[];
@@ -44,7 +45,12 @@ export function SportsSignalsView({
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [parlaySelection, setParlaySelection] = useState<Set<string>>(new Set());
+  const [intelligenceEnabled, setIntelligenceEnabled] = useState(false);
   const { status: oddsStatus, refresh: refreshOddsStatus } = useOddsApiStatus();
+
+  useEffect(() => {
+    void fetchIntelligenceStatus().then((s) => setIntelligenceEnabled(s.enabled));
+  }, []);
 
   function toggleParlayLeg(id: string) {
     setParlaySelection((prev) => {
@@ -226,6 +232,13 @@ export function SportsSignalsView({
       />
 
       <OddsQuotaBanner status={oddsStatus} />
+
+      {intelligenceEnabled && (
+        <div className="mb-4 rounded-xl border border-violet-500/30 bg-violet-500/10 px-4 py-3 text-sm text-violet-100">
+          <strong className="text-violet-200">Atlas Intelligence</strong> is active — open any pick
+          for expert consensus, news context, and confidence adjustments.
+        </div>
+      )}
 
       <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="text-sm text-muted">

@@ -296,6 +296,17 @@ class SportsRefreshService:
                 message_fn=lambda s: str(s.get("recommendation") or s.get("selection") or "New sports signal"),
             )
 
+            if config.settings.is_intelligence_enabled():
+                try:
+                    from app.sports_intelligence.service import SportsIntelligenceService
+
+                    await SportsIntelligenceService(self.db, self.user_id).refresh_active_signals(
+                        saved,
+                        limit=min(8, len(saved)),
+                    )
+                except Exception as exc:
+                    logger.warning("Post-scan intelligence refresh skipped: %s", exc)
+
         return {
             "signals_created": len(saved),
             "events_scanned": len(events),

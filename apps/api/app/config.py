@@ -44,6 +44,16 @@ class Settings(BaseSettings):
     environment: str = "development"
     default_user_id: str = ""
 
+    # Sports Expert Intelligence Layer (feature-flagged; default off)
+    atlas_expert_intelligence_enabled: bool = False
+    atlas_intelligence_learning_mode: str = "observe"
+    atlas_max_expert_confidence_adjustment: float = 8.0
+    atlas_max_news_confidence_adjustment: float = 6.0
+    atlas_max_total_intelligence_adjustment: float = 12.0
+
+    def is_intelligence_enabled(self) -> bool:
+        return bool(self.atlas_expert_intelligence_enabled)
+
     @model_validator(mode="after")
     def _platform_port(self) -> "Settings":
         """Render/Railway/Fly inject PORT — prefer it over API_PORT in .env."""

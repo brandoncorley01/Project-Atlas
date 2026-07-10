@@ -1,14 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { LogOutcomeButtons } from "@/components/performance/LogOutcomeButtons";
 import { buildClientCoachInsight, type CoachInsight } from "@/lib/performance-coach";
 import {
-  matchesOriginFilter,
-  originLabel,
+  groupBySector,
+  isAtlasOnlyLane,
+  isUserLane,
   resolvePickOrigin,
-  type PickOrigin,
 } from "@/lib/performance-origin";
 import {
   backfillPerformanceTracking,
@@ -30,7 +30,7 @@ export interface PerformanceEntry {
   logged_at?: string;
   resolution_source?: string | null;
   signal_label?: string | null;
-  pick_origin?: PickOrigin | string | null;
+  pick_origin?: string | null;
   graded_by?: string | null;
 }
 
@@ -71,9 +71,9 @@ const SECTORS = [
 ] as const;
 
 type SectorId = (typeof SECTORS)[number]["id"];
-type OriginFilter = "all" | "atlas" | "user";
 
 const HISTORY_LIMIT = 1000;
+const ATLAS_PREVIEW = 6;
 
 export function PerformanceView({ initialSummary, initialHistory }: PerformanceViewProps) {
   const [summary, setSummary] = useState(initialSummary);
@@ -87,7 +87,7 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
   const [coachRefreshing, setCoachRefreshing] = useState(false);
   const [coachError, setCoachError] = useState<string | null>(null);
   const [dataSource, setDataSource] = useState<"api" | "direct" | null>(null);
-  const [originFilter, setOriginFilter] = useState<OriginFilter>("all");
+  const [atlasExpanded, setAtlasExpanded] = useState(false);
   const didBootstrap = useRef(false);
   const syncInFlight = useRef(false);
 
@@ -319,45 +319,24 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
     setCoachInsight(buildClientCoachInsight(summary));
   }, [summary]);
 
-  const filteredHistory = useMemo(
-    () => history.filter((row) => matchesOriginFilter(row, originFilter)),
-    [history, originFilter],
-  );
+  const userPicks = useMemo(() => history.filter(isUserLane), [history]);
+  const atlasPicks = useMemo(() => history.filter(isAtlasOnlyLane), [history]);
 
-  const originCounts = useMemo(() => {
-    let atlas = 0;
-    let user = 0;
-    for (const row of history) {
-      const origin = resolvePickOrigin(row);
-      if (origin === "atlas" || origin === "both") atlas += 1;
-      if (origin === "user" || origin === "both") user += 1;
-    }
-    return { atlas, user, all: history.length };
-  }, [history]);
+  const userBySector = useMemo(() => groupBySector(userPicks), [userPicks]);
+  const atlasBySector = useMemo(() => groupBySector(atlasPicks), [atlasPicks]);
 
-  const historyBySector = useMemo(() => {
-    const grouped: Record<SectorId, PerformanceEntry[]> = {
-      sports: [],
-      stock: [],
-      options: [],
-      parlay: [],
-    };
-    for (const row of filteredHistory) {
-      const mod = row.module as SectorId;
-      if (!grouped[mod]) continue;
-      grouped[mod].push(row);
+  const laneStats = useMemo(() => {
+    function stats(rows: PerformanceEntry[]) {
+      const graded = rows.filter((r) => ["win", "loss", "scratch"].includes(r.outcome));
+      const wins = graded.filter((r) => r.outcome === "win").length;
+      const losses = graded.filter((r) => r.outcome === "loss").length;
+      const pending = rows.filter((r) => r.outcome === "pending").length;
+      const decided = wins + losses;
+      const winRate = decided > 0 ? Math.round((wins / decided) * 1000) / 10 : null;
+      return { total: rows.length, graded: graded.length, wins, losses, pending, winRate };
     }
-    // Pending first, then graded by date
-    for (const key of Object.keys(grouped) as SectorId[]) {
-      grouped[key].sort((a, b) => {
-        const ap = a.outcome === "pending" ? 0 : 1;
-        const bp = b.outcome === "pending" ? 0 : 1;
-        if (ap !== bp) return ap - bp;
-        return String(b.logged_at ?? "").localeCompare(String(a.logged_at ?? ""));
-      });
-    }
-    return grouped;
-  }, [filteredHistory]);
+    return { user: stats(userPicks), atlas: stats(atlasPicks) };
+  }, [userPicks, atlasPicks]);
 
   function silentMessageNeeded(sync: {
     synced: number;
@@ -467,8 +446,9 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
       <section className="rounded-xl border border-violet-500/30 bg-violet-500/5 p-4">
         <h2 className="text-sm font-semibold text-foreground">How Atlas learns</h2>
         <p className="mt-2 text-sm text-muted">
-          Every scan and every watchlist save is auto-tracked. Atlas picks and your picks are kept
-          separate. Settled events auto-grade on load — no awaiting list to babysit.
+          <strong className="text-foreground">Your picks</strong> are watchlist saves — shown first.
+          <strong className="ml-1 text-foreground">Atlas scan picks</strong> are every ranked signal from
+          scans; expand that section when you want the full history.
         </p>
         {summary.learning_active && learningNotes.length > 0 ? (
           <ul className="mt-3 space-y-1 text-sm text-violet-200">
@@ -562,64 +542,96 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
         )}
       </section>
 
-      <section className="flex flex-wrap gap-2">
-        {(
-          [
-            ["all", `All picks (${originCounts.all})`],
-            ["atlas", `Atlas picks (${originCounts.atlas})`],
-            ["user", `Your picks (${originCounts.user})`],
-          ] as const
-        ).map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() => setOriginFilter(id)}
-            className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
-              originFilter === id
-                ? "bg-accent text-white"
-                : "border border-border text-muted hover:bg-surface-hover"
-            }`}
-          >
-            {label}
-          </button>
-        ))}
+      <section className="grid gap-4 sm:grid-cols-2">
+        <LaneSummaryCard
+          title="Your picks"
+          subtitle="Watchlist saves & picks you acted on"
+          accent="emerald"
+          stats={laneStats.user}
+          active
+        />
+        <button
+          type="button"
+          onClick={() => setAtlasExpanded((v) => !v)}
+          className={`rounded-xl border p-4 text-left transition-colors ${
+            atlasExpanded
+              ? "border-sky-500/50 bg-sky-500/10"
+              : "border-border bg-surface hover:border-sky-500/30"
+          }`}
+        >
+          <p className="text-xs font-semibold uppercase tracking-wide text-sky-300">Atlas scan picks</p>
+          <p className="mt-1 text-sm text-muted">Every ranked signal from scans — auto-tracked</p>
+          <div className="mt-3 flex flex-wrap gap-4 text-sm">
+            <span>
+              <strong className="text-2xl text-foreground">{laneStats.atlas.total}</strong>
+              <span className="ml-1 text-muted">tracked</span>
+            </span>
+            {laneStats.atlas.winRate != null && (
+              <span className="text-muted">
+                Win rate <strong className="text-foreground">{laneStats.atlas.winRate}%</strong>
+              </span>
+            )}
+            {laneStats.atlas.pending > 0 && (
+              <span className="text-muted">
+                <strong className="text-sky-300">{laneStats.atlas.pending}</strong> open
+              </span>
+            )}
+          </div>
+          <p className="mt-3 text-xs font-medium text-sky-300">
+            {atlasExpanded ? "Hide Atlas scan history ↑" : `Show all ${laneStats.atlas.total} Atlas scan picks ↓`}
+          </p>
+        </button>
       </section>
 
-      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-        <StatCard label="Win rate (30d)" value={summary.win_rate != null ? `${summary.win_rate}%` : "—"} />
-        <StatCard label="Avg win return" value={fmtPct(summary.avg_return_pct)} />
-        <StatCard label="Graded picks" value={String(summary.total_signals ?? 0)} />
-        <StatCard
-          label="W / L / Auto"
-          value={`${summary.wins ?? 0} / ${summary.losses ?? 0} / ${summary.auto_resolved ?? 0}`}
+      <PickOriginLane
+        title="Your picks"
+        subtitle="From your watchlist — sports bets, stocks, options, and parlays you saved"
+        accent="emerald"
+        picksBySector={userBySector}
+        summary={summary}
+        coachInsight={coachInsight}
+        gradingSector={gradingSector}
+        onGrade={(id) => void runResolveSector(id)}
+        onUpdated={refreshSummary}
+        emptyHint={
+          <>
+            Save plays from Sports, Stocks, Options, or Parlays to your{" "}
+            <Link href="/watchlist" className="text-accent hover:underline">
+              watchlist
+            </Link>{" "}
+            — they appear here automatically.
+          </>
+        }
+      />
+
+      {atlasExpanded && (
+        <PickOriginLane
+          title="Atlas scan picks"
+          subtitle="Every pick Atlas surfaced in a scan — used to measure and improve scan quality"
+          accent="sky"
+          picksBySector={atlasBySector}
+          summary={summary}
+          coachInsight={coachInsight}
+          gradingSector={gradingSector}
+          onGrade={(id) => void runResolveSector(id)}
+          onUpdated={refreshSummary}
+          previewLimit={ATLAS_PREVIEW}
+          emptyHint="Run a market scan on Sports, Stocks, or Options — Atlas auto-tracks every ranked signal here."
         />
+      )}
+
+      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard label="Your picks" value={String(laneStats.user.total)} />
         <StatCard
-          label="Still open"
-          value={String(
-            filteredHistory.filter((r) => r.outcome === "pending").length,
-          )}
+          label="Your win rate"
+          value={laneStats.user.winRate != null ? `${laneStats.user.winRate}%` : "—"}
+        />
+        <StatCard label="Atlas scans tracked" value={String(laneStats.atlas.total)} />
+        <StatCard
+          label="Atlas win rate"
+          value={laneStats.atlas.winRate != null ? `${laneStats.atlas.winRate}%` : "—"}
         />
       </section>
-
-      {SECTORS.map((sector) => {
-        const modSummary = summary.by_module?.[sector.id];
-        const picks = historyBySector[sector.id];
-        const sectorCoach = coachInsight?.by_module?.[sector.id];
-        const isGrading = gradingSector === sector.id;
-
-        return (
-          <SectorSection
-            key={sector.id}
-            sector={sector}
-            summary={modSummary}
-            picks={picks}
-            coachNarrative={sectorCoach?.narrative}
-            isGrading={isGrading}
-            onGrade={() => void runResolveSector(sector.id)}
-            onUpdated={refreshSummary}
-          />
-        );
-      })}
 
       {Object.keys(confidenceBuckets).length > 0 && (
         <section className="rounded-xl border border-border bg-surface p-4">
@@ -642,104 +654,223 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
   );
 }
 
-function SectorSection({
-  sector,
+function LaneSummaryCard({
+  title,
+  subtitle,
+  accent,
+  stats,
+  active,
+}: {
+  title: string;
+  subtitle: string;
+  accent: "emerald" | "sky";
+  stats: { total: number; winRate: number | null; pending: number; wins: number; losses: number };
+  active?: boolean;
+}) {
+  const border = accent === "emerald" ? "border-emerald-500/50 bg-emerald-500/10" : "border-sky-500/50 bg-sky-500/10";
+  const label = accent === "emerald" ? "text-emerald-300" : "text-sky-300";
+  return (
+    <div className={`rounded-xl border p-4 ${active ? border : "border-border bg-surface"}`}>
+      <p className={`text-xs font-semibold uppercase tracking-wide ${label}`}>{title}</p>
+      <p className="mt-1 text-sm text-muted">{subtitle}</p>
+      <div className="mt-3 flex flex-wrap gap-4 text-sm">
+        <span>
+          <strong className="text-2xl text-foreground">{stats.total}</strong>
+          <span className="ml-1 text-muted">tracked</span>
+        </span>
+        {stats.winRate != null && (
+          <span className="text-muted">
+            Win rate <strong className="text-foreground">{stats.winRate}%</strong>
+          </span>
+        )}
+        {stats.pending > 0 && (
+          <span className="text-muted">
+            <strong className={accent === "emerald" ? "text-emerald-300" : "text-sky-300"}>
+              {stats.pending}
+            </strong>{" "}
+            open
+          </span>
+        )}
+        {(stats.wins > 0 || stats.losses > 0) && (
+          <span className="text-muted">
+            W/L <strong className="text-foreground">{stats.wins}/{stats.losses}</strong>
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PickOriginLane({
+  title,
+  subtitle,
+  accent,
+  picksBySector,
   summary,
+  coachInsight,
+  gradingSector,
+  onGrade,
+  onUpdated,
+  previewLimit,
+  emptyHint,
+}: {
+  title: string;
+  subtitle: string;
+  accent: "emerald" | "sky";
+  picksBySector: Record<SectorId, PerformanceEntry[]>;
+  summary: PerformanceSummary;
+  coachInsight: CoachInsight | null;
+  gradingSector: SectorId | null;
+  onGrade: (id: SectorId) => void;
+  onUpdated: () => Promise<void>;
+  previewLimit?: number;
+  emptyHint: ReactNode;
+}) {
+  const border = accent === "emerald" ? "border-emerald-500/40" : "border-sky-500/40";
+  const headerBg = accent === "emerald" ? "bg-emerald-500/10" : "bg-sky-500/10";
+  const total = SECTORS.reduce((n, s) => n + picksBySector[s.id].length, 0);
+
+  if (total === 0) {
+    return (
+      <section className={`rounded-xl border border-dashed ${border} p-6`}>
+        <h2 className="text-base font-semibold">{title}</h2>
+        <p className="mt-1 text-sm text-muted">{subtitle}</p>
+        <p className="mt-4 text-sm text-muted">{emptyHint}</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className={`rounded-xl border ${border} overflow-hidden`}>
+      <div className={`border-b ${border} px-4 py-3 ${headerBg}`}>
+        <h2 className="text-base font-semibold">{title}</h2>
+        <p className="mt-0.5 text-sm text-muted">{subtitle}</p>
+        <p className="mt-1 text-xs text-muted">{total} pick{total === 1 ? "" : "s"} in this lane</p>
+      </div>
+      <div className="space-y-4 p-4">
+        {SECTORS.map((sector) => {
+          const picks = picksBySector[sector.id];
+          if (picks.length === 0) return null;
+          const modSummary = summary.by_module?.[sector.id];
+          const sectorCoach = coachInsight?.by_module?.[sector.id];
+          return (
+            <SectorPickBlock
+              key={sector.id}
+              sector={sector}
+              picks={picks}
+              summary={modSummary}
+              coachNarrative={sectorCoach?.narrative}
+              isGrading={gradingSector === sector.id}
+              onGrade={() => onGrade(sector.id)}
+              onUpdated={onUpdated}
+              previewLimit={previewLimit}
+              accent={accent}
+            />
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function SectorPickBlock({
+  sector,
   picks,
+  summary,
   coachNarrative,
   isGrading,
   onGrade,
   onUpdated,
+  previewLimit,
+  accent,
 }: {
   sector: (typeof SECTORS)[number];
-  summary?: PerformanceSummary;
   picks: PerformanceEntry[];
+  summary?: PerformanceSummary;
   coachNarrative?: string;
   isGrading: boolean;
   onGrade: () => void;
   onUpdated: () => Promise<void>;
+  previewLimit?: number;
+  accent: "emerald" | "sky";
 }) {
-  const winRate = summary?.win_rate;
+  const [showAll, setShowAll] = useState(!previewLimit);
+  const visible = previewLimit && !showAll ? picks.slice(0, previewLimit) : picks;
+  const hidden = picks.length - visible.length;
   const gradedCount = picks.filter((p) => ["win", "loss", "scratch"].includes(p.outcome)).length;
   const openCount = picks.filter((p) => p.outcome === "pending").length;
+  const chip =
+    accent === "emerald"
+      ? "bg-emerald-500/15 text-emerald-300"
+      : "bg-sky-500/15 text-sky-300";
 
   return (
-    <section className="rounded-xl border border-border bg-surface/30 p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-base font-semibold">{sector.label}</h2>
-          <div className="mt-2 flex flex-wrap gap-4 text-sm text-muted">
-            <span>
-              Shown: <strong className="text-foreground">{picks.length}</strong>
-            </span>
-            <span>
-              Win rate:{" "}
-              <strong className="text-foreground">{winRate != null ? `${winRate}%` : "—"}</strong>
-            </span>
-            <span>
-              Graded: <strong className="text-foreground">{gradedCount}</strong>
-            </span>
-            <span>
-              Open: <strong className="text-foreground">{openCount}</strong>
-            </span>
-            {summary && (summary.wins != null || summary.losses != null) && (
-              <span>
-                W/L:{" "}
-                <strong className="text-foreground">
-                  {summary.wins ?? 0} / {summary.losses ?? 0}
-                </strong>
+    <div className="rounded-lg border border-border/80 bg-surface/40">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 px-3 py-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${chip}`}>
+            {sector.label}
+          </span>
+          <span className="text-sm text-muted">
+            {picks.length} pick{picks.length === 1 ? "" : "s"}
+            {summary?.win_rate != null && (
+              <span className="ml-2">
+                · {summary.win_rate}% win
               </span>
             )}
-          </div>
+            {openCount > 0 && (
+              <span className="ml-2 text-sky-300/90">{openCount} open</span>
+            )}
+          </span>
         </div>
-        {sector.canAutoGrade ? (
+        {sector.canAutoGrade && (
           <button
             type="button"
             onClick={onGrade}
             disabled={isGrading}
-            className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+            className="rounded-md border border-border px-2.5 py-1 text-xs font-medium text-muted hover:bg-surface-hover disabled:opacity-50"
           >
-            {isGrading ? "Grading…" : `Grade ${sector.label.toLowerCase()}`}
+            {isGrading ? "Grading…" : "Grade"}
           </button>
-        ) : null}
+        )}
       </div>
-
       {coachNarrative && (
-        <p className="mt-3 text-sm text-sky-200/90">{coachNarrative}</p>
+        <p className="border-b border-border/40 px-3 py-2 text-xs text-sky-200/80">{coachNarrative}</p>
       )}
-
-      {picks.length > 0 ? (
-        <div className="mt-4 overflow-x-auto rounded-lg border border-border">
-          <table className="w-full text-left text-sm">
-            <thead className="border-b border-border bg-surface text-xs text-muted">
-              <tr>
-                <th className="px-4 py-2">Pick</th>
-                <th className="px-4 py-2">Source</th>
-                <th className="px-4 py-2">Outcome</th>
-                <th className="px-4 py-2">Return</th>
-                <th className="px-4 py-2">Logged / Edit</th>
-              </tr>
-            </thead>
-            <tbody>
-              {picks.map((row) => (
-                <OutcomeRow key={row.id} row={row} onUpdated={onUpdated} sector={sector.id} />
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <div className="mt-4 rounded-lg border border-dashed border-border bg-background/30 p-6 text-center text-sm text-muted">
-          <p>No {sector.label.toLowerCase()} picks in this view yet.</p>
-          <p className="mt-2">
-            Run a scan or save picks to your{" "}
-            <Link href="/watchlist" className="text-accent hover:underline">
-              watchlist
-            </Link>
-            — they sync here automatically.
-          </p>
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-sm">
+          <thead className="bg-background/40 text-xs text-muted">
+            <tr>
+              <th className="px-3 py-2">Pick</th>
+              <th className="px-3 py-2">Outcome</th>
+              <th className="px-3 py-2">Return</th>
+              <th className="px-3 py-2">Logged</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visible.map((row) => (
+              <OutcomeRow key={row.id} row={row} onUpdated={onUpdated} sector={sector.id} compact />
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {hidden > 0 && (
+        <div className="border-t border-border/60 px-3 py-2">
+          <button
+            type="button"
+            onClick={() => setShowAll(true)}
+            className="text-xs font-medium text-accent hover:underline"
+          >
+            Show {hidden} more {sector.label.toLowerCase()} scan pick{hidden === 1 ? "" : "s"}
+          </button>
         </div>
       )}
-    </section>
+      {gradedCount === 0 && openCount > 0 && (
+        <p className="border-t border-border/40 px-3 py-2 text-xs text-muted">
+          Auto-grades when the event or expiration window closes.
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -762,10 +893,12 @@ function OutcomeRow({
   row,
   onUpdated,
   sector,
+  compact = false,
 }: {
   row: PerformanceEntry;
   onUpdated: () => Promise<void>;
   sector: SectorId;
+  compact?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [outcome, setOutcome] = useState(row.outcome);
@@ -780,6 +913,7 @@ function OutcomeRow({
     Boolean(row.graded_by) ||
     (String(row.resolution_source ?? "").startsWith("auto_") &&
       row.resolution_source !== "auto_scan");
+  const cellPad = compact ? "px-3 py-2" : "px-4 py-2";
 
   useEffect(() => {
     setOutcome(row.outcome);
@@ -810,8 +944,11 @@ function OutcomeRow({
 
   return (
     <tr className="border-b border-border/50 align-top">
-      <td className="px-4 py-2">
+      <td className={cellPad}>
         <p className="text-foreground">{row.signal_label ?? row.signal_id.slice(0, 8)}</p>
+        {origin === "both" && (
+          <p className="mt-0.5 text-[10px] text-violet-300/90">Also in Atlas scan</p>
+        )}
         {isPending && (
           <LogOutcomeButtons
             module={sector}
@@ -821,20 +958,7 @@ function OutcomeRow({
           />
         )}
       </td>
-      <td className="px-4 py-2">
-        <span
-          className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-            origin === "user"
-              ? "bg-emerald-500/15 text-emerald-300"
-              : origin === "both"
-                ? "bg-violet-500/15 text-violet-200"
-                : "bg-sky-500/15 text-sky-300"
-          }`}
-        >
-          {originLabel(origin)}
-        </span>
-      </td>
-      <td className="px-4 py-2">
+      <td className={cellPad}>
         {editing ? (
           <select
             value={outcome}
@@ -856,7 +980,7 @@ function OutcomeRow({
           </span>
         )}
       </td>
-      <td className="px-4 py-2">
+      <td className={cellPad}>
         {editing ? (
           <input
             type="number"
@@ -870,9 +994,9 @@ function OutcomeRow({
           fmtPct(row.return_pct)
         )}
       </td>
-      <td className="px-4 py-2">
+      <td className={cellPad}>
         <div className="flex flex-col gap-1">
-          <span className="text-muted">
+          <span className="text-muted text-xs">
             {row.logged_at ? new Date(row.logged_at).toLocaleDateString() : "—"}
           </span>
           {editing ? (

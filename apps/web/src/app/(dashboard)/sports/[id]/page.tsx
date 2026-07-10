@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { SportsSignalCard, type SportsSignal } from "@/components/sports/SportsSignalCard";
+import { AtlasIntelligencePanel } from "@/components/sports/AtlasIntelligencePanel";
 import { CATEGORY_SLUG_LABELS } from "@/lib/sports-categories";
 import { getSupabaseEnv } from "@/lib/env";
 import { createClient } from "@/lib/supabase/server";
@@ -61,6 +62,7 @@ export default async function SportsDetailPage({
         </h1>
       </div>
       <SportsSignalCard row={signal} rank={1} hideSelection />
+      <AtlasIntelligencePanel signalId={signal.id} />
     </>
   );
 }
