@@ -126,8 +126,8 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
       );
       const result = await syncWatchlistToPerformance();
       setMessage(formatWatchlistSyncMessage(result));
-      window.dispatchEvent(new Event("atlas:performance-updated"));
-      window.dispatchEvent(new Event("atlas:watchlist-updated"));
+      // syncWatchlistToPerformance already notifies performance; do not re-fire
+      // atlas:watchlist-updated here — that re-triggers sync and can loop.
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Could not sync watchlist");
     }

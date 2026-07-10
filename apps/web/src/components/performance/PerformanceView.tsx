@@ -270,7 +270,9 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
       void refreshSummary();
     }
     function onWatchlistUpdated() {
-      void syncWatchlist(true);
+      // Refresh only — full sync is explicit (button / mount). Re-syncing here
+      // re-entered after notify and blew the stack with summary recursion.
+      void refreshSummary();
     }
     window.addEventListener("atlas:performance-updated", onUpdated);
     window.addEventListener("atlas:watchlist-updated", onWatchlistUpdated);
