@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -10,6 +11,10 @@ from app.services.calibration_service import SIGNAL_TABLES
 
 VALID_OUTCOMES = frozenset({"win", "loss", "scratch", "pending"})
 VALID_MODULES = frozenset({"options", "stock", "sports", "parlay"})
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 
 
 class PerformanceService:
@@ -33,6 +38,12 @@ class PerformanceService:
         if outcome not in VALID_OUTCOMES:
             raise ValueError(f"outcome must be one of: {', '.join(sorted(VALID_OUTCOMES))}")
 
+        signal_id = self._normalize_signal_id(signal_id)
+        if not signal_snapshot:
+            existing_raw = await self._fetch_outcome_row(module=module, signal_id=signal_id)
+            if existing_raw:
+                signal_snapshot = existing_raw.get("scoring_snapshot") or {}
+
         label_source = signal_snapshot or await self._fetch_signal(module, signal_id)
         now = datetime.now(UTC).isoformat()
         row: dict[str, Any] = {
@@ -54,12 +65,16 @@ class PerformanceService:
             else (signal_snapshot or {}),
         }
 
-        existing = await self.get_outcome(module=module, signal_id=signal_id)
-        if existing:
+        existing_raw = await self._fetch_outcome_row(module=module, signal_id=signal_id)
+        if existing_raw:
+            if not row["signal_label"] and existing_raw.get("signal_label"):
+                row["signal_label"] = existing_raw["signal_label"]
+            if not row["scoring_snapshot"] and existing_raw.get("scoring_snapshot"):
+                row["scoring_snapshot"] = existing_raw["scoring_snapshot"]
             update_values = {k: v for k, v in row.items() if k not in ("user_id", "module", "signal_id")}
             saved = await self.db.update(
                 "signal_performance",
-                {"id": f"eq.{existing['id']}", "user_id": f"eq.{self.user_id}"},
+                {"id": f"eq.{existing_raw['id']}", "user_id": f"eq.{self.user_id}"},
                 update_values,
             )
             return self._format_entry(saved[0])
@@ -136,6 +151,7 @@ class PerformanceService:
         if not signal_id:
             return None
 
+        signal_id = self._normalize_signal_id(signal_id)
         existing = await self.get_outcome(module=module, signal_id=signal_id)
         if existing:
             return existing
@@ -154,16 +170,28 @@ class PerformanceService:
         )
 
     async def get_outcome(self, *, module: str, signal_id: str) -> dict[str, Any] | None:
+        row = await self._fetch_outcome_row(module=module, signal_id=signal_id)
+        return self._format_entry(row) if row else None
+
+    async def _fetch_outcome_row(self, *, module: str, signal_id: str) -> dict[str, Any] | None:
+        normalized = self._normalize_signal_id(signal_id)
         rows = await self.db.select(
             "signal_performance",
             filters={
                 "user_id": f"eq.{self.user_id}",
                 "module": f"eq.{module}",
-                "signal_id": f"eq.{signal_id}",
+                "signal_id": f"eq.{normalized}",
             },
             limit=1,
         )
-        return self._format_entry(rows[0]) if rows else None
+        return rows[0] if rows else None
+
+    @staticmethod
+    def _normalize_signal_id(signal_id: str) -> str:
+        sid = signal_id.strip()
+        if _UUID_RE.match(sid):
+            return sid.lower()
+        return sid
 
     async def get_history(
         self,
@@ -172,12 +200,15 @@ class PerformanceService:
         offset: int = 0,
         module: str | None = None,
         resolved_only: bool = False,
+        pending_only: bool = False,
     ) -> dict[str, Any]:
         filters: dict[str, str] = {"user_id": f"eq.{self.user_id}"}
         if module:
             filters["module"] = f"eq.{module}"
         if resolved_only:
             filters["outcome"] = "in.(win,loss,scratch)"
+        elif pending_only:
+            filters["outcome"] = "eq.pending"
 
         rows = await self.db.select(
             "signal_performance",

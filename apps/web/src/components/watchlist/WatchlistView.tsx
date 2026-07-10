@@ -263,6 +263,7 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
                       <LogOutcomeButtons
                         module={tracking.module}
                         signalId={tracking.signalId}
+                        signalSnapshot={tracking.signalSnapshot}
                         compact
                       />
                     </div>

@@ -43,9 +43,12 @@ interface PerformanceViewProps {
   initialHistory: PerformanceEntry[];
 }
 
+type HistoryFilter = "graded" | "all" | "pending";
+
 export function PerformanceView({ initialSummary, initialHistory }: PerformanceViewProps) {
   const [summary, setSummary] = useState(initialSummary);
   const [history, setHistory] = useState(initialHistory);
+  const [historyFilter, setHistoryFilter] = useState<HistoryFilter>("graded");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [coachInsight, setCoachInsight] = useState<{
@@ -62,35 +65,44 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
     return data.session?.access_token ?? undefined;
   }
 
-  const refreshSummary = useCallback(async () => {
+  const refreshSummary = useCallback(async (filter: HistoryFilter = historyFilter) => {
     const token = await getToken();
+    const creds = usesBffProxy() ? "include" : ("same-origin" as RequestCredentials);
     const sumRes = await fetch(`${getApiUrl()}/performance/summary?days=30`, {
       headers: apiRequestHeaders(token),
       cache: "no-store",
-      credentials: usesBffProxy() ? "include" : "same-origin",
+      credentials: creds,
     });
     if (sumRes.ok) {
       setSummary(await sumRes.json());
     }
-    const histRes = await fetch(`${getApiUrl()}/performance/history?limit=50`, {
+
+    const historyParams = new URLSearchParams({ limit: "100" });
+    if (filter === "graded") {
+      historyParams.set("resolved_only", "true");
+    } else if (filter === "pending") {
+      historyParams.set("pending_only", "true");
+    }
+    const histRes = await fetch(`${getApiUrl()}/performance/history?${historyParams}`, {
       headers: apiRequestHeaders(token),
       cache: "no-store",
-      credentials: usesBffProxy() ? "include" : "same-origin",
+      credentials: creds,
     });
     if (histRes.ok) {
       const data = await histRes.json();
-      setHistory(data.items ?? []);
+      let items: PerformanceEntry[] = data.items ?? [];
+      setHistory(items);
     }
-  }, []);
+  }, [historyFilter]);
 
   useEffect(() => {
-    void refreshSummary();
+    void refreshSummary(historyFilter);
     function onUpdated() {
-      void refreshSummary();
+      void refreshSummary(historyFilter);
     }
     window.addEventListener("atlas:performance-updated", onUpdated);
     return () => window.removeEventListener("atlas:performance-updated", onUpdated);
-  }, [refreshSummary]);
+  }, [refreshSummary, historyFilter]);
 
   async function runResolve() {
     setLoading(true);
@@ -100,17 +112,19 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
       const res = await fetch(`${getApiUrl()}/engine/resolve-outcomes`, {
         method: "POST",
         headers: apiRequestHeaders(token),
+        credentials: usesBffProxy() ? "include" : "same-origin",
       });
-      const body = await res.json();
+      const body = await res.json().catch(() => ({}));
       if (res.ok) {
         setMessage(
           body.resolved > 0
             ? `Auto-graded ${body.resolved} pick(s) across sports, stocks & options`
             : "No new picks to grade yet",
         );
-        await refreshSummary();
+        await refreshSummary(historyFilter);
       } else {
-        setMessage("Could not auto-grade picks");
+        const detail = typeof body.detail === "string" ? body.detail : "Could not auto-grade picks";
+        setMessage(detail);
       }
     } catch {
       setMessage("Backend not responding");
@@ -126,6 +140,7 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
       const res = await fetch(`${getApiUrl()}/engine/coach-aggregate`, {
         method: "POST",
         headers: apiRequestHeaders(token),
+        credentials: usesBffProxy() ? "include" : "same-origin",
       });
       const body = await res.json();
       if (res.ok && body.summary) {
@@ -147,6 +162,7 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
     try {
       const res = await fetch(`${getApiUrl()}/ai/coach-insight?refresh=true`, {
         headers: apiRequestHeaders(token),
+        credentials: usesBffProxy() ? "include" : "same-origin",
       });
       if (res.ok) {
         setCoachInsight(await res.json());
@@ -209,10 +225,11 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
                 const res = await fetch(`${getApiUrl()}/ai/backfill-tracking`, {
                   method: "POST",
                   headers: apiRequestHeaders(token),
+                  credentials: usesBffProxy() ? "include" : "same-origin",
                 });
                 if (res.ok) {
                   setMessage("Historical picks registered for tracking");
-                  await refreshSummary();
+                  await refreshSummary(historyFilter);
                 }
               } catch {
                 setMessage("Backfill failed");
@@ -251,7 +268,7 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
         {message && <p className="mt-3 text-sm text-muted">{message}</p>}
       </section>
 
-      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <StatCard label="Win rate (30d)" value={summary.win_rate != null ? `${summary.win_rate}%` : "—"} />
         <StatCard label="Avg win return" value={fmtPct(summary.avg_return_pct)} />
         <StatCard label="Logged trades" value={String(summary.total_signals ?? 0)} />
@@ -259,6 +276,84 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
           label="W / L / Auto"
           value={`${summary.wins ?? 0} / ${summary.losses ?? 0} / ${summary.auto_resolved ?? 0}`}
         />
+        <StatCard label="Awaiting grade" value={String(summary.pending ?? 0)} />
+      </section>
+
+      <section>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold">Recent outcomes</h2>
+          <div className="flex flex-wrap gap-2">
+            {(
+              [
+                ["graded", "Graded picks"],
+                ["pending", "Awaiting grade"],
+                ["all", "All tracked"],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setHistoryFilter(id)}
+                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                  historyFilter === id
+                    ? "bg-accent text-white"
+                    : "border border-border text-muted hover:text-foreground"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {history.length > 0 ? (
+          <div className="overflow-x-auto rounded-xl border border-border">
+            <table className="w-full text-left text-sm">
+              <thead className="border-b border-border bg-surface text-xs text-muted">
+                <tr>
+                  <th className="px-4 py-2">Pick</th>
+                  <th className="px-4 py-2">Module</th>
+                  <th className="px-4 py-2">Outcome</th>
+                  <th className="px-4 py-2">Return</th>
+                  <th className="px-4 py-2">Logged / Edit</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.map((row) => (
+                  <OutcomeRow key={row.id} row={row} onUpdated={() => refreshSummary(historyFilter)} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="rounded-xl border border-dashed border-border bg-surface/50 p-8 text-center text-muted">
+            <p>
+              {historyFilter === "graded"
+                ? "No graded picks yet."
+                : historyFilter === "pending"
+                  ? "No picks awaiting a grade."
+                  : "No tracked picks yet."}
+            </p>
+            <p className="mt-2 text-sm">
+              Grade picks on your{" "}
+              <Link href="/watchlist" className="text-accent hover:underline">
+                watchlist
+              </Link>
+              , or open any{" "}
+              <Link href="/sports" className="text-accent hover:underline">
+                sports
+              </Link>
+              ,{" "}
+              <Link href="/stocks" className="text-accent hover:underline">
+                stock
+              </Link>
+              , or{" "}
+              <Link href="/options" className="text-accent hover:underline">
+                options
+              </Link>{" "}
+              card and tap Win / Loss when it settles.
+            </p>
+          </div>
+        )}
       </section>
 
       {Object.keys(confidenceBuckets).length > 0 && (
@@ -278,49 +373,6 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
           </div>
         </section>
       )}
-
-      <section>
-        <h2 className="mb-3 text-sm font-semibold">Recent outcomes</h2>
-        {history.length > 0 ? (
-          <div className="overflow-x-auto rounded-xl border border-border">
-            <table className="w-full text-left text-sm">
-              <thead className="border-b border-border bg-surface text-xs text-muted">
-                <tr>
-                  <th className="px-4 py-2">Pick</th>
-                  <th className="px-4 py-2">Module</th>
-                  <th className="px-4 py-2">Outcome</th>
-                  <th className="px-4 py-2">Return</th>
-                  <th className="px-4 py-2">Logged / Edit</th>
-                </tr>
-              </thead>
-              <tbody>
-                {history.map((row) => (
-                  <OutcomeRow key={row.id} row={row} onUpdated={refreshSummary} />
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="rounded-xl border border-dashed border-border bg-surface/50 p-8 text-center text-muted">
-            <p>No outcomes logged yet.</p>
-            <p className="mt-2 text-sm">
-              Open any{" "}
-              <Link href="/sports" className="text-accent hover:underline">
-                sports
-              </Link>
-              ,{" "}
-              <Link href="/stocks" className="text-accent hover:underline">
-                stock
-              </Link>
-              , or{" "}
-              <Link href="/options" className="text-accent hover:underline">
-                options
-              </Link>{" "}
-              pick and tap Win / Loss when it settles.
-            </p>
-          </div>
-        )}
-      </section>
     </div>
   );
 }
@@ -419,6 +471,10 @@ function OutcomeRow({
             {row.resolution_source === "auto_sports" && (
               <span className="ml-1 text-xs text-muted">(auto)</span>
             )}
+            {String(row.resolution_source ?? "").startsWith("auto_") &&
+              row.resolution_source !== "auto_sports" && (
+                <span className="ml-1 text-xs text-muted">(auto)</span>
+              )}
             {(row.resolution_source === "manual" || row.resolution_source === "manual_edit") && (
               <span className="ml-1 text-xs text-muted">(you)</span>
             )}

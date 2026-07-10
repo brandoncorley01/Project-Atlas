@@ -85,28 +85,34 @@ export function watchlistSaveKey(symbol: string, itemType: string): string {
 /** Map a saved watchlist row to performance tracking ids (null for plain tickers). */
 export function performanceTrackingForItem(
   item: WatchlistItem,
-): { module: PerformanceModule; signalId: string } | null {
+): { module: PerformanceModule; signalId: string; signalSnapshot?: Record<string, unknown> } | null {
   const kind = effectiveItemType(item);
   const meta = item.metadata ?? {};
+
+  const snapshot = { ...meta, watchlist_item_id: item.id, symbol: item.symbol };
 
   switch (kind) {
     case "sport_bet":
       return typeof meta.signal_id === "string"
-        ? { module: "sports", signalId: meta.signal_id }
+        ? { module: "sports", signalId: normalizeWatchlistSymbol(meta.signal_id), signalSnapshot: snapshot }
         : null;
     case "stock_signal":
       return typeof meta.signal_id === "string"
-        ? { module: "stock", signalId: meta.signal_id }
+        ? { module: "stock", signalId: normalizeWatchlistSymbol(meta.signal_id), signalSnapshot: snapshot }
         : null;
     case "option_signal":
       return typeof meta.signal_id === "string"
-        ? { module: "options", signalId: meta.signal_id }
+        ? { module: "options", signalId: normalizeWatchlistSymbol(meta.signal_id), signalSnapshot: snapshot }
         : null;
     case "parlay":
       if (typeof meta.parlay_id === "string") {
-        return { module: "parlay", signalId: meta.parlay_id };
+        return {
+          module: "parlay",
+          signalId: normalizeWatchlistSymbol(meta.parlay_id),
+          signalSnapshot: snapshot,
+        };
       }
-      return { module: "parlay", signalId: item.id };
+      return { module: "parlay", signalId: normalizeWatchlistSymbol(item.id), signalSnapshot: snapshot };
     default:
       return null;
   }

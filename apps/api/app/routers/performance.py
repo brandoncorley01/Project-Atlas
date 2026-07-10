@@ -48,6 +48,7 @@ async def get_performance_history(
     offset: int = 0,
     module: str | None = None,
     resolved_only: bool = False,
+    pending_only: bool = False,
 ) -> dict:
     service = PerformanceService(SupabaseClient(token), user_id)
     return await service.get_history(
@@ -55,6 +56,7 @@ async def get_performance_history(
         offset=offset,
         module=module,
         resolved_only=resolved_only,
+        pending_only=pending_only,
     )
 
 
@@ -73,6 +75,7 @@ async def log_performance(
     return_pct = body.get("return_pct")
     hold_hours = body.get("hold_duration_hours")
     resolution_source = str(body.get("resolution_source") or "manual")
+    signal_snapshot = body.get("signal_snapshot") if isinstance(body.get("signal_snapshot"), dict) else None
     service = PerformanceService(SupabaseClient(token), user_id)
     try:
         entry = await service.log_outcome(
@@ -82,6 +85,7 @@ async def log_performance(
             return_pct=float(return_pct) if return_pct is not None else None,
             hold_duration_hours=float(hold_hours) if hold_hours is not None else None,
             resolution_source=resolution_source,
+            signal_snapshot=signal_snapshot,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

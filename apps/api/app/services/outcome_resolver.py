@@ -61,7 +61,7 @@ class OutcomeResolverService:
             filters["module"] = f"eq.{module}"
         perf_rows = await self.db.select("signal_performance", filters=filters, limit=2000)
         return {
-            str(r.get("signal_id"))
+            PerformanceService._normalize_signal_id(str(r.get("signal_id")))
             for r in perf_rows
             if r.get("signal_id") and r.get("outcome") in ("win", "loss", "scratch")
         }
@@ -82,7 +82,7 @@ class OutcomeResolverService:
         now = datetime.now(UTC)
         candidates: list[dict[str, Any]] = []
         for sig in signals:
-            sid = str(sig.get("id"))
+            sid = PerformanceService._normalize_signal_id(str(sig.get("id")))
             if sid in graded_ids:
                 continue
             event_start = sig.get("event_start")
@@ -177,7 +177,7 @@ class OutcomeResolverService:
         candidates = [
             sig
             for sig in signals
-            if str(sig.get("id")) not in graded_ids and stock_ready_to_grade(sig)
+            if PerformanceService._normalize_signal_id(str(sig.get("id"))) not in graded_ids and stock_ready_to_grade(sig)
         ][:limit]
 
         if not candidates:
@@ -252,7 +252,7 @@ class OutcomeResolverService:
         candidates = [
             sig
             for sig in signals
-            if str(sig.get("id")) not in graded_ids and options_ready_to_grade(sig)
+            if PerformanceService._normalize_signal_id(str(sig.get("id"))) not in graded_ids and options_ready_to_grade(sig)
         ][:limit]
 
         if not candidates:

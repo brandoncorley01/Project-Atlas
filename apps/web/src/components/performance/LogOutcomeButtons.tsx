@@ -8,6 +8,7 @@ type Outcome = "win" | "loss" | "scratch";
 interface LogOutcomeButtonsProps {
   module: "options" | "stock" | "sports" | "parlay";
   signalId: string;
+  signalSnapshot?: Record<string, unknown>;
   compact?: boolean;
   className?: string;
 }
@@ -18,6 +19,14 @@ interface OutcomeEntry {
   return_pct?: number | null;
 }
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function normalizeSignalId(signalId: string): string {
+  const trimmed = signalId.trim();
+  return UUID_RE.test(trimmed) ? trimmed.toLowerCase() : trimmed;
+}
+
 async function getToken() {
   if (usesBffProxy()) return undefined;
   const { createClient } = await import("@/lib/supabase/client");
@@ -25,12 +34,19 @@ async function getToken() {
   return data.session?.access_token ?? undefined;
 }
 
+const fetchInit = (token?: string): RequestInit => ({
+  headers: apiRequestHeaders(token),
+  credentials: usesBffProxy() ? "include" : "same-origin",
+});
+
 export function LogOutcomeButtons({
   module,
   signalId,
+  signalSnapshot,
   compact = false,
   className = "",
 }: LogOutcomeButtonsProps) {
+  const normalizedId = normalizeSignalId(signalId);
   const [entry, setEntry] = useState<OutcomeEntry | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -38,11 +54,8 @@ export function LogOutcomeButtons({
   const loadOutcome = useCallback(async () => {
     const token = await getToken();
     try {
-      const params = new URLSearchParams({ module, signal_id: signalId });
-      const res = await fetch(`${getApiUrl()}/performance/outcome?${params}`, {
-        headers: apiRequestHeaders(token),
-        credentials: usesBffProxy() ? "include" : "same-origin",
-      });
+      const params = new URLSearchParams({ module, signal_id: normalizedId });
+      const res = await fetch(`${getApiUrl()}/performance/outcome?${params}`, fetchInit(token));
       if (res.ok) {
         const data = await res.json();
         setEntry(data.outcome ?? null);
@@ -50,7 +63,7 @@ export function LogOutcomeButtons({
     } catch {
       /* non-fatal */
     }
-  }, [module, signalId]);
+  }, [module, normalizedId]);
 
   useEffect(() => {
     void loadOutcome();
@@ -63,9 +76,14 @@ export function LogOutcomeButtons({
     try {
       const res = await fetch(`${getApiUrl()}/performance`, {
         method: "POST",
-        headers: apiRequestHeaders(token),
-        credentials: usesBffProxy() ? "include" : "same-origin",
-        body: JSON.stringify({ module, signal_id: signalId, outcome }),
+        ...fetchInit(token),
+        body: JSON.stringify({
+          module,
+          signal_id: normalizedId,
+          outcome,
+          resolution_source: "manual",
+          signal_snapshot: signalSnapshot,
+        }),
       });
       const body = await res.json();
       if (!res.ok) {
@@ -83,7 +101,7 @@ export function LogOutcomeButtons({
   }
 
   if (entry && entry.outcome !== "pending") {
-    const auto = entry.resolution_source === "auto_sports";
+    const auto = String(entry.resolution_source ?? "").startsWith("auto_");
     const color =
       entry.outcome === "win"
         ? "text-emerald-400"
@@ -97,6 +115,9 @@ export function LogOutcomeButtons({
           {entry.return_pct != null ? ` (${entry.return_pct > 0 ? "+" : ""}${entry.return_pct}%)` : ""}
         </span>
         {auto && <span className="ml-2 text-muted">· auto-graded</span>}
+        {!auto && entry.resolution_source === "manual" && (
+          <span className="ml-2 text-muted">· saved</span>
+        )}
       </div>
     );
   }

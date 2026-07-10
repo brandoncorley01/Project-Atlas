@@ -24,7 +24,7 @@ export default async function PerformancePage() {
       try {
         const [sumData, histData] = await Promise.all([
           apiFetch<PerformanceSummary>("/performance/summary?days=30", token),
-          apiFetch<HistoryResponse>("/performance/history?limit=50", token),
+          apiFetch<HistoryResponse>("/performance/history?limit=50&resolved_only=true", token),
         ]);
         summary = sumData;
         history = histData.items;
