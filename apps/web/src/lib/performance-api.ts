@@ -209,19 +209,28 @@ export async function registerPerformanceForItem(
   }
 }
 
-/** Sync all watchlist items into performance tracking (direct Supabase first). */
+/** Sync all watchlist items into performance tracking (direct Supabase, API fallback). */
 export async function syncWatchlistToPerformance(): Promise<WatchlistSyncResult> {
   const direct = await syncWatchlistDirect();
 
-  if (direct.synced > 0 || direct.errors.length > 0 || direct.total === 0) {
-    if (direct.synced > 0) notifyPerformanceUpdated();
+  // Direct is done when: empty list, newly synced rows, or every trackable pick already exists.
+  const directDone =
+    direct.total === 0 ||
+    direct.synced > 0 ||
+    (direct.trackable > 0 &&
+      direct.alreadyTracked >= direct.trackable &&
+      direct.errors.length === 0);
+
+  if (directDone) {
+    if (direct.synced > 0 || direct.alreadyTracked > 0) notifyPerformanceUpdated();
     return { ...direct, source: "direct" };
   }
 
+  // Direct failed or couldn't track — try the API bridge.
   const token = await getToken();
   try {
     const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 20_000);
+    const timeout = window.setTimeout(() => controller.abort(), 25_000);
     const res = await fetch(`${getApiUrl()}/performance/sync-watchlist`, {
       method: "POST",
       ...fetchInit(token),
@@ -230,31 +239,38 @@ export async function syncWatchlistToPerformance(): Promise<WatchlistSyncResult>
     window.clearTimeout(timeout);
     const body = await res.json().catch(() => ({}));
     if (res.ok) {
-      const synced = Number(body.synced ?? 0);
+      const synced = Number(body.synced ?? body.registered ?? 0);
+      const alreadyTracked = Number(body.already_tracked ?? body.alreadyTracked ?? 0);
+      const skipped = Number(body.skipped ?? 0);
+      const total = Number(body.total ?? body.total_items ?? 0);
       const result: WatchlistSyncResult = {
         synced,
-        skipped: Number(body.skipped ?? 0),
-        alreadyTracked: Math.max(0, Number(body.total ?? 0) - synced),
-        total: Number(body.total ?? 0),
-        trackable: Number(body.total ?? 0),
-        errors: [],
+        skipped,
+        alreadyTracked,
+        total,
+        trackable: synced + alreadyTracked,
+        errors: Array.isArray(body.errors) ? body.errors.map(String) : [],
         source: "api",
       };
-      if (synced > 0) notifyPerformanceUpdated();
+      if (body.trackable != null) result.trackable = Number(body.trackable);
+      if (synced > 0 || alreadyTracked > 0) notifyPerformanceUpdated();
       return result;
     }
   } catch {
-    /* fall through */
+    /* fall through to direct result */
   }
 
-  if (direct.alreadyTracked > 0) notifyPerformanceUpdated();
+  if (direct.alreadyTracked > 0 || direct.synced > 0) notifyPerformanceUpdated();
   return { ...direct, source: "direct" };
 }
 
 /** User-facing message for a watchlist sync result. */
 export function formatWatchlistSyncMessage(result: WatchlistSyncResult): string {
-  if (result.errors.length > 0 && result.synced === 0 && result.total === 0) {
-    return result.errors[0] ?? "Could not read watchlist";
+  if (result.errors.length > 0 && result.synced === 0 && result.alreadyTracked === 0) {
+    if (result.total === 0) {
+      return result.errors[0] ?? "Could not read watchlist";
+    }
+    return `Sync failed: ${result.errors[0]}`;
   }
   if (result.total === 0) {
     return "No picks on your watchlist yet — save plays from Sports, Stocks, or Options first.";
@@ -264,7 +280,9 @@ export function formatWatchlistSyncMessage(result: WatchlistSyncResult): string 
   }
   if (result.synced > 0) {
     const via = result.source === "direct" ? " via Supabase" : "";
-    return `Synced ${result.synced} watchlist pick(s) to performance${via}.`;
+    const already =
+      result.alreadyTracked > 0 ? ` · ${result.alreadyTracked} already tracked` : "";
+    return `Synced ${result.synced} watchlist pick(s) to performance${via}${already}.`;
   }
   if (result.alreadyTracked > 0) {
     return `All ${result.alreadyTracked} trackable watchlist pick(s) are already in performance.`;

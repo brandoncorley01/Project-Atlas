@@ -74,6 +74,7 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
   const [coachError, setCoachError] = useState<string | null>(null);
   const [dataSource, setDataSource] = useState<"api" | "direct" | null>(null);
   const didAutoBackfill = useRef(false);
+  const syncInFlight = useRef(false);
 
   async function getToken() {
     if (usesBffProxy()) return undefined;
@@ -88,16 +89,18 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
 
     let usedApi = false;
     try {
-      const sumRes = await fetch(`${getApiUrl()}/performance/summary?days=30`, {
-        headers: apiRequestHeaders(token),
-        cache: "no-store",
-        credentials: creds,
-      });
-      const histRes = await fetch(`${getApiUrl()}/performance/history?limit=200`, {
-        headers: apiRequestHeaders(token),
-        cache: "no-store",
-        credentials: creds,
-      });
+      const [sumRes, histRes] = await Promise.all([
+        fetch(`${getApiUrl()}/performance/summary?days=30`, {
+          headers: apiRequestHeaders(token),
+          cache: "no-store",
+          credentials: creds,
+        }),
+        fetch(`${getApiUrl()}/performance/history?limit=200`, {
+          headers: apiRequestHeaders(token),
+          cache: "no-store",
+          credentials: creds,
+        }),
+      ]);
       if (sumRes.ok && histRes.ok) {
         setSummary(await sumRes.json());
         const data = await histRes.json();
@@ -163,6 +166,18 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
 
   const syncWatchlist = useCallback(
     async (silent = true) => {
+      if (syncInFlight.current) {
+        return {
+          synced: 0,
+          skipped: 0,
+          alreadyTracked: 0,
+          total: 0,
+          trackable: 0,
+          errors: [],
+          source: "direct" as const,
+        };
+      }
+      syncInFlight.current = true;
       if (!silent) {
         setLoading(true);
         setMessage(null);
@@ -170,7 +185,9 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
       try {
         const result = await syncWatchlistToPerformance();
         await refreshSummary();
-        void loadCoachInsight(true);
+        if (!silent) {
+          void loadCoachInsight(true);
+        }
         if (result.source === "direct") {
           setDataSource("direct");
         }
@@ -192,6 +209,7 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
           source: "direct" as const,
         };
       } finally {
+        syncInFlight.current = false;
         if (!silent) setLoading(false);
       }
     },
@@ -220,7 +238,7 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
           );
         }
         await refreshSummary();
-        void loadCoachInsight(true);
+        if (!silent) void loadCoachInsight(true);
       } catch (err) {
         if (!silent) {
           setMessage(err instanceof Error ? err.message : "Could not register past picks");
@@ -232,9 +250,21 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
   );
 
   useEffect(() => {
-    void refreshSummary();
-    void syncWatchlist(true);
-    void loadCoachInsight(false);
+    let cancelled = false;
+    void (async () => {
+      await refreshSummary();
+      if (cancelled) return;
+      void loadCoachInsight(false);
+      // One bootstrap sync — then backfill only if still empty
+      const sync = await syncWatchlist(true);
+      if (cancelled || didAutoBackfill.current) return;
+      didAutoBackfill.current = true;
+      if (sync.synced > 0) return;
+      const tracked = (summary.total_signals ?? 0) + (summary.pending ?? 0) + history.length;
+      if (tracked === 0 && sync.total === 0) {
+        await runBackfill(true);
+      }
+    })();
 
     function onUpdated() {
       void refreshSummary();
@@ -245,27 +275,17 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
     window.addEventListener("atlas:performance-updated", onUpdated);
     window.addEventListener("atlas:watchlist-updated", onWatchlistUpdated);
     return () => {
+      cancelled = true;
       window.removeEventListener("atlas:performance-updated", onUpdated);
       window.removeEventListener("atlas:watchlist-updated", onWatchlistUpdated);
     };
-  }, [refreshSummary, loadCoachInsight, syncWatchlist]);
+    // Bootstrap once on mount — callbacks are stable enough for this page
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     setCoachInsight(buildClientCoachInsight(summary));
   }, [summary]);
-
-  useEffect(() => {
-    if (didAutoBackfill.current) return;
-    didAutoBackfill.current = true;
-    void (async () => {
-      const sync = await syncWatchlist(true);
-      if (sync.synced > 0) return;
-      const tracked = (summary.total_signals ?? 0) + (summary.pending ?? 0);
-      if (tracked === 0 && history.length === 0) {
-        await runBackfill(true);
-      }
-    })();
-  }, [summary, history.length, runBackfill, syncWatchlist]);
 
   const historyBySector = useMemo(() => {
     const grouped: Record<SectorId, { graded: PerformanceEntry[]; pending: PerformanceEntry[] }> = {

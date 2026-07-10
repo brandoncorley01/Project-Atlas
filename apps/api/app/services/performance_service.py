@@ -195,28 +195,30 @@ class PerformanceService:
 
         module = module_map.get(kind)
         if not module:
-            if item_type == "sport_event":
-                if meta.get("legs"):
+            if item_type == "sport_event" or kind == "sport_event":
+                if meta.get("legs") or meta.get("parlay_id"):
                     module = "parlay"
-                elif meta.get("signal_id") or meta.get("bet_type"):
+                elif meta.get("signal_id") or meta.get("bet_type") or meta.get("selection"):
                     module = "sports"
-            elif item_type == "ticker":
-                if meta.get("signal_id") and meta.get("underlying"):
+            elif item_type == "ticker" or kind == "ticker":
+                if meta.get("signal_id") and (meta.get("underlying") or meta.get("option_type")):
                     module = "options"
-                elif meta.get("signal_id") and meta.get("ticker"):
+                elif meta.get("signal_id") and (meta.get("ticker") or meta.get("recommendation")):
                     module = "stock"
-            elif meta.get("legs"):
+            elif meta.get("legs") or meta.get("parlay_id"):
                 module = "parlay"
 
         if not module:
             return None
 
-        if module == "parlay" or kind == "parlay":
+        if module == "parlay":
             signal_id = str(meta.get("parlay_id") or item.get("id") or "")
         elif meta.get("signal_id"):
             signal_id = str(meta["signal_id"])
+        elif _UUID_RE.match(str(item.get("symbol") or "")):
+            signal_id = str(item.get("symbol"))
         else:
-            signal_id = str(item.get("id") or "")
+            return None
 
         if not signal_id:
             return None
@@ -225,7 +227,11 @@ class PerformanceService:
             **meta,
             "watchlist_item_id": item.get("id"),
             "symbol": item.get("symbol"),
-            "label": meta.get("label"),
+            "label": meta.get("label")
+            or meta.get("recommendation")
+            or meta.get("selection")
+            or meta.get("name")
+            or item.get("symbol"),
         }
         return module, PerformanceService._normalize_signal_id(signal_id), snapshot
 

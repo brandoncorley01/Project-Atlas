@@ -19,24 +19,38 @@ async def sync_watchlist_performance(
     wl = await WatchlistService(SupabaseClient(token), user_id).get_watchlist()
     perf = PerformanceService(SupabaseClient(token), user_id)
     synced = 0
+    already_tracked = 0
     skipped = 0
-    for item in wl.get("items") or []:
-        if not PerformanceService.resolve_watchlist_item(item):
+    errors: list[str] = []
+    items = wl.get("items") or []
+    for item in items:
+        resolved = PerformanceService.resolve_watchlist_item(item)
+        if not resolved:
             skipped += 1
             continue
+        module, signal_id, _snapshot = resolved
         try:
+            existing = await perf.get_outcome(module=module, signal_id=signal_id)
             result = await perf.register_from_watchlist(item=item)
-            if result:
-                synced += 1
-            else:
+            if not result:
                 skipped += 1
-        except Exception:
+                continue
+            if existing:
+                already_tracked += 1
+            else:
+                synced += 1
+        except Exception as exc:
             skipped += 1
+            errors.append(str(exc)[:120])
     return {
         "status": "ok",
         "synced": synced,
+        "registered": synced,
+        "already_tracked": already_tracked,
         "skipped": skipped,
-        "total": len(wl.get("items") or []),
+        "total": len(items),
+        "trackable": synced + already_tracked,
+        "errors": errors[:5],
     }
 
 

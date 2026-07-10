@@ -107,6 +107,7 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
   const initialTab = (searchParams.get("tab") as WatchlistTab) || "all";
   const [symbol, setSymbol] = useState("");
   const [loading, setLoading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<WatchlistTab>(
     ["all", "stocks", "options", "bets", "parlays"].includes(initialTab) ? initialTab : "all",
@@ -115,6 +116,23 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
   const displayItems = items.length > 0 ? items : initialItems;
   const counts = useMemo(() => watchlistTabCounts(displayItems), [displayItems]);
   const displayed = useMemo(() => filterWatchlistByTab(displayItems, activeTab), [displayItems, activeTab]);
+
+  async function syncToPerformance() {
+    setSyncing(true);
+    setMessage(null);
+    try {
+      const { formatWatchlistSyncMessage, syncWatchlistToPerformance } = await import(
+        "@/lib/performance-api"
+      );
+      const result = await syncWatchlistToPerformance();
+      setMessage(formatWatchlistSyncMessage(result));
+      window.dispatchEvent(new Event("atlas:performance-updated"));
+      window.dispatchEvent(new Event("atlas:watchlist-updated"));
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Could not sync watchlist");
+    }
+    setSyncing(false);
+  }
 
   async function addTicker(e: React.FormEvent) {
     e.preventDefault();
@@ -180,6 +198,26 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
           { href: "/performance", label: "View performance tracking →" },
         ]}
       />
+
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => void syncToPerformance()}
+          disabled={syncing || loading || displayItems.length === 0}
+          className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+        >
+          {syncing ? "Syncing…" : "Sync to Performance"}
+        </button>
+        <Link
+          href="/performance"
+          className="rounded-lg border border-border px-3 py-2 text-sm text-muted hover:text-foreground"
+        >
+          Open Performance →
+        </Link>
+        <p className="text-xs text-muted">
+          Pushes saved bets, stocks, options, and parlays into Performance for grading.
+        </p>
+      </div>
 
       {(activeTab === "all" || activeTab === "stocks") && (
         <form onSubmit={addTicker} className="mb-6 flex flex-col gap-2 sm:flex-row">
