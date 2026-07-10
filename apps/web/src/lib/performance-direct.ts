@@ -191,6 +191,18 @@ export async function logOutcomeDirect(params: {
 
   await ensureProfile(supabase, userId, email);
 
+  const existing = await getOutcomeDirect(params.module, params.signalId);
+  if (
+    existing &&
+    params.outcome === "pending" &&
+    ["win", "loss", "scratch"].includes(existing.outcome)
+  ) {
+    return existing;
+  }
+  if (existing && params.outcome === "pending" && existing.outcome === "pending") {
+    return existing;
+  }
+
   const now = new Date().toISOString();
   const snap = params.signalSnapshot ?? {};
   const row: Record<string, unknown> = {
@@ -380,6 +392,64 @@ export async function backfillTrackingDirect(): Promise<{
   skipped += wlSkip;
 
   return { registered, skipped, by_module };
+}
+
+export async function syncWatchlistDirect(): Promise<{
+  synced: number;
+  skipped: number;
+  total: number;
+}> {
+  const { supabase, userId, email } = await getSession();
+  if (!userId) {
+    return { synced: 0, skipped: 0, total: 0 };
+  }
+
+  await ensureProfile(supabase, userId, email);
+
+  const { data: watchlistItems } = await supabase
+    .from("watchlist_items")
+    .select("id, item_type, symbol, metadata")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(300);
+
+  const items = watchlistItems ?? [];
+  let synced = 0;
+  let skipped = 0;
+
+  for (const row of items) {
+    const item: WatchlistItem = {
+      id: String(row.id),
+      item_type: String(row.item_type),
+      symbol: String(row.symbol),
+      metadata: (row.metadata as Record<string, unknown>) ?? {},
+    };
+    const tracking = performanceTrackingForItem(item);
+    if (!tracking || !isUuid(tracking.signalId)) {
+      skipped += 1;
+      continue;
+    }
+    const existing = await getOutcomeDirect(tracking.module, tracking.signalId);
+    if (existing) {
+      skipped += 1;
+      continue;
+    }
+    try {
+      const saved = await logOutcomeDirect({
+        module: tracking.module,
+        signalId: tracking.signalId,
+        outcome: "pending",
+        resolutionSource: "watchlist",
+        signalSnapshot: tracking.signalSnapshot,
+      });
+      if (saved) synced += 1;
+      else skipped += 1;
+    } catch {
+      skipped += 1;
+    }
+  }
+
+  return { synced, skipped, total: items.length };
 }
 
 export async function updateOutcomeDirect(

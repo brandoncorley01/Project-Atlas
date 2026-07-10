@@ -151,7 +151,7 @@ export async function addWatchlistItemDirect(payload: {
 
       if (error) return formatRow(existing as Record<string, unknown>);
       const item = formatRow((updated ?? existing) as Record<string, unknown>);
-      void registerPerformanceForItem(item);
+      await registerPerformanceForItem(item);
       return item;
     }
 
@@ -169,7 +169,7 @@ export async function addWatchlistItemDirect(payload: {
 
     if (error || !saved) return null;
     const item = formatRow(saved as Record<string, unknown>);
-    void registerPerformanceForItem(item);
+    await registerPerformanceForItem(item);
     return item;
   } catch {
     return null;

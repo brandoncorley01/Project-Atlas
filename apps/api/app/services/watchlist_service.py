@@ -138,11 +138,6 @@ class WatchlistService:
         return item_type
 
     async def _register_tracking(self, item: dict[str, Any]) -> dict[str, Any] | None:
-        kind = item.get("metadata", {}).get("watchlist_kind") or item.get("item_type")
-        if kind not in TRACKABLE_KINDS and item.get("item_type") not in TRACKABLE_KINDS:
-            meta = item.get("metadata") or {}
-            if not (meta.get("signal_id") or meta.get("legs")):
-                return None
         try:
             return await self.performance.register_from_watchlist(item=item)
         except Exception as exc:

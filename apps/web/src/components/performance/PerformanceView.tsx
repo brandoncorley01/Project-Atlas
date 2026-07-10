@@ -7,6 +7,7 @@ import {
   backfillPerformanceTracking,
   fetchPerformanceHistory,
   fetchPerformanceSummary,
+  syncWatchlistToPerformance,
   updatePerformanceOutcome,
 } from "@/lib/performance-api";
 import { apiRequestHeaders, getApiUrl, usesBffProxy } from "@/lib/api-url";
@@ -148,6 +149,28 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
     [summary],
   );
 
+  const syncWatchlist = useCallback(
+    async (silent = true) => {
+      try {
+        const result = await syncWatchlistToPerformance();
+        if (result.synced > 0) {
+          await refreshSummary();
+          void loadCoachInsight(true);
+          if (!silent) {
+            const via = result.source === "direct" ? " (direct)" : "";
+            setMessage(
+              `Synced ${result.synced} watchlist pick(s) to performance${via}`,
+            );
+          }
+        }
+        return result;
+      } catch {
+        return { synced: 0, skipped: 0, total: 0, source: "direct" as const };
+      }
+    },
+    [loadCoachInsight, refreshSummary],
+  );
+
   const runBackfill = useCallback(
     async (silent = false) => {
       if (!silent) setLoading(true);
@@ -182,15 +205,24 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
   );
 
   useEffect(() => {
-    void refreshSummary().then(() => {
+    void (async () => {
+      await refreshSummary();
+      await syncWatchlist(true);
       void loadCoachInsight(false);
-    });
+    })();
     function onUpdated() {
       void refreshSummary();
     }
+    function onWatchlistUpdated() {
+      void syncWatchlist(true);
+    }
     window.addEventListener("atlas:performance-updated", onUpdated);
-    return () => window.removeEventListener("atlas:performance-updated", onUpdated);
-  }, [refreshSummary, loadCoachInsight]);
+    window.addEventListener("atlas:watchlist-updated", onWatchlistUpdated);
+    return () => {
+      window.removeEventListener("atlas:performance-updated", onUpdated);
+      window.removeEventListener("atlas:watchlist-updated", onWatchlistUpdated);
+    };
+  }, [refreshSummary, loadCoachInsight, syncWatchlist]);
 
   useEffect(() => {
     setCoachInsight(buildClientCoachInsight(summary));
@@ -198,11 +230,16 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
 
   useEffect(() => {
     if (didAutoBackfill.current) return;
-    const tracked = (summary.total_signals ?? 0) + (summary.pending ?? 0);
-    if (tracked > 0 || history.length > 0) return;
     didAutoBackfill.current = true;
-    void runBackfill(true);
-  }, [summary, history.length, runBackfill]);
+    void (async () => {
+      const sync = await syncWatchlist(true);
+      if (sync.synced > 0) return;
+      const tracked = (summary.total_signals ?? 0) + (summary.pending ?? 0);
+      if (tracked === 0 && history.length === 0) {
+        await runBackfill(true);
+      }
+    })();
+  }, [summary, history.length, runBackfill, syncWatchlist]);
 
   const historyBySector = useMemo(() => {
     const grouped: Record<SectorId, { graded: PerformanceEntry[]; pending: PerformanceEntry[] }> = {
@@ -317,6 +354,14 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
             className="rounded-lg border border-sky-500/40 px-4 py-2 text-sm font-medium text-sky-200 hover:bg-sky-500/10 disabled:opacity-50"
           >
             {coachLoading ? "Loading coach…" : "Refresh coach insight"}
+          </button>
+          <button
+            type="button"
+            onClick={() => void syncWatchlist(false)}
+            disabled={loading}
+            className="rounded-lg border border-violet-500/40 px-4 py-2 text-sm font-medium text-violet-200 hover:bg-violet-500/10 disabled:opacity-50"
+          >
+            Sync watchlist picks
           </button>
           <button
             type="button"

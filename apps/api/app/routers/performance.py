@@ -8,6 +8,38 @@ from app.services.performance_service import PerformanceService
 router = APIRouter()
 
 
+@router.post("/performance/sync-watchlist")
+async def sync_watchlist_performance(
+    user_id: str = Depends(get_current_user_id),
+    token: str = Depends(get_access_token),
+) -> dict:
+    """Register every saved watchlist pick into signal_performance."""
+    from app.services.watchlist_service import WatchlistService
+
+    wl = await WatchlistService(SupabaseClient(token), user_id).get_watchlist()
+    perf = PerformanceService(SupabaseClient(token), user_id)
+    synced = 0
+    skipped = 0
+    for item in wl.get("items") or []:
+        if not PerformanceService.resolve_watchlist_item(item):
+            skipped += 1
+            continue
+        try:
+            result = await perf.register_from_watchlist(item=item)
+            if result:
+                synced += 1
+            else:
+                skipped += 1
+        except Exception:
+            skipped += 1
+    return {
+        "status": "ok",
+        "synced": synced,
+        "skipped": skipped,
+        "total": len(wl.get("items") or []),
+    }
+
+
 @router.get("/performance/summary")
 async def get_performance_summary(
     user_id: str = Depends(get_current_user_id),

@@ -6,12 +6,19 @@ import {
   fetchPerformanceHistoryDirect,
   getOutcomeDirect,
   logOutcomeDirect,
+  syncWatchlistDirect,
   updateOutcomeDirect,
 } from "@/lib/performance-direct";
 import {
   performanceTrackingForItem,
   type WatchlistItem,
 } from "@/lib/watchlist-types";
+
+function notifyPerformanceUpdated() {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("atlas:performance-updated"));
+  }
+}
 
 async function getToken() {
   if (usesBffProxy()) return undefined;
@@ -169,15 +176,58 @@ export async function backfillPerformanceTracking(): Promise<{
 }
 
 /** Register a saved watchlist pick for performance tracking (idempotent). */
-export async function registerPerformanceForItem(item: WatchlistItem): Promise<boolean> {
+export async function registerPerformanceForItem(
+  item: WatchlistItem,
+  options?: { notify?: boolean },
+): Promise<boolean> {
   const tracking = performanceTrackingForItem(item);
   if (!tracking) return false;
-  const entry = await logPerformanceOutcome({
-    module: tracking.module,
-    signalId: tracking.signalId,
-    outcome: "pending",
-    resolutionSource: "watchlist",
-    signalSnapshot: tracking.signalSnapshot,
-  });
-  return entry != null;
+  try {
+    const entry = await logPerformanceOutcome({
+      module: tracking.module,
+      signalId: tracking.signalId,
+      outcome: "pending",
+      resolutionSource: "watchlist",
+      signalSnapshot: tracking.signalSnapshot,
+    });
+    if (entry && options?.notify !== false) {
+      notifyPerformanceUpdated();
+    }
+    return entry != null;
+  } catch {
+    return false;
+  }
+}
+
+/** Sync all watchlist items into performance tracking. */
+export async function syncWatchlistToPerformance(): Promise<{
+  synced: number;
+  skipped: number;
+  total: number;
+  source: "api" | "direct";
+}> {
+  const token = await getToken();
+  try {
+    const res = await fetch(`${getApiUrl()}/performance/sync-watchlist`, {
+      method: "POST",
+      ...fetchInit(token),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (res.ok) {
+      const result = {
+        synced: Number(body.synced ?? 0),
+        skipped: Number(body.skipped ?? 0),
+        total: Number(body.total ?? 0),
+        source: "api" as const,
+      };
+      if (result.synced > 0) notifyPerformanceUpdated();
+      return result;
+    }
+  } catch {
+    /* fall through */
+  }
+
+  const direct = await syncWatchlistDirect();
+  if (direct.synced > 0) notifyPerformanceUpdated();
+  return { ...direct, source: "direct" };
 }

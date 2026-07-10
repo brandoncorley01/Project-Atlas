@@ -127,10 +127,7 @@ export async function addWatchlistItem(payload: {
     const body = await res.json().catch(() => ({}));
     if (res.ok && body.item) {
       const item = normalizeItem(body.item as WatchlistItem);
-      const apiItem = body.item as WatchlistItem & { tracking?: unknown };
-      if (!apiItem.tracking) {
-        void registerPerformanceForItem(item);
-      }
+      await registerPerformanceForItem(item);
       notifyWatchlistUpdated();
       return { ok: true, item };
     }
@@ -138,6 +135,7 @@ export async function addWatchlistItem(payload: {
     const apiError = parseApiError(body, "Failed to add");
     const direct = await addWatchlistItemDirect(payload);
     if (direct) {
+      await registerPerformanceForItem(direct);
       notifyWatchlistUpdated();
       return { ok: true, item: direct };
     }
@@ -146,6 +144,7 @@ export async function addWatchlistItem(payload: {
   } catch {
     const direct = await addWatchlistItemDirect(payload);
     if (direct) {
+      await registerPerformanceForItem(direct);
       notifyWatchlistUpdated();
       return { ok: true, item: direct };
     }

@@ -161,8 +161,29 @@ class PerformanceService:
 
     async def register_from_watchlist(self, *, item: dict[str, Any]) -> dict[str, Any] | None:
         """Create a pending performance row when a pick is saved to the watchlist."""
+        resolved = self.resolve_watchlist_item(item)
+        if not resolved:
+            return None
+        module, signal_id, snapshot = resolved
+
+        existing = await self.get_outcome(module=module, signal_id=signal_id)
+        if existing:
+            return existing
+
+        return await self.log_outcome(
+            module=module,
+            signal_id=signal_id,
+            outcome="pending",
+            resolution_source="watchlist",
+            signal_snapshot=snapshot,
+        )
+
+    @staticmethod
+    def resolve_watchlist_item(item: dict[str, Any]) -> tuple[str, str, dict[str, Any]] | None:
+        """Map a watchlist row to performance module, signal_id, and snapshot."""
         meta = item.get("metadata") or {}
-        kind = meta.get("watchlist_kind") or item.get("item_type")
+        item_type = str(item.get("item_type") or "")
+        kind = str(meta.get("watchlist_kind") or item_type)
 
         module_map: dict[str, str] = {
             "sport_bet": "sports",
@@ -171,12 +192,26 @@ class PerformanceService:
             "option_signal": "options",
             "parlay": "parlay",
         }
-        module = module_map.get(str(kind))
+
+        module = module_map.get(kind)
+        if not module:
+            if item_type == "sport_event":
+                if meta.get("legs"):
+                    module = "parlay"
+                elif meta.get("signal_id") or meta.get("bet_type"):
+                    module = "sports"
+            elif item_type == "ticker":
+                if meta.get("signal_id") and meta.get("underlying"):
+                    module = "options"
+                elif meta.get("signal_id") and meta.get("ticker"):
+                    module = "stock"
+            elif meta.get("legs"):
+                module = "parlay"
+
         if not module:
             return None
 
-        signal_id: str | None = None
-        if kind == "parlay" or item.get("item_type") == "parlay":
+        if module == "parlay" or kind == "parlay":
             signal_id = str(meta.get("parlay_id") or item.get("id") or "")
         elif meta.get("signal_id"):
             signal_id = str(meta["signal_id"])
@@ -186,23 +221,13 @@ class PerformanceService:
         if not signal_id:
             return None
 
-        signal_id = self._normalize_signal_id(signal_id)
-        existing = await self.get_outcome(module=module, signal_id=signal_id)
-        if existing:
-            return existing
-
         snapshot = {
             **meta,
             "watchlist_item_id": item.get("id"),
             "symbol": item.get("symbol"),
+            "label": meta.get("label"),
         }
-        return await self.log_outcome(
-            module=module,
-            signal_id=signal_id,
-            outcome="pending",
-            resolution_source="watchlist",
-            signal_snapshot=snapshot,
-        )
+        return module, PerformanceService._normalize_signal_id(signal_id), snapshot
 
     async def get_outcome(self, *, module: str, signal_id: str) -> dict[str, Any] | None:
         row = await self._fetch_outcome_row(module=module, signal_id=signal_id)
