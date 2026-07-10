@@ -111,7 +111,7 @@ export function AtlasExplainButton({ module, signalId, className }: AtlasExplain
         type="button"
         onClick={() => void loadExplanation()}
         disabled={loading}
-        className="text-xs font-medium text-sky-300 hover:text-sky-200 hover:underline disabled:opacity-50"
+        className="inline-flex items-center rounded-lg border border-sky-400/40 bg-sky-500/15 px-3.5 py-2 text-sm font-semibold text-sky-100 hover:bg-sky-500/25 disabled:opacity-50"
       >
         {loading
           ? "Atlas is researching…"

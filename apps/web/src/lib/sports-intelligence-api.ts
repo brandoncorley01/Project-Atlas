@@ -101,7 +101,7 @@ export async function fetchIntelligenceStatus(): Promise<{ enabled: boolean }> {
 
 export async function fetchSportsIntelligence(
   signalId: string,
-  token: string,
+  token?: string,
 ): Promise<AtlasIntelligencePayload | null> {
   try {
     return await apiFetch<AtlasIntelligencePayload>(
@@ -118,7 +118,7 @@ export async function fetchSportsIntelligence(
 
 export async function refreshSportsIntelligence(
   signalId: string,
-  token: string,
+  token?: string,
 ): Promise<AtlasIntelligencePayload> {
   return apiFetch<AtlasIntelligencePayload>(
     `/signals/sports/${signalId}/intelligence/refresh`,

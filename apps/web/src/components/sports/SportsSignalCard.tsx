@@ -261,10 +261,6 @@ export function SportsSignalCard({
         <BookOddsStrip books={bookOdds} preferredBook={preferredBook} compact={!expanded} />
       )}
 
-      {showAnalystPicks && (
-        <AnalystPickSection signalId={row.id} atlasSelection={row.selection} />
-      )}
-
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <button
           type="button"
@@ -335,10 +331,17 @@ export function SportsSignalCard({
             </p>
           )}
           {row.risk_warning && <p className="text-xs text-muted">{row.risk_warning}</p>}
-          <AtlasExplainButton module="sports" signalId={row.id} className="pt-2" />
           <LogOutcomeButtons module="sports" signalId={row.id} className="pt-2 border-t border-border" />
         </div>
       )}
+
+      {/* Always visible: Ask Atlas, then standalone Analyst backing directly under it */}
+      <div className="mt-5 space-y-0 border-t border-border pt-4">
+        <AtlasExplainButton module="sports" signalId={row.id} />
+        {showAnalystPicks && (
+          <AnalystPickSection signalId={row.id} atlasSelection={row.selection} />
+        )}
+      </div>
     </article>
   );
 }
