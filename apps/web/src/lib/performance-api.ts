@@ -247,7 +247,6 @@ export async function syncWatchlistToPerformance(): Promise<WatchlistSyncResult>
     /* fall through */
   }
 
-  if (direct.alreadyTracked > 0) notifyPerformanceUpdated();
   return { ...direct, source: "direct" };
 }
 

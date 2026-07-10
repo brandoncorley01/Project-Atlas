@@ -74,6 +74,8 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
   const [coachError, setCoachError] = useState<string | null>(null);
   const [dataSource, setDataSource] = useState<"api" | "direct" | null>(null);
   const didAutoBackfill = useRef(false);
+  const syncInProgress = useRef(false);
+  const didInitialLoad = useRef(false);
 
   async function getToken() {
     if (usesBffProxy()) return undefined;
@@ -110,13 +112,17 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
     }
 
     if (!usedApi) {
-      const [sum, hist] = await Promise.all([
-        fetchPerformanceSummary(30),
-        fetchPerformanceHistory(200),
-      ]);
-      setSummary(sum);
-      setHistory(hist);
-      setDataSource("direct");
+      try {
+        const [sum, hist] = await Promise.all([
+          fetchPerformanceSummary(30),
+          fetchPerformanceHistory(200),
+        ]);
+        setSummary(sum);
+        setHistory(hist);
+        setDataSource("direct");
+      } catch (err) {
+        setMessage(err instanceof Error ? err.message : "Could not load performance data");
+      }
     }
   }, []);
 
@@ -163,6 +169,8 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
 
   const syncWatchlist = useCallback(
     async (silent = true) => {
+      if (syncInProgress.current) return null;
+      syncInProgress.current = true;
       if (!silent) {
         setLoading(true);
         setMessage(null);
@@ -192,6 +200,7 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
           source: "direct" as const,
         };
       } finally {
+        syncInProgress.current = false;
         if (!silent) setLoading(false);
       }
     },
@@ -232,9 +241,21 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
   );
 
   useEffect(() => {
-    void refreshSummary();
-    void syncWatchlist(true);
-    void loadCoachInsight(false);
+    if (didInitialLoad.current) return;
+    didInitialLoad.current = true;
+
+    void (async () => {
+      await refreshSummary();
+      void loadCoachInsight(false);
+      const sync = await syncWatchlist(true);
+      if (didAutoBackfill.current) return;
+      didAutoBackfill.current = true;
+      if (sync && sync.synced > 0) return;
+      const tracked = (initialSummary.total_signals ?? 0) + (initialSummary.pending ?? 0);
+      if (tracked === 0 && initialHistory.length === 0) {
+        await runBackfill(true);
+      }
+    })();
 
     function onUpdated() {
       void refreshSummary();
@@ -248,24 +269,11 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
       window.removeEventListener("atlas:performance-updated", onUpdated);
       window.removeEventListener("atlas:watchlist-updated", onWatchlistUpdated);
     };
-  }, [refreshSummary, loadCoachInsight, syncWatchlist]);
+  }, [initialHistory.length, initialSummary.pending, initialSummary.total_signals, loadCoachInsight, refreshSummary, runBackfill, syncWatchlist]);
 
   useEffect(() => {
     setCoachInsight(buildClientCoachInsight(summary));
   }, [summary]);
-
-  useEffect(() => {
-    if (didAutoBackfill.current) return;
-    didAutoBackfill.current = true;
-    void (async () => {
-      const sync = await syncWatchlist(true);
-      if (sync.synced > 0) return;
-      const tracked = (summary.total_signals ?? 0) + (summary.pending ?? 0);
-      if (tracked === 0 && history.length === 0) {
-        await runBackfill(true);
-      }
-    })();
-  }, [summary, history.length, runBackfill, syncWatchlist]);
 
   const historyBySector = useMemo(() => {
     const grouped: Record<SectorId, { graded: PerformanceEntry[]; pending: PerformanceEntry[] }> = {
@@ -683,7 +691,6 @@ function OutcomeRow({
       }
       setEditing(false);
       await onUpdated();
-      window.dispatchEvent(new CustomEvent("atlas:performance-updated"));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not update outcome");
     } finally {
