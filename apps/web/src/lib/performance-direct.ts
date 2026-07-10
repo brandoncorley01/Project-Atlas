@@ -79,6 +79,7 @@ async function ensureProfile(
 export function computeSummaryDirect(
   rows: PerformanceEntry[],
   days = 30,
+  options?: { includeByModule?: boolean },
 ): PerformanceSummary {
   const closed = rows.filter((r) => ["win", "loss", "scratch"].includes(r.outcome));
   const wins = closed.filter((r) => r.outcome === "win");
@@ -96,12 +97,15 @@ export function computeSummaryDirect(
   const decided = wins.length + losses.length;
   const winRate = decided > 0 ? Math.round((wins.length / decided) * 1000) / 10 : null;
 
-  const modules = ["sports", "stock", "options", "parlay"] as const;
+  const includeByModule = options?.includeByModule ?? true;
   const by_module: Record<string, PerformanceSummary> = {};
-  for (const mod of modules) {
-    const modRows = rows.filter((r) => r.module === mod);
-    if (modRows.length > 0) {
-      by_module[mod] = computeSummaryDirect(modRows, days);
+  if (includeByModule) {
+    const modules = ["sports", "stock", "options", "parlay"] as const;
+    for (const mod of modules) {
+      const modRows = rows.filter((r) => r.module === mod);
+      if (modRows.length > 0) {
+        by_module[mod] = computeSummaryDirect(modRows, days, { includeByModule: false });
+      }
     }
   }
 
