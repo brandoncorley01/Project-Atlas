@@ -27,6 +27,7 @@ const FILTER_OPTIONS: { value: SportsFilterKey; label: string }[] = [
   { value: "moneyline", label: "Moneyline" },
   { value: "spread", label: "Spread" },
   { value: "total", label: "Over/Under" },
+  { value: "futures", label: "Futures" },
   { value: "steam", label: "Steam moves" },
   { value: "value", label: "Value plays" },
 ];
@@ -34,7 +35,25 @@ const FILTER_OPTIONS: { value: SportsFilterKey; label: string }[] = [
 const WINDOW_OPTIONS: { value: SportsWindowKey; label: string }[] = [
   { value: "soon", label: "Next 48h" },
   { value: "week", label: "This week" },
+  { value: "month", label: "Next 30 days" },
+  { value: "futures", label: "Futures & long odds" },
+  { value: "all", label: "All dates" },
 ];
+
+function windowHint(window: SportsWindowKey): string {
+  switch (window) {
+    case "soon":
+      return "next 48 hours";
+    case "week":
+      return "this week";
+    case "month":
+      return "next 30 days";
+    case "futures":
+      return "futures & longer-dated lines";
+    default:
+      return "all dates";
+  }
+}
 
 export function SportsToolbar({
   sort,
@@ -49,7 +68,7 @@ export function SportsToolbar({
     <div className="mb-4 flex flex-col gap-3 rounded-xl border border-violet-500/25 bg-violet-500/5 p-4 sm:flex-row sm:items-end sm:justify-between">
       <p className="text-sm text-muted">
         <strong className="text-foreground">{resultCount}</strong> play{resultCount === 1 ? "" : "s"}{" "}
-        · {window === "soon" ? "next 48 hours" : "this week"} · sort favors{" "}
+        · {windowHint(window)} · sort favors{" "}
         <TermHint term="opportunity" className="text-muted" />
       </p>
       <div className="flex flex-wrap gap-2">

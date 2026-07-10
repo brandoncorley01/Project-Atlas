@@ -41,7 +41,7 @@ export function SportsSignalsView({
   const [activeSport, setActiveSport] = useState<string | null>(null);
   const [sort, setSort] = useState<SportsSortKey>("soonest");
   const [filter, setFilter] = useState<SportsFilterKey>("all");
-  const [window, setWindow] = useState<SportsWindowKey>("week");
+  const [window, setWindow] = useState<SportsWindowKey>("month");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [parlaySelection, setParlaySelection] = useState<Set<string>>(new Set());
@@ -89,7 +89,7 @@ export function SportsSignalsView({
   const loadItems = useCallback(
     async (token?: string, category?: string | null) => {
       const apiUrl = getApiUrl();
-      const params = new URLSearchParams({ limit: "50", window });
+      const params = new URLSearchParams({ limit: "100", window });
       if (category) params.set("category", category);
       const res = await fetch(`${apiUrl}/signals/sports?${params}`, {
         headers: apiRequestHeaders(token),
@@ -108,7 +108,7 @@ export function SportsSignalsView({
     setWindow(next);
     const token = await getToken();
     const apiUrl = getApiUrl();
-    const params = new URLSearchParams({ limit: "50", window: next });
+    const params = new URLSearchParams({ limit: "100", window: next });
     if (activeCategory) params.set("category", activeCategory);
     const res = await fetch(`${apiUrl}/signals/sports?${params}`, {
       headers: apiRequestHeaders(token),
@@ -282,6 +282,7 @@ export function SportsSignalsView({
         items={items}
         activeSport={activeSport}
         onSelect={setActiveSport}
+        extraLeagues={oddsStatus?.league_catalog ?? oddsStatus?.near_term_leagues ?? []}
       />
 
       <SportsToolbar
@@ -339,8 +340,8 @@ export function SportsSignalsView({
           title={activeCategory || activeSport || filter !== "all" ? "No plays match these filters" : "No upcoming sports plays"}
           description={
             activeCategory || activeSport || filter !== "all"
-              ? "Try All leagues, All bet types, or scan for a fresh slate."
-              : "Global leagues run 24/7 — scan sports odds or fetch live lines for NBA, NFL, MLB, NHL, soccer, and more."
+              ? "Try All leagues, widen the date window (Next 30 days / Futures / All dates), or scan for a fresh slate."
+              : "Global leagues run 24/7 — scan sports odds for WNBA, MLB, soccer, tennis, MMA, futures, and more."
           }
           action={
             <button

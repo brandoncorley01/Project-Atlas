@@ -61,10 +61,10 @@ async def refresh_sports(
     user_id: str = Depends(get_current_user_id),
     token: str = Depends(get_access_token),
     replace: bool = True,
-    limit: int = 50,
+    limit: int = 120,
     force_refresh: bool = False,
 ) -> dict:
-    """Fetch odds from The Odds API and rank +EV moneyline, spread, and total plays."""
+    """Fetch odds from The Odds API and rank +EV moneyline, spread, total, and futures plays."""
     from app.services.sports_service import SportsRefreshService
 
     service = SportsRefreshService(SupabaseClient(token), user_id)

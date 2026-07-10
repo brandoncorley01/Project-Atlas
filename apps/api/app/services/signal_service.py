@@ -20,9 +20,11 @@ from app.services.freshness import (
     stock_staleness_reason,
 )
 from app.services.sports_ranking import (
-    MAX_SCAN_HORIZON_HOURS,
+    MONTH_HOURS,
     NEAR_TERM_HOURS,
+    WEEK_HOURS,
     filter_near_term,
+    is_futures_row,
     is_within_horizon,
     sort_for_display,
 )
@@ -33,14 +35,20 @@ def _sports_window_match(row: dict, window: str) -> bool:
     """Include started games until the next scan replaces them."""
     hours = hours_until_event(row.get("event_start"))
     if hours is None:
-        return False
+        # Futures without a commence time still listable
+        return is_futures_row(row) and window in {"all", "futures", "month"}
     if hours <= 0:
         return True
     if window == "soon":
-        return hours <= NEAR_TERM_HOURS
+        return hours <= NEAR_TERM_HOURS and not is_futures_row(row)
     if window == "week":
-        return hours <= MAX_SCAN_HORIZON_HOURS
-    return True
+        return hours <= WEEK_HOURS
+    if window == "month":
+        return hours <= MONTH_HOURS or is_futures_row(row)
+    if window == "futures":
+        return is_futures_row(row) or hours > WEEK_HOURS
+    # window == "all" (and anything else)
+    return is_within_horizon(row) or is_futures_row(row)
 
 
 def _safe_float(value: object, default: float = 0.0) -> float:
@@ -193,7 +201,7 @@ class SignalService:
         skip_expire: bool = False,
     ) -> list[dict]:
         # Sports picks persist until the user runs a new scan — never auto-expire on list load.
-        fetch_limit = 200 if category or window == "all" else max(limit * 3, 50)
+        fetch_limit = 300 if category or window in {"all", "month", "futures"} else max(limit * 3, 80)
         rows = await self.db.select(
             "sports_signals",
             filters={

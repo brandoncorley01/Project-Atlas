@@ -25,7 +25,7 @@ export default async function SportsPage() {
     if (token) {
       try {
         const [listData, catData] = await Promise.all([
-          apiFetch<SportsListResponse>("/signals/sports?limit=50&window=week", token),
+          apiFetch<SportsListResponse>("/signals/sports?limit=100&window=month", token),
           apiFetch<CategoriesResponse>("/signals/sports/categories", token),
         ]);
         items = listData.items;

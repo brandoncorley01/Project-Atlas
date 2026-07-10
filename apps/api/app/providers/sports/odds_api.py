@@ -19,7 +19,10 @@ logger = logging.getLogger(__name__)
 
 ODDS_API_BASE = "https://api.the-odds-api.com/v4"
 PARALLEL_FETCHES = 10
-MAX_CACHE_HORIZON_HOURS = 168
+# 90 days — keep longer-dated game lines for better early odds; futures use a wider gate.
+MAX_CACHE_HORIZON_HOURS = 2160
+MAX_FUTURES_PER_MARKET = 8
+MAX_FUTURES_SPORTS_PER_SCAN = 20
 
 # Cache the last successful odds pull so repeated scans don't burn API credits,
 # and so an exhausted quota degrades to last-known odds instead of nothing.
@@ -28,116 +31,221 @@ _CACHE_PATH = Path(__file__).resolve().parents[3] / ".odds_cache.json"
 # Legacy fallback when API key missing or /sports fails.
 DEFAULT_SPORT_KEYS = (
     "americanfootball_nfl",
+    "americanfootball_nfl_preseason",
     "basketball_nba",
     "basketball_wnba",
     "baseball_mlb",
     "icehockey_nhl",
+    "soccer_usa_mls",
+    "soccer_epl",
     "soccer_fifa_world_cup",
+    "mma_mixed_martial_arts",
+    "boxing_boxing",
     "tennis_atp_wimbledon",
     "tennis_wta_wimbledon",
 )
 
-# Prefer fetching these first (ordering only — all active game sports are included).
+# Prefer fetching these first (ordering only when scope=full; allowlist when scope=priority).
 PRIORITY_SPORT_KEYS = (
     "americanfootball_nfl",
     "americanfootball_nfl_preseason",
+    "americanfootball_ncaaf",
+    "americanfootball_cfl",
     "basketball_nba",
     "basketball_wnba",
     "basketball_ncaab",
     "basketball_wncaab",
     "baseball_mlb",
+    "baseball_mlb_preseason",
     "icehockey_nhl",
     "soccer_fifa_world_cup",
     "soccer_epl",
     "soccer_spain_la_liga",
     "soccer_germany_bundesliga",
+    "soccer_italy_serie_a",
+    "soccer_france_ligue_one",
     "soccer_uefa_champs_league",
+    "soccer_uefa_europa_league",
     "soccer_usa_mls",
+    "soccer_mexico_ligamx",
+    "soccer_brazil_campeonato",
     "tennis_atp_wimbledon",
     "tennis_wta_wimbledon",
     "tennis_atp_us_open",
     "tennis_wta_us_open",
     "mma_mixed_martial_arts",
     "boxing_boxing",
-    "americanfootball_ncaaf",
     "golf_pga_championship",
+    "golf_the_open_championship",
     "cricket_international_t20",
+    "rugbyleague_nrl",
+    "aussierules_afl",
 )
 
-ESSENTIAL_SUMMER_KEYS = frozenset({"baseball_mlb", "basketball_wnba"})
+ESSENTIAL_SUMMER_KEYS = frozenset(
+    {"baseball_mlb", "basketball_wnba", "soccer_usa_mls", "mma_mixed_martial_arts"}
+)
 ESSENTIAL_WINTER_KEYS = frozenset(
     {"basketball_nba", "icehockey_nhl", "americanfootball_nfl"}
 )
 
-# Sport *families* where tournaments rotate weekly (tennis, combat sports, golf).
-# The Odds API assigns a fresh key per tournament (e.g. tennis_atp_wimbledon then
-# tennis_atp_canadian_open), so an exact-key allowlist always misses most of the
-# book. Include every active tournament in these families and pin them so the
-# per-scan cap can't drop them.
+# Sport *families* where tournaments rotate weekly (tennis, combat sports, golf)
+# or where many leagues run in parallel (soccer). The Odds API assigns a fresh
+# key per tournament/league, so an exact-key allowlist always misses most of the
+# book. Include every active key in these families and pin them so a per-scan
+# cap can't drop them.
 PRIORITY_SPORT_PREFIXES = frozenset(
-    {"tennis", "mma", "boxing", "golf"}
+    {"tennis", "mma", "boxing", "golf", "soccer", "cricket"}
 )
 
 SUMMER_PRIORITY_KEYS = (
     "baseball_mlb",
     "basketball_wnba",
-    "basketball_ncaab",
-    "basketball_wncaab",
     "soccer_usa_mls",
     "soccer_fifa_world_cup",
     "soccer_epl",
     "soccer_uefa_champs_league",
+    "soccer_spain_la_liga",
+    "soccer_germany_bundesliga",
+    "soccer_italy_serie_a",
+    "soccer_france_ligue_one",
+    "soccer_mexico_ligamx",
+    "soccer_brazil_campeonato",
     "tennis_atp_wimbledon",
     "tennis_wta_wimbledon",
+    "tennis_atp_us_open",
+    "tennis_wta_us_open",
     "mma_mixed_martial_arts",
     "boxing_boxing",
+    "golf_pga_championship",
+    "golf_the_open_championship",
     "americanfootball_nfl_preseason",
     "americanfootball_ncaaf",
+    "americanfootball_cfl",
     "cricket_international_t20",
+    "basketball_ncaab",
+    "basketball_wncaab",
+    "rugbyleague_nrl",
+    "aussierules_afl",
 )
 
 WINTER_PRIORITY_KEYS = (
     "basketball_nba",
     "icehockey_nhl",
     "americanfootball_nfl",
-    "baseball_mlb",
+    "americanfootball_ncaaf",
+    "basketball_ncaab",
+    "basketball_wncaab",
     "soccer_epl",
     "soccer_uefa_champs_league",
+    "soccer_spain_la_liga",
+    "soccer_germany_bundesliga",
+    "soccer_italy_serie_a",
+    "soccer_france_ligue_one",
+    "soccer_usa_mls",
     "mma_mixed_martial_arts",
     "boxing_boxing",
+    "tennis_atp_australian_open",
+    "tennis_wta_australian_open",
+    "baseball_mlb",
 )
 
-OFF_SEASON_SKIP_BY_MONTH: dict[tuple[int, ...], frozenset[str]] = {
+# Soft-deprioritize (scan last) — never hard-drop. Odds API `active` + near-term
+# events decide whether a league has plays; calendar months only affect order.
+OFF_SEASON_DEPRIORITIZE_BY_MONTH: dict[tuple[int, ...], frozenset[str]] = {
     (3, 4, 5, 6, 7): frozenset({"americanfootball_nfl"}),
     (7, 8, 9): frozenset({"basketball_nba"}),
     (6, 7, 8): frozenset({"icehockey_nhl"}),
 }
 
+# Back-compat alias used by cache refresh heuristics.
+OFF_SEASON_SKIP_BY_MONTH = OFF_SEASON_DEPRIORITIZE_BY_MONTH
+
 IN_SEASON_RETRY_KEYS = frozenset(
-    {"baseball_mlb", "basketball_wnba", "basketball_nba", "icehockey_nhl", "americanfootball_nfl"}
+    {
+        "baseball_mlb",
+        "basketball_wnba",
+        "basketball_nba",
+        "icehockey_nhl",
+        "americanfootball_nfl",
+        "soccer_usa_mls",
+        "mma_mixed_martial_arts",
+    }
 )
 
 SPORT_LABELS = {
     "americanfootball_nfl": "NFL",
     "americanfootball_nfl_preseason": "NFL Preseason",
+    "americanfootball_ncaaf": "NCAAF",
+    "americanfootball_cfl": "CFL",
     "basketball_nba": "NBA",
     "basketball_wnba": "WNBA",
     "basketball_ncaab": "NCAAB",
     "basketball_wncaab": "NCAAW",
     "baseball_mlb": "MLB",
+    "baseball_mlb_preseason": "MLB Preseason",
     "icehockey_nhl": "NHL",
-    "americanfootball_ncaaf": "NCAAF",
     "soccer_usa_mls": "MLS",
-    "americanfootball_cfl": "CFL",
     "soccer_fifa_world_cup": "FIFA World Cup",
     "soccer_epl": "EPL",
+    "soccer_spain_la_liga": "La Liga",
+    "soccer_germany_bundesliga": "Bundesliga",
+    "soccer_italy_serie_a": "Serie A",
+    "soccer_france_ligue_one": "Ligue 1",
+    "soccer_uefa_champs_league": "UCL",
+    "soccer_uefa_europa_league": "UEL",
+    "soccer_mexico_ligamx": "Liga MX",
+    "soccer_brazil_campeonato": "Brasileirão",
     "mma_mixed_martial_arts": "MMA",
     "boxing_boxing": "Boxing",
+    "golf_pga_championship": "PGA",
+    "golf_the_open_championship": "The Open",
+    "cricket_international_t20": "T20 Cricket",
+    "rugbyleague_nrl": "NRL",
+    "aussierules_afl": "AFL",
 }
 
 
+# Major championship / season futures — scanned when Odds API marks them active.
+MAJOR_FUTURES_KEYS = (
+    "americanfootball_nfl_super_bowl_winner",
+    "basketball_nba_championship_winner",
+    "basketball_wnba_championship_winner",
+    "baseball_mlb_world_series_winner",
+    "icehockey_nhl_championship_winner",
+    "americanfootball_ncaaf_championship_winner",
+    "basketball_ncaab_championship_winner",
+    "soccer_fifa_world_cup_winner",
+    "soccer_epl_winner",
+    "soccer_uefa_champs_league_winner",
+    "golf_masters_tournament_winner",
+    "golf_pga_championship_winner",
+    "golf_the_open_championship_winner",
+    "golf_us_open_winner",
+)
+
+
+def _is_outright_sport(sport: dict[str, Any] | str) -> bool:
+    """True for championship/season futures keys (outrights markets)."""
+    key = str(sport.get("key") if isinstance(sport, dict) else sport or "")
+    if not key:
+        return False
+    if isinstance(sport, dict) and not sport.get("active", True):
+        return False
+    if key.startswith("politics_"):
+        return False
+    lowered = key.lower()
+    return (
+        "_winner" in lowered
+        or lowered.endswith("_winner")
+        or "championship_winner" in lowered
+        or "world_series_winner" in lowered
+        or "super_bowl_winner" in lowered
+    )
+
+
 def _is_game_sport(sport: dict[str, Any]) -> bool:
-    """Exclude futures/outrights and inactive entries — keep matchups books post."""
+    """Active matchup sports — excludes politics and outright/futures keys."""
     if not sport.get("active"):
         return False
     key = str(sport.get("key") or "")
@@ -145,10 +253,7 @@ def _is_game_sport(sport: dict[str, Any]) -> bool:
         return False
     if key.startswith("politics_"):
         return False
-    lowered = key.lower()
-    if "_winner" in lowered or lowered.endswith("_winner"):
-        return False
-    if "championship_winner" in lowered or "world_series_winner" in lowered:
+    if _is_outright_sport(sport):
         return False
     return True
 
@@ -157,8 +262,8 @@ def _sport_label(key: str, sport_title: str | None = None) -> str:
     if key in SPORT_LABELS:
         return SPORT_LABELS[key]
     if sport_title:
+        # "NFL Super Bowl Winner" → keep readable for futures tabs
         return sport_title
-    # soccer_epl -> EPL, tennis_atp_wimbledon -> ATP Wimbledon
     parts = key.split("_")
     if len(parts) >= 2:
         return " ".join(p.upper() if len(p) <= 4 else p.title() for p in parts[1:])
@@ -198,10 +303,9 @@ def _near_term_cache_events(
 
 def _essential_keys_for_month() -> frozenset[str]:
     month = datetime.now(UTC).month
-    skip = _off_season_skip_keys()
     if month in (4, 5, 6, 7, 8, 9):
-        return ESSENTIAL_SUMMER_KEYS - skip
-    return ESSENTIAL_WINTER_KEYS - skip
+        return ESSENTIAL_SUMMER_KEYS
+    return ESSENTIAL_WINTER_KEYS
 
 
 def _cache_needs_live_refresh(near_term_keys: frozenset[str]) -> bool:
@@ -212,9 +316,9 @@ def _cache_needs_live_refresh(near_term_keys: frozenset[str]) -> bool:
     if core_in_season and not core_in_season.issubset(near_term_keys):
         return True
     month = datetime.now(UTC).month
-    skip = _off_season_skip_keys()
+    deprioritized = _off_season_deprioritize_keys()
     preferred = SUMMER_PRIORITY_KEYS if month in (4, 5, 6, 7, 8, 9) else WINTER_PRIORITY_KEYS
-    expected = {k for k in preferred[:10] if k not in skip}
+    expected = {k for k in preferred[:12] if k not in deprioritized}
     return len(near_term_keys & expected) < 3 and len(near_term_keys) <= 4
 
 
@@ -305,6 +409,10 @@ def odds_cache_status() -> dict[str, Any]:
     fresh = has_data and within_ttl and not needs_live
     # Matches fetch_all_sports_odds: zero-credit rescore while cache is within TTL.
     rescore_free = bool(cache) and within_ttl and bool(near_term)
+    cache_stats = dict(cache.get("stats") or {}) if cache else {}
+    league_catalog = list(cache_stats.get("league_catalog") or [])
+    if not league_catalog:
+        league_catalog = list(near_meta.get("near_term_leagues") or [])
     return {
         "has_data": has_data,
         "cache_has_events": bool(raw_events),
@@ -315,11 +423,12 @@ def odds_cache_status() -> dict[str, Any]:
         "cache_needs_live_refresh": needs_live,
         "near_term_event_count": len(near_term),
         "near_term_leagues": near_meta.get("near_term_leagues") or [],
+        "league_catalog": league_catalog,
         "ttl_minutes": ttl,
         "minutes_until_stale": round(max(0.0, ttl - age), 1) if age is not None and within_ttl else 0.0,
         "event_count": len(raw_events),
         "fetched_at": cache.get("fetched_at") if cache else None,
-        "stats": dict(cache.get("stats") or {}) if cache else {},
+        "stats": cache_stats,
     }
 
 
@@ -334,13 +443,19 @@ def estimate_live_scan_credits(sport_count: int | None = None) -> int:
     return sport_count + 1
 
 
-def _off_season_skip_keys() -> frozenset[str]:
+def _off_season_deprioritize_keys() -> frozenset[str]:
+    """Leagues to scan last this month — still included when Odds API marks them active."""
     month = datetime.now(UTC).month
     skip: set[str] = set()
-    for months, sport_keys in OFF_SEASON_SKIP_BY_MONTH.items():
+    for months, sport_keys in OFF_SEASON_DEPRIORITIZE_BY_MONTH.items():
         if month in months:
             skip.update(sport_keys)
     return frozenset(skip)
+
+
+def _off_season_skip_keys() -> frozenset[str]:
+    """Deprecated alias — off-season leagues are soft-deprioritized, not skipped."""
+    return _off_season_deprioritize_keys()
 
 
 def _sport_family(key: str) -> str:
@@ -349,14 +464,15 @@ def _sport_family(key: str) -> str:
 
 
 def _limit_sport_keys(keys: tuple[str, ...], *, force_refresh: bool = False) -> tuple[str, ...]:
-    """Apply scan scope / max-sports settings to conserve API credits."""
-    scope = (config.settings.odds_scan_scope or "priority").lower()
+    """Apply scan scope / max-sports settings. Full scope keeps every active game sport."""
+    del force_refresh  # retained for call-site compatibility; off-season is never hard-dropped
+    scope = (config.settings.odds_scan_scope or "full").lower()
     max_sports = int(config.settings.odds_max_sports_per_scan or 0)
 
     if scope == "priority":
         priority = {k for k in PRIORITY_SPORT_KEYS}
-        # Keep exact priority leagues plus every active tournament in a rotating
-        # family (tennis, MMA, boxing, golf) so the whole book is scanned.
+        # Keep exact priority leagues plus every active tournament/league in a
+        # rotating family (tennis, MMA, boxing, golf, soccer, cricket).
         filtered = tuple(
             k
             for k in keys
@@ -365,16 +481,18 @@ def _limit_sport_keys(keys: tuple[str, ...], *, force_refresh: bool = False) -> 
         if filtered:
             keys = filtered
 
-    if not force_refresh:
-        skip = _off_season_skip_keys()
-        if skip:
-            keys = tuple(k for k in keys if k not in skip)
-
     keys = _seasonal_key_order(keys)
 
+    # Soft-deprioritize off-season majors (scan last) instead of dropping them.
+    deprioritized = _off_season_deprioritize_keys()
+    if deprioritized:
+        front = tuple(k for k in keys if k not in deprioritized)
+        back = tuple(k for k in keys if k in deprioritized)
+        keys = front + back
+
     essential = _essential_keys_for_month()
-    # Pin in-season essentials + full-book families so the cap trims only the
-    # long tail (extra soccer leagues, minor markets), never tennis/MMA/etc.
+    # Pin in-season essentials + full-book families so any cap trims only the
+    # long tail, never tennis/MMA/soccer/etc.
     pinned = tuple(
         k
         for k in keys
@@ -395,7 +513,26 @@ def _seasonal_key_order(keys: tuple[str, ...]) -> tuple[str, ...]:
     month = datetime.now(UTC).month
     preferred = SUMMER_PRIORITY_KEYS if month in (4, 5, 6, 7, 8, 9) else WINTER_PRIORITY_KEYS
     rank = {k: i for i, k in enumerate(preferred)}
-    return tuple(sorted(keys, key=lambda k: (rank.get(k, 999), k)))
+    family_boost = {
+        "tennis": 0,
+        "soccer": 1,
+        "mma": 2,
+        "boxing": 2,
+        "golf": 3,
+        "cricket": 4,
+        "baseball": 5,
+        "basketball": 6,
+        "americanfootball": 7,
+        "icehockey": 8,
+    }
+
+    def _sort_key(k: str) -> tuple[int, int, str]:
+        if k in rank:
+            return (0, rank[k], k)
+        fam = _sport_family(k)
+        return (1, family_boost.get(fam, 50), k)
+
+    return tuple(sorted(keys, key=_sort_key))
 
 
 def filter_events_within_horizon(
@@ -403,13 +540,18 @@ def filter_events_within_horizon(
     *,
     max_hours: float = MAX_CACHE_HORIZON_HOURS,
 ) -> list[dict[str, Any]]:
-    """Drop far-future lines (e.g. full NFL season) — saves cache noise and bad rescans."""
+    """Keep upcoming games within the horizon; futures may extend further."""
     out: list[dict[str, Any]] = []
+    futures_cap = max(max_hours, 8760)  # ~1 year for championship outrights
     for event in events:
         hours = hours_until_event(event.get("commence_time"))
         if hours is None or hours <= 0:
             continue
-        if hours <= max_hours:
+        is_futures = bool(event.get("_is_outright")) or _is_outright_sport(
+            str(event.get("_sport_key") or event.get("sport_key") or "")
+        )
+        limit = futures_cap if is_futures else max_hours
+        if hours <= limit:
             out.append(event)
     return out
 
@@ -663,21 +805,44 @@ async def resolve_sport_keys() -> tuple[str, ...]:
     return tuple(s["key"] for s in active_game)
 
 
+def _resolve_futures_keys(all_sports: list[dict[str, Any]]) -> tuple[str, ...]:
+    """Active championship/season futures, majors first, capped for credit control."""
+    active = [s for s in all_sports if _is_outright_sport(s)]
+    if not active:
+        return ()
+    major = {k for k in MAJOR_FUTURES_KEYS}
+    major_first = [s for s in active if s.get("key") in major]
+    rest = [s for s in active if s.get("key") not in major]
+    major_first.sort(key=lambda s: MAJOR_FUTURES_KEYS.index(s["key"]) if s.get("key") in major else 999)
+    rest.sort(key=lambda s: str(s.get("title") or s.get("key") or ""))
+    ordered = major_first + rest
+    capped = ordered[:MAX_FUTURES_SPORTS_PER_SCAN]
+    return tuple(str(s["key"]) for s in capped if s.get("key"))
+
+
 async def _fetch_sport_odds(
     client: OddsApiClient,
     key: str,
     sport_title: str | None,
     sem: asyncio.Semaphore,
+    *,
+    outright: bool = False,
 ) -> tuple[str, list[dict[str, Any]]]:
     async with sem:
         label = _sport_label(key, sport_title)
-        for markets in ("h2h,spreads,totals", "h2h"):
+        market_attempts = ("outrights",) if outright else ("h2h,spreads,totals", "h2h")
+        for markets in market_attempts:
             try:
                 rows = await client.fetch_odds(key, markets=markets)
                 for row in rows:
                     row["_sport_label"] = label
                     row["_sport_key"] = key
-                if not rows and key in IN_SEASON_RETRY_KEYS:
+                    if outright:
+                        row["_is_outright"] = True
+                        # Normalize missing teams so downstream can detect futures.
+                        row.setdefault("home_team", "")
+                        row.setdefault("away_team", "")
+                if not rows and key in IN_SEASON_RETRY_KEYS and not outright:
                     await asyncio.sleep(0.75)
                     rows = await client.fetch_odds(key, markets=markets)
                     for row in rows:
@@ -685,7 +850,7 @@ async def _fetch_sport_odds(
                         row["_sport_key"] = key
                 return key, rows
             except OddsApiError as exc:
-                if markets == "h2h":
+                if markets == market_attempts[-1]:
                     logger.info("Odds skip %s: %s", key, exc)
                     return key, []
         return key, []
@@ -781,13 +946,22 @@ async def fetch_all_sports_odds(
             key=lambda s: (priority_index.get(s["key"], 999), str(s.get("title") or s["key"])),
         )
         keys = tuple(s["key"] for s in active_game) or DEFAULT_SPORT_KEYS
+        futures_keys = _resolve_futures_keys(all_sports)
     else:
         keys = sport_keys
-        title_by_key = {}
+        title_by_key = {s["key"]: s.get("title") for s in all_sports if s.get("key")} if all_sports else {}
+        futures_keys = ()
 
     keys = _limit_sport_keys(keys, force_refresh=force_refresh)
-    skip_set = _off_season_skip_keys()
-    stats_skipped = sorted(_sport_label(k) for k in skip_set)
+    deprioritized = _off_season_deprioritize_keys()
+    stats_deprioritized = sorted(_sport_label(k) for k in deprioritized if k in keys)
+
+    # League catalog for UI tabs — every scanned game + futures label, seasonally ordered.
+    league_catalog = [
+        _sport_label(k, title_by_key.get(k)) for k in keys
+    ] + [
+        _sport_label(k, title_by_key.get(k)) for k in futures_keys
+    ]
 
     events: list[dict[str, Any]] = []
     stats: dict[str, Any] = {
@@ -795,13 +969,15 @@ async def fetch_all_sports_odds(
         "cached": False,
         "sports": {},
         "events": 0,
-        "sport_keys": list(keys),
-        "sports_scanned": len(keys),
+        "sport_keys": list(keys) + list(futures_keys),
+        "sports_scanned": len(keys) + len(futures_keys),
+        "futures_keys": list(futures_keys),
+        "league_catalog": league_catalog,
         "key_count": info.get("key_count"),
         "active_key_index": info.get("active_key_index"),
         "scan_scope": config.settings.odds_scan_scope,
         "max_sports_per_scan": config.settings.odds_max_sports_per_scan,
-        "credits_used": len(keys) + 1,
+        "credits_used": len(keys) + len(futures_keys) + 1,
     }
     if info.get("total_remaining") is not None:
         stats["total_remaining"] = info.get("total_remaining")
@@ -809,9 +985,13 @@ async def fetch_all_sports_odds(
     sem = asyncio.Semaphore(PARALLEL_FETCHES)
     results = await asyncio.gather(
         *[
-            _fetch_sport_odds(client, key, title_by_key.get(key), sem)
+            _fetch_sport_odds(client, key, title_by_key.get(key), sem, outright=False)
             for key in keys
-        ]
+        ],
+        *[
+            _fetch_sport_odds(client, key, title_by_key.get(key), sem, outright=True)
+            for key in futures_keys
+        ],
     )
 
     for key, rows in results:
@@ -840,9 +1020,10 @@ async def fetch_all_sports_odds(
     stats["leagues_with_near_term_games"] = sorted(
         {str(e.get("_sport_label") or e.get("sport_title") or "Sports") for e in events}
     )
-    stats["skipped_off_season"] = stats_skipped if not force_refresh else []
+    stats["skipped_off_season"] = []  # hard skips removed — soft deprioritize only
+    stats["deprioritized_off_season"] = stats_deprioritized
 
-    # Only cache near-term games so rescans don't resurrect far-future NFL slates.
+    # Cache upcoming games + futures within horizon for zero-credit rescans.
     if events:
         _write_cache(events, stats)
 

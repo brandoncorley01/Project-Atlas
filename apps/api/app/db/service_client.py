@@ -15,4 +15,7 @@ def get_service_db() -> SupabaseClient:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="SUPABASE_SERVICE_ROLE_KEY is not configured",
         )
-    return SupabaseClient(key)
+    # Service role must be both apikey + bearer to bypass RLS.
+    client = SupabaseClient(key)
+    client.headers["apikey"] = key
+    return client

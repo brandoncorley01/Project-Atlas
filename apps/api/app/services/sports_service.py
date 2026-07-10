@@ -23,10 +23,10 @@ from app.services.sports_ranking import (
 
 logger = logging.getLogger(__name__)
 
-MAX_SIGNALS = 80
-MIN_OPPORTUNITY = 35.0
+MAX_SIGNALS = 120
+MIN_OPPORTUNITY = 32.0
 MIN_PER_SPORT = 1
-MAX_PER_SPORT = 6
+MAX_PER_SPORT = 8
 
 
 def _source_note(stats: dict[str, Any]) -> str:
@@ -129,7 +129,13 @@ class SportsRefreshService:
             events = [
                 e
                 for e in events
-                if is_within_horizon({"event_start": e.get("commence_time")})
+                if is_within_horizon(
+                    {
+                        "event_start": e.get("commence_time"),
+                        "bet_type": "futures" if e.get("_is_outright") else "moneyline",
+                        "scoring_snapshot": {"is_futures": bool(e.get("_is_outright"))},
+                    }
+                )
             ]
             events.sort(key=lambda e: hours_until_event(e.get("commence_time")) or 9999)
             fetch_stats["events_before_filter"] = raw_count

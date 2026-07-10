@@ -69,6 +69,8 @@ def american_to_decimal(odds: int) -> float:
 def _format_selection(bet_type: str, name: str, point: float | None) -> str:
     if bet_type == "moneyline":
         return name
+    if bet_type in {"futures", "outright"}:
+        return name
     if bet_type == "spread" and point is not None:
         sign = "+" if point > 0 else ""
         return f"{name} {sign}{point:g}"
@@ -78,9 +80,13 @@ def _format_selection(bet_type: str, name: str, point: float | None) -> str:
 
 
 def _bet_type_label(bet_type: str) -> str:
-    return {"moneyline": "Moneyline", "spread": "Spread", "total": "Total"}.get(
-        bet_type, bet_type.capitalize()
-    )
+    return {
+        "moneyline": "Moneyline",
+        "spread": "Spread",
+        "total": "Total",
+        "futures": "Futures",
+        "outright": "Futures",
+    }.get(bet_type, bet_type.capitalize())
 
 
 def _compute_edge(best_american: int, all_americans: list[int]) -> float:
@@ -116,7 +122,178 @@ def _format_kickoff(event_start: str | None) -> str:
 
 
 def _market_key_for_bet_type(bet_type: str) -> str:
-    return {"moneyline": "h2h", "spread": "spreads", "total": "totals"}.get(bet_type, "h2h")
+    return {
+        "moneyline": "h2h",
+        "spread": "spreads",
+        "total": "totals",
+        "futures": "outrights",
+        "outright": "outrights",
+    }.get(bet_type, "h2h")
+
+
+def _is_outright_event(event: dict[str, Any]) -> bool:
+    if event.get("_is_outright"):
+        return True
+    key = str(event.get("_sport_key") or event.get("sport_key") or "").lower()
+    if "_winner" in key or key.endswith("_winner"):
+        return True
+    for book in event.get("bookmakers") or []:
+        for market in book.get("markets") or []:
+            if market.get("key") in {"outrights", "outrights_lay"}:
+                return True
+    return False
+
+
+def analyze_outright(
+    event: dict[str, Any],
+    *,
+    calibration: dict[str, Any] | None = None,
+) -> list[SportsBetSetup]:
+    """Rank championship/season futures by +EV vs multi-book median."""
+    max_per_market = 8
+
+    cal = calibration or {}
+    min_edge = float(cal.get("sports_min_edge_pct", 1.0))
+    min_opportunity = float(cal.get("sports_min_opportunity", 28.0))
+    confidence_dampen = float(cal.get("sports_confidence_dampen", 0.0))
+
+    sport = str(event.get("_sport_label") or event.get("sport_title") or "Futures")
+    event_name = str(event.get("sport_title") or sport)
+    if "winner" not in event_name.lower() and "championship" not in event_name.lower():
+        event_name = f"{event_name} Futures"
+    event_start = event.get("commence_time")
+    hours = _hours_until(event_start)
+    if hours is not None and hours <= 0:
+        return []
+
+    # Collect every named outcome across books.
+    names: set[str] = set()
+    for book in event.get("bookmakers") or []:
+        for market in book.get("markets") or []:
+            if market.get("key") not in {"outrights", "outrights_lay"}:
+                continue
+            for outcome in market.get("outcomes") or []:
+                name = str(outcome.get("name") or "").strip()
+                if name:
+                    names.add(name)
+
+    candidates: list[dict[str, Any]] = []
+    for name in names:
+        prices = _collect_outcome_odds(event, "outrights", name)
+        if len(prices) < 1:
+            continue
+        book_odds = _collect_book_odds(event, "outrights", name)
+        primary = _select_primary_odds(book_odds, prices)
+        if primary is None:
+            continue
+        edge = _compute_edge(primary, prices)
+        if edge < min_edge and len(prices) >= 2:
+            continue
+        candidates.append(
+            {
+                "bet_type": "futures",
+                "selection": name,
+                "point": None,
+                "odds_american": primary,
+                "edge": edge,
+                "book_count": len(prices),
+                "book_odds": book_odds,
+            }
+        )
+
+    candidates.sort(key=lambda c: (c["edge"], c["book_count"]), reverse=True)
+    candidates = candidates[:max_per_market]
+
+    setups: list[SportsBetSetup] = []
+    book_count = len(event.get("bookmakers") or [])
+    for cand in candidates:
+        odds = int(cand["odds_american"])
+        edge = float(cand["edge"])
+        selection_label = cand["selection"]
+        implied = american_to_implied_prob(odds)
+        ev = round(edge * 0.7, 2)
+        liquidity_boost = min(10, cand["book_count"] * 1.2)
+        setup_strength = min(50, edge * 7 + liquidity_boost + 4)
+        if setup_strength < 14:
+            continue
+        risk = round(min(92, max(25, 45 + implied * 35 - edge * 2)), 1)
+        confidence = round(min(85, setup_strength + min(8, cand["book_count"]) - confidence_dampen), 1)
+        opportunity = round(
+            min(90, confidence * 0.45 + (100 - risk) * 0.25 + edge * 3.5 + 4),
+            1,
+        )
+        if opportunity < min_opportunity:
+            continue
+
+        sharp = "value" if edge >= 2.0 else None
+        kickoff = _format_kickoff(event_start)
+        has_fanduel = any(
+            (b.get("key") == PREFERRED_BOOK_KEY) for b in (event.get("bookmakers") or [])
+        )
+        book_label = PREFERRED_BOOK_TITLE if has_fanduel else "market best"
+        recommendation = f"Futures — {selection_label} · {event_name}"
+        explanation = (
+            f"Futures bet on {selection_label} to win {event_name} "
+            f"(settles around {kickoff}). {book_label} {odds:+d} across "
+            f"{cand['book_count']} books — {edge:.1f}% edge vs market median."
+        )
+        bull_case = (
+            f"{selection_label} at {odds:+d} is {edge:.1f}% better than the "
+            f"multi-book median — early futures often offer the best number."
+        )
+        bear_case = (
+            f"Long-dated futures can drift for months; injuries, trades, or "
+            f"form swings can erase a {edge:.1f}% opening edge."
+        )
+
+        line_movement = {
+            "opening_odds": odds,
+            "consensus_books": cand["book_count"],
+            "edge_pct": edge,
+            "preferred_book": PREFERRED_BOOK_KEY,
+            "preferred_book_title": PREFERRED_BOOK_TITLE,
+            "book_odds": cand.get("book_odds") or [],
+            "event_id": event.get("id"),
+            "is_futures": True,
+        }
+
+        setups.append(
+            SportsBetSetup(
+                sport=sport,
+                event_name=event_name,
+                event_start=event_start,
+                bet_type="futures",
+                selection=selection_label,
+                odds_american=odds,
+                odds_decimal=american_to_decimal(odds),
+                expected_value=ev,
+                line_movement=line_movement,
+                sharp_indicator=sharp,
+                confidence_score=confidence,
+                risk_score=risk,
+                opportunity_score=opportunity,
+                recommendation=recommendation,
+                explanation=explanation,
+                bull_case=bull_case,
+                bear_case=bear_case,
+                invalidation="Odds shorten materially or the contender's outlook collapses.",
+                suggested_action=(
+                    f"Play {odds:+d} on FanDuel for {selection_label}"
+                    if has_fanduel
+                    else f"Target {odds:+d} or better on {selection_label}"
+                ),
+                scoring_snapshot={
+                    "edge_pct": edge,
+                    "book_count": cand["book_count"],
+                    "books_available": book_count,
+                    "bet_type": "futures",
+                    "is_futures": True,
+                    "sport_key": event.get("_sport_key"),
+                    "hours_until_start": hours,
+                },
+            )
+        )
+    return setups
 
 
 def _collect_outcome_odds(
@@ -221,9 +398,12 @@ def analyze_event(
     """Extract ranked bet opportunities from a single Odds API event."""
     from app.agents.sports_stats import apply_stats_to_setup, compute_pick_support
 
+    if _is_outright_event(event):
+        return analyze_outright(event, calibration=calibration)
+
     cal = calibration or {}
     min_edge = float(cal.get("sports_min_edge_pct", 1.0))
-    min_opportunity = float(cal.get("sports_min_opportunity", 38.0))
+    min_opportunity = float(cal.get("sports_min_opportunity", 32.0))
     confidence_dampen = float(cal.get("sports_confidence_dampen", 0.0))
     sport_key = str(event.get("_sport_key") or "")
     home = str(event.get("home_team") or "")
@@ -365,9 +545,9 @@ def analyze_event(
         confidence = round(min(90, setup_strength + min(10, book_count) - confidence_dampen), 1)
         opportunity = round(min(95, confidence * 0.5 + (100 - risk) * 0.3 + edge * 4 + timing_boost_val * 0.35), 1)
 
-        # Far-out games need a stronger edge to surface — rescan later for those slates.
+        # Longer-dated games need a bit more edge, but stay visible for early value.
         if hours is not None and hours > NEAR_TERM_HOURS:
-            opportunity -= min(15.0, (hours - NEAR_TERM_HOURS) * 0.12)
+            opportunity -= min(8.0, (hours - NEAR_TERM_HOURS) * 0.03)
         if has_fanduel and cand["book_count"] < 2:
             opportunity = max(opportunity, min_opportunity)
         if opportunity < min_opportunity:

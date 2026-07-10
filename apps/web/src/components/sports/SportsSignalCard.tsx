@@ -77,6 +77,7 @@ function betTypeLabel(betType: string) {
   if (betType === "moneyline") return "Moneyline";
   if (betType === "spread") return "Spread";
   if (betType === "total") return "Total";
+  if (betType === "futures" || betType === "outright") return "Futures";
   return betType;
 }
 
@@ -85,7 +86,9 @@ function kickoffBadge(hours?: number | null) {
   if (hours <= 6) return { label: "Starting very soon", className: "bg-rose-500/20 text-rose-300" };
   if (hours <= 24) return { label: "Today", className: "bg-amber-500/20 text-amber-300" };
   if (hours <= 48) return { label: "Next 48h", className: "bg-emerald-500/20 text-emerald-300" };
-  return null;
+  if (hours <= 168) return { label: "This week", className: "bg-sky-500/20 text-sky-300" };
+  if (hours <= 720) return { label: "This month", className: "bg-violet-500/20 text-violet-300" };
+  return { label: "Futures window", className: "bg-violet-500/15 text-violet-200" };
 }
 
 function formatEventStart(iso?: string | null) {

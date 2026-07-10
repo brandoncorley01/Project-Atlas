@@ -134,6 +134,7 @@ async def providers_status(refresh: bool = False) -> dict:
             "cache_fresh": odds_cache_fresh,
             "cache_needs_live_refresh": cache_status.get("cache_needs_live_refresh"),
             "near_term_leagues": cache_status.get("near_term_leagues") or [],
+            "league_catalog": cache_status.get("league_catalog") or [],
             "near_term_event_count": cache_status.get("near_term_event_count"),
             "cache_ttl_minutes": active_settings.odds_cache_ttl_minutes,
             "minutes_until_stale": cache_status.get("minutes_until_stale"),
@@ -144,7 +145,9 @@ async def providers_status(refresh: bool = False) -> dict:
             "features": [
                 "multi-key failover",
                 "response cache",
-                "priority league scan",
+                "full global league scan",
+                "seasonal priority",
+                "futures / outrights",
                 "soccer & tennis",
                 "moneyline / spread / totals",
                 "+EV edge scan",

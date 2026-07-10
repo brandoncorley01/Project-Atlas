@@ -7,11 +7,19 @@ export type SportsSortKey =
   | "ev"
   | "confidence"
   | "risk_low";
-export type SportsFilterKey = "all" | "moneyline" | "spread" | "total" | "steam" | "value";
-export type SportsWindowKey = "soon" | "week";
+export type SportsFilterKey =
+  | "all"
+  | "moneyline"
+  | "spread"
+  | "total"
+  | "futures"
+  | "steam"
+  | "value";
+export type SportsWindowKey = "soon" | "week" | "month" | "futures" | "all";
 
 const NEAR_TERM_HOURS = 48;
 const WEEK_HOURS = 168;
+const MONTH_HOURS = 720;
 
 function getEdge(row: SportsSignal): number {
   return Number(row.line_movement?.edge_pct ?? row.context?.edge_pct ?? 0);
@@ -25,17 +33,38 @@ function getSoonest(row: SportsSignal): number {
   return row.hours_until_start ?? 9999;
 }
 
+function isFutures(row: SportsSignal): boolean {
+  const bet = (row.bet_type || "").toLowerCase();
+  return bet === "futures" || bet === "outright";
+}
+
 function compositeRank(row: SportsSignal): number {
   const opp = row.opportunity_score ?? 0;
   const edge = getEdge(row);
   const hours = getSoonest(row);
-  const soonBoost = hours <= 24 ? 12 : hours <= NEAR_TERM_HOURS ? 8 : 0;
-  const latePenalty = hours > NEAR_TERM_HOURS ? Math.min(20, (hours - NEAR_TERM_HOURS) * 0.12) : 0;
+  const soonBoost = hours <= 24 ? 12 : hours <= NEAR_TERM_HOURS ? 8 : hours <= WEEK_HOURS ? 2 : 0;
+  const latePenalty =
+    !isFutures(row) && hours > NEAR_TERM_HOURS
+      ? Math.min(12, (hours - NEAR_TERM_HOURS) * 0.04)
+      : 0;
   return opp + soonBoost + edge * 0.35 - latePenalty;
 }
 
 export function filterByWindow(items: SportsSignal[], window: SportsWindowKey): SportsSignal[] {
   const started = items.filter((i) => (i.hours_until_start ?? 0) <= 0);
+  if (window === "all") {
+    return items;
+  }
+  if (window === "futures") {
+    return items.filter((i) => isFutures(i) || (i.hours_until_start ?? 0) > WEEK_HOURS);
+  }
+  if (window === "month") {
+    const upcoming = items.filter((i) => {
+      const h = i.hours_until_start ?? 9999;
+      return (h > 0 && h <= MONTH_HOURS) || isFutures(i);
+    });
+    return [...started, ...upcoming];
+  }
   if (window === "week") {
     const upcoming = items.filter((i) => {
       const h = i.hours_until_start ?? 9999;
@@ -45,7 +74,7 @@ export function filterByWindow(items: SportsSignal[], window: SportsWindowKey): 
   }
   const upcoming = items.filter((i) => {
     const h = i.hours_until_start ?? 9999;
-    return h > 0 && h <= NEAR_TERM_HOURS;
+    return h > 0 && h <= NEAR_TERM_HOURS && !isFutures(i);
   });
   return [...started, ...upcoming];
 }
@@ -58,6 +87,8 @@ export function filterSports(items: SportsSignal[], filter: SportsFilterKey): Sp
       return items.filter((i) => i.bet_type === "spread");
     case "total":
       return items.filter((i) => i.bet_type === "total");
+    case "futures":
+      return items.filter((i) => isFutures(i));
     case "steam":
       return items.filter(
         (i) => (i.sharp_indicator ?? i.context?.sharp_indicator) === "steam",
@@ -96,6 +127,17 @@ export function sortSports(items: SportsSignal[], sort: SportsSortKey): SportsSi
 
 export function filterBySport(items: SportsSignal[], sportKey: string | null): SportsSignal[] {
   if (!sportKey) return items;
-  const norm = sportKey.toLowerCase();
-  return items.filter((i) => i.sport.toLowerCase().replace(/\s+/g, "_") === norm);
+  const norm = sportKey.toLowerCase().replace(/\s+/g, "_");
+  return items.filter((i) => {
+    const itemNorm = i.sport.toLowerCase().replace(/\s+/g, "_");
+    if (itemNorm === norm) return true;
+    // Allow "tennis" tab to match "ATP Wimbledon" / "WTA ..." labels
+    if (norm === "tennis" && (itemNorm.includes("atp") || itemNorm.includes("wta") || itemNorm.includes("tennis"))) {
+      return true;
+    }
+    if (norm === "mma" && (itemNorm.includes("mma") || itemNorm.includes("ufc"))) {
+      return true;
+    }
+    return itemNorm.includes(norm) || norm.includes(itemNorm);
+  });
 }

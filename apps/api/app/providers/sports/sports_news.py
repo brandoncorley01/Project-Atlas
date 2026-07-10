@@ -25,11 +25,15 @@ SPORTS_RSS_FEEDS = [
 SPORT_KEYWORDS: dict[str, tuple[str, ...]] = {
     "NFL": ("nfl", "football", "quarterback", "touchdown", "super bowl"),
     "NBA": ("nba", "basketball", "lakers", "celtics", "playoffs"),
+    "WNBA": ("wnba", "women's basketball", "aces", "liberty", "fever"),
     "MLB": ("mlb", "baseball", "pitcher", "home run", "world series", "inning"),
     "NHL": ("nhl", "hockey", "stanley cup", "goalie"),
-    "MLS": ("mls", "soccer", "premier league", "champions league", "fifa"),
+    "MLS": ("mls", "soccer", "premier league", "champions league", "fifa", "liga mx"),
+    "EPL": ("epl", "premier league", "arsenal", "liverpool", "manchester"),
     "UFC": ("ufc", "mma", "fight", "octagon"),
+    "Boxing": ("boxing", "heavyweight", "title fight", "knockout"),
     "Tennis": ("tennis", "wimbledon", "us open", "atp", "wta"),
+    "Golf": ("golf", "pga", "the open", "masters", "ryder cup"),
 }
 
 # Headlines with these terms are not news for the listed sport.

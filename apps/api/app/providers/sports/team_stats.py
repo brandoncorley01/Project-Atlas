@@ -21,20 +21,30 @@ _RECENT_GAMES = 10
 _SCORES_DAYS = 3
 
 # Sports where scores endpoint returns useful team-level results.
+# Tennis/golf rotate tournament keys — match by family in the fetch helper.
 _SCORES_SPORTS = frozenset(
     {
         "americanfootball_nfl",
         "americanfootball_nfl_preseason",
         "americanfootball_ncaaf",
+        "americanfootball_cfl",
         "basketball_nba",
         "basketball_wnba",
         "basketball_ncaab",
+        "basketball_wncaab",
         "baseball_mlb",
         "icehockey_nhl",
         "soccer_epl",
         "soccer_usa_mls",
         "soccer_uefa_champs_league",
+        "soccer_uefa_europa_league",
+        "soccer_spain_la_liga",
+        "soccer_germany_bundesliga",
+        "soccer_italy_serie_a",
+        "soccer_france_ligue_one",
         "soccer_fifa_world_cup",
+        "soccer_mexico_ligamx",
+        "soccer_brazil_campeonato",
         "mma_mixed_martial_arts",
         "boxing_boxing",
         "tennis_atp_wimbledon",
@@ -43,6 +53,14 @@ _SCORES_SPORTS = frozenset(
         "tennis_wta_us_open",
     }
 )
+_SCORES_SPORT_PREFIXES = frozenset({"tennis", "soccer", "mma", "boxing"})
+
+
+def _scores_key_allowed(key: str) -> bool:
+    if key in _SCORES_SPORTS:
+        return True
+    family = key.split("_", 1)[0]
+    return family in _SCORES_SPORT_PREFIXES
 
 
 @dataclass
@@ -326,7 +344,7 @@ def match_stats_payload(stats: MatchStats | None) -> dict[str, Any] | None:
 
 async def fetch_scores_by_sport(sport_keys: set[str]) -> dict[str, list[dict[str, Any]]]:
     """Fetch recent completed scores per sport (cached)."""
-    keys = {k for k in sport_keys if k in _SCORES_SPORTS}
+    keys = {k for k in sport_keys if _scores_key_allowed(k)}
     if not keys:
         return {}
 

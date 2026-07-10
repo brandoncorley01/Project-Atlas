@@ -90,7 +90,7 @@ export function SportsHeroBanner({ playCount }: SportsHeroBannerProps) {
               24/7 MARKETS
             </span>
             <span className="rounded-full border border-violet-400/40 bg-violet-500/20 px-2.5 py-0.5 text-xs font-semibold text-violet-200">
-              NBA · NFL · MLB · NHL · Soccer · MMA +
+              WNBA · MLB · Soccer · Tennis · Futures +
             </span>
           </div>
           <h2 className="mt-3 text-xl font-bold text-foreground sm:text-2xl">

@@ -36,10 +36,11 @@ class Settings(BaseSettings):
     odds_cache_ttl_minutes: int = 30
 
     # Max sportsbooks leagues fetched per live scan (1 credit each). 0 = no cap.
-    odds_max_sports_per_scan: int = 18
+    # Default uncapped so Atlas covers the full global slate (WNBA, tennis, soccer, etc.).
+    odds_max_sports_per_scan: int = 0
 
-    # priority = US majors + top soccer/tennis only; full = every active game sport.
-    odds_scan_scope: str = "priority"
+    # priority = US majors + top soccer/tennis/combat first; full = every active game sport.
+    odds_scan_scope: str = "full"
 
     environment: str = "development"
     default_user_id: str = ""
