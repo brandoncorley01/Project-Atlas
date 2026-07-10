@@ -66,8 +66,10 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
   const [loading, setLoading] = useState(false);
   const [gradingSector, setGradingSector] = useState<SectorId | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [coachInsight, setCoachInsight] = useState<CoachInsight | null>(null);
-  const [coachLoading, setCoachLoading] = useState(true);
+  const [coachInsight, setCoachInsight] = useState<CoachInsight | null>(() =>
+    buildClientCoachInsight(initialSummary),
+  );
+  const [coachRefreshing, setCoachRefreshing] = useState(false);
   const [coachError, setCoachError] = useState<string | null>(null);
   const [dataSource, setDataSource] = useState<"api" | "direct" | null>(null);
   const didAutoBackfill = useRef(false);
@@ -118,19 +120,23 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
   }, []);
 
   const loadCoachInsight = useCallback(
-    async (refresh = false, summarySnapshot?: PerformanceSummary) => {
-      const snapshot = summarySnapshot ?? summary;
+    async (refresh = false) => {
+      const snapshot = summary;
       setCoachInsight(buildClientCoachInsight(snapshot));
       setCoachError(null);
-      if (refresh) setCoachLoading(true);
+      if (refresh) setCoachRefreshing(true);
 
       const token = await getToken();
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 12_000);
+
       try {
         const params = new URLSearchParams({ days: "30" });
         if (refresh) params.set("refresh", "true");
         const res = await fetch(`${getApiUrl()}/ai/coach-insight?${params}`, {
           headers: apiRequestHeaders(token),
           credentials: usesBffProxy() ? "include" : "same-origin",
+          signal: controller.signal,
         });
         const body = await res.json().catch(() => ({}));
         if (res.ok && body.narrative) {
@@ -141,10 +147,15 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
             setCoachError(`Using offline coach — ${detail}`);
           }
         }
-      } catch {
-        setCoachError("Using offline coach — API temporarily unavailable.");
+      } catch (err) {
+        const aborted = err instanceof Error && err.name === "AbortError";
+        if (aborted || refresh) {
+          setCoachError("Using offline coach — API took too long or is unavailable.");
+        }
+      } finally {
+        window.clearTimeout(timeout);
+        setCoachRefreshing(false);
       }
-      setCoachLoading(false);
     },
     [summary],
   );
@@ -205,11 +216,10 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
   );
 
   useEffect(() => {
-    void (async () => {
-      await refreshSummary();
-      await syncWatchlist(true);
-      void loadCoachInsight(false);
-    })();
+    void refreshSummary();
+    void syncWatchlist(true);
+    void loadCoachInsight(false);
+
     function onUpdated() {
       void refreshSummary();
     }
@@ -350,10 +360,10 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
           <button
             type="button"
             onClick={() => void loadCoachInsight(true)}
-            disabled={loading || coachLoading}
+            disabled={loading || coachRefreshing}
             className="rounded-lg border border-sky-500/40 px-4 py-2 text-sm font-medium text-sky-200 hover:bg-sky-500/10 disabled:opacity-50"
           >
-            {coachLoading ? "Loading coach…" : "Refresh coach insight"}
+            {coachRefreshing ? "Refreshing coach…" : "Refresh coach insight"}
           </button>
           <button
             type="button"
@@ -382,14 +392,19 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
         </div>
 
         <div className="mt-4 rounded-lg border border-sky-500/25 bg-sky-500/5 p-3">
-          <p className="text-xs font-semibold uppercase tracking-wide text-sky-200/80">
-            {coachInsight?.source === "openai" ? "AI coach" : "Coach summary"}
-          </p>
-          {coachLoading ? (
-            <p className="mt-2 text-sm text-muted">Loading your performance insight…</p>
-          ) : coachInsight?.narrative ? (
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-sky-200/80">
+              {coachInsight?.source === "openai" ? "AI coach" : "Coach summary"}
+            </p>
+            {coachRefreshing && (
+              <span className="text-xs text-muted">Updating…</span>
+            )}
+          </div>
+          {coachError && (
+            <p className="mt-2 text-xs text-amber-300/90">{coachError}</p>
+          )}
+          {coachInsight?.narrative ? (
             <>
-              {coachError && <p className="mt-2 text-xs text-amber-300/90">{coachError}</p>}
               <p className="mt-2 text-sm leading-relaxed text-foreground/90">{coachInsight.narrative}</p>
               {coachInsight.focus_areas && coachInsight.focus_areas.length > 0 && (
                 <ul className="mt-3 space-y-1 text-sm text-muted">
