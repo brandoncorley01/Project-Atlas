@@ -36,6 +36,7 @@ export interface SportsSignal {
     opening_odds?: number;
     book_odds?: BookOddsLine[];
     preferred_book?: string;
+    source?: string;
   };
   book_odds?: BookOddsLine[];
   preferred_book?: string;
@@ -49,6 +50,13 @@ export interface SportsSignal {
   implied_prob?: number;
   sharp_indicator?: string | null;
   stats_support?: number | null;
+  pick_source?: string | null;
+  openai_web?: boolean;
+  scoring_snapshot?: {
+    source?: string;
+    openai_web?: boolean;
+    [key: string]: unknown;
+  } | null;
   team_stats?: {
     summary?: string;
     form_note?: string;
@@ -133,12 +141,19 @@ export function SportsSignalCard({
   const isTopPick = rank === 1;
   const soonBadge = kickoffBadge(row.hours_until_start);
   const showNews = Boolean(row.news_verified && (row.related_news?.length ?? 0) > 0);
+  const isOpenAiPick = Boolean(
+    row.openai_web
+      || row.pick_source === "openai_web"
+      || row.scoring_snapshot?.source === "openai_web"
+      || row.scoring_snapshot?.openai_web
+      || (row.line_movement as { source?: string } | undefined)?.source === "openai_web",
+  );
 
   return (
     <article
       className={`signal-card atlas-card atlas-card-interactive p-4 sm:p-5 ${
         isTopPick ? "border-violet-500/50 ring-2 ring-violet-500/20" : ""
-      }`}
+      } ${isOpenAiPick ? "border-sky-500/40" : ""}`}
     >
       {onParlayToggle && (
         <div className="signal-card__parlay-toggle">
@@ -155,6 +170,14 @@ export function SportsSignalCard({
           <p className="text-xs uppercase tracking-wide text-muted">
             #{rank} · Sports{isTopPick && " · TOP PICK"}
           </p>
+          {isOpenAiPick && (
+            <span
+              title="Found via OpenAI web search of analyst and popular-bettor consensus — not Odds API +EV math. Verify the live FanDuel/DraftKings number."
+              className="rounded-full border border-sky-400/50 bg-sky-500/20 px-2 py-0.5 text-xs font-bold tracking-wide text-sky-200"
+            >
+              OpenAI
+            </span>
+          )}
           <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${sportMeta.accentClass}`}>
             {sportMeta.emoji} {sportMeta.label}
           </span>
@@ -166,9 +189,14 @@ export function SportsSignalCard({
               {soonBadge.label}
             </span>
           )}
-          {sharp && (
+          {sharp && sharp !== "consensus" && (
             <span className="rounded-full bg-sky-500/20 px-2 py-0.5 text-xs font-medium text-sky-300">
               {sharp === "steam" ? "Steam move" : "Value"}
+            </span>
+          )}
+          {isOpenAiPick && (
+            <span className="rounded-full bg-sky-500/10 px-2 py-0.5 text-xs font-medium text-sky-300/90">
+              Analyst consensus
             </span>
           )}
           {categories.slice(0, 2).map((slug) => (

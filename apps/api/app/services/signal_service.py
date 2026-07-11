@@ -332,6 +332,12 @@ class SignalService:
             "sharp_indicator": row.get("sharp_indicator"),
             "stats_support": _safe_float(snapshot.get("stats_support")),
             "team_stats": snapshot.get("team_stats"),
+            "pick_source": str(snapshot.get("source") or line_movement.get("source") or "odds_api"),
+            "openai_web": bool(
+                snapshot.get("openai_web")
+                or snapshot.get("source") == "openai_web"
+                or line_movement.get("source") == "openai_web"
+            ),
             "confidence_score": _safe_float(row.get("confidence_score")),
             "risk_score": _safe_float(row.get("risk_score")),
             "opportunity_score": _safe_float(row.get("opportunity_score")),
