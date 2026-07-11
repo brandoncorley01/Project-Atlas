@@ -12,7 +12,7 @@ from app.providers.market.universe import CORE_LIQUID, discover_market_symbols
 from app.providers.news.finnhub import fetch_company_news_batch, fetch_market_news
 from app.providers.news.rss import fetch_rss_news
 from app.providers.stocks.quotes import fetch_stock_quotes
-from app.services.freshness import is_news_fresh
+from app.services.freshness import age_hours, is_news_fresh
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +183,36 @@ class NewsService:
         if include_quotes:
             return await self.format_items_with_quotes(rows)
         return [self._format_item(row, None) for row in rows]
+
+    async def briefing_news(self, limit: int = 6) -> list[dict]:
+        """Freshest high-signal headlines for Atlas briefing (recency over stale impact)."""
+        rows = await self.db.select(
+            "news_items",
+            filters={"user_id": f"eq.{self.user_id}"},
+            order="published_at.desc",
+            limit=min(80, max(30, limit * 8)),
+        )
+        rows = [r for r in rows if is_news_fresh(r)]
+
+        def _briefing_score(row: dict) -> float:
+            age = age_hours(row.get("published_at"))
+            age_h = float(age) if age is not None else 48.0
+            # Strongly prefer last ~18h; still allow strong older items as fallback.
+            recency = max(0.0, 24.0 - age_h) * 3.0
+            impact = float(row.get("impact_score") or 0)
+            urgency = float(row.get("time_sensitivity_score") or 0)
+            return recency + impact * 0.45 + urgency * 0.55
+
+        scored: list[tuple[float, float, dict]] = []
+        for row in rows:
+            age = age_hours(row.get("published_at"))
+            age_h = float(age) if age is not None else 99.0
+            scored.append((_briefing_score(row), age_h, row))
+
+        recent = [row for _, age_h, row in scored if age_h <= 18]
+        pool = recent if len(recent) >= 2 else [row for _, _, row in scored]
+        pool.sort(key=_briefing_score, reverse=True)
+        return [self._format_item(row, None) for row in pool[:limit]]
 
     @staticmethod
     def _lookup_quote(quotes: dict[str, dict] | None, symbol: str) -> dict:

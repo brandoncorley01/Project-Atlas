@@ -103,6 +103,7 @@ async def _build_dashboard(user_id: str, token: str, limit: int) -> dict:
         sports,
         parlay_rows,
         breaking,
+        briefing_news,
         unread_alerts,
         perf_summary,
         tracking_stats,
@@ -113,6 +114,7 @@ async def _build_dashboard(user_id: str, token: str, limit: int) -> dict:
         _safe("sports_opportunities", signal_service.sports_opportunities(limit=8, skip_expire=True), [], warnings),
         _safe("list_parlays", parlay_service.list_parlays(limit=1), [], warnings),
         _safe("breaking_news", news_service.breaking_news(limit=5, include_quotes=False), [], warnings),
+        _safe("briefing_news", news_service.briefing_news(limit=6), [], warnings),
         _safe("unread_alerts", alert_service.unread_count(), 0, warnings),
         _safe("performance_summary", performance_service.get_summary(days=30), {}, warnings),
         _safe("tracking_stats", registry.tracking_stats(), {}, warnings),
@@ -168,7 +170,7 @@ async def _build_dashboard(user_id: str, token: str, limit: int) -> dict:
         "sports": len(sports) == 0,
         "stocks": len(stocks) == 0,
         "options": len(top) == 0 and len(budget) == 0,
-        "news": len(breaking) == 0,
+        "news": len(breaking) == 0 and len(briefing_news) == 0,
     }
 
     briefing_ctx = {
@@ -177,6 +179,7 @@ async def _build_dashboard(user_id: str, token: str, limit: int) -> dict:
         "stock_opportunities": stocks,
         "sports_opportunities": sports,
         "breaking_news": breaking,
+        "briefing_news": briefing_news or breaking,
         "best_parlay": best_parlay,
         "performance_summary": performance_block,
         "needs_refresh": needs_refresh,
@@ -187,7 +190,7 @@ async def _build_dashboard(user_id: str, token: str, limit: int) -> dict:
     try:
         atlas_briefing = await asyncio.wait_for(
             ai_narrative_service.daily_briefing(user_id=user_id, ctx=briefing_ctx),
-            timeout=8.0,
+            timeout=12.0,
         )
     except TimeoutError:
         warnings.append("atlas_briefing: timed out (template only)")
@@ -213,6 +216,7 @@ async def _build_dashboard(user_id: str, token: str, limit: int) -> dict:
         "sports_opportunities": sports,
         "best_parlay": best_parlay,
         "breaking_news": breaking,
+        "briefing_news": briefing_news or breaking,
         "unread_alerts_count": unread_alerts,
         "atlas_briefing": atlas_briefing,
         "market_intelligence": market_intelligence,

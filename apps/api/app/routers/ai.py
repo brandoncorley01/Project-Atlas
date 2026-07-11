@@ -60,6 +60,9 @@ async def get_briefing(
         "stock_opportunities": dashboard.get("stock_opportunities") or [],
         "sports_opportunities": dashboard.get("sports_opportunities") or [],
         "breaking_news": dashboard.get("breaking_news") or [],
+        "briefing_news": dashboard.get("briefing_news")
+        or dashboard.get("breaking_news")
+        or [],
         "best_parlay": dashboard.get("best_parlay"),
         "performance_summary": dashboard.get("performance_summary") or {},
         "needs_refresh": (dashboard.get("meta") or {}).get("needs_refresh") or {},

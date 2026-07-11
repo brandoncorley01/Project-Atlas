@@ -116,13 +116,6 @@ export function AtlasBriefingCard({ briefing, onRefresh, refreshing }: AtlasBrie
               {briefing.learning_insight}
             </p>
           )}
-
-          {!isAi && (
-            <p className="text-xs text-muted">
-              Add <code className="text-foreground">OPENAI_API_KEY</code> to your API env for personalized AI
-              narratives. Numbers always come from Atlas scans — AI only explains what&apos;s already ranked.
-            </p>
-          )}
         </div>
       )}
     </section>

@@ -2,20 +2,26 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import time
 from datetime import UTC, date, datetime
 from typing import Any
 
+from app.config import reload_settings
 from app.services.llm_service import llm_service
 
 logger = logging.getLogger(__name__)
 
-_BRIEFING_CACHE: dict[str, tuple[str, dict[str, Any]]] = {}
+# (expires_at_epoch, fingerprint, payload)
+_BRIEFING_CACHE: dict[str, tuple[float, str, dict[str, Any]]] = {}
 _COACH_CACHE: dict[str, tuple[str, dict[str, Any]]] = {}
+_BRIEFING_TTL_SEC = 15 * 60
 
 _BRIEFING_SYSTEM = """You are Atlas, a personal decision-intelligence coach for retail traders and bettors.
 Write concise, actionable briefings. Never invent prices, odds, Greeks, or scores — only use facts from the user payload.
-Tone: direct, encouraging, risk-aware. No financial advice disclaimers every sentence — one short reminder is enough."""
+Tone: direct, encouraging, risk-aware. No financial advice disclaimers every sentence — one short reminder is enough.
+Always prioritize the freshest news headlines from the payload, then the best sports pick, then the top options pick."""
 
 _EXPLAIN_SYSTEM = """You are Atlas explaining a single ranked pick to a retail user.
 Use only numbers and facts from the payload. Do not invent market data.
@@ -39,25 +45,45 @@ def _pick_titles(items: list[dict[str, Any]], *, limit: int = 3) -> list[str]:
     return titles
 
 
+def _ctx_fingerprint(ctx: dict[str, Any]) -> str:
+    news = ctx.get("breaking_news") or ctx.get("briefing_news") or []
+    news_bits = [
+        str(n.get("headline") or n.get("title") or "")[:80]
+        for n in news[:5]
+        if n.get("headline") or n.get("title")
+    ]
+    top = (ctx.get("top_opportunities") or [{}])[:1]
+    sports = (ctx.get("sports_opportunities") or [{}])[:1]
+    blob = "|".join(
+        [
+            *news_bits,
+            str((top[0] if top else {}).get("title") or ""),
+            str((sports[0] if sports else {}).get("title") or ""),
+        ]
+    )
+    return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:20]
+
+
 def _template_briefing(ctx: dict[str, Any]) -> dict[str, Any]:
     top = ctx.get("top_opportunities") or []
     sports = ctx.get("sports_opportunities") or []
     stocks = ctx.get("stock_opportunities") or []
-    news = ctx.get("breaking_news") or []
+    news = ctx.get("briefing_news") or ctx.get("breaking_news") or []
     perf = ctx.get("performance_summary") or {}
     needs = (ctx.get("needs_refresh") or {}) if isinstance(ctx.get("needs_refresh"), dict) else {}
 
+    # Fixed priority: recent news → best sports → top option
     highlights: list[str] = []
-    if top:
-        highlights.append(f"Top options pick: {top[0].get('title', '—')}")
-    if sports:
-        highlights.append(f"Best sports edge: {sports[0].get('title', '—')}")
-    if stocks:
-        highlights.append(f"Leading stock setup: {stocks[0].get('title', '—')}")
-    if news:
-        headline = news[0].get("headline") or news[0].get("title")
+    for item in news[:2]:
+        headline = item.get("headline") or item.get("title")
         if headline:
-            highlights.append(f"Breaking: {headline}")
+            highlights.append(f"News: {headline}")
+    if sports:
+        highlights.append(f"Best sports pick: {sports[0].get('title', '—')}")
+    if top:
+        highlights.append(f"Top option: {top[0].get('title', '—')}")
+    if stocks and len(highlights) < 4:
+        highlights.append(f"Stock setup: {stocks[0].get('title', '—')}")
 
     watch: list[str] = []
     if needs.get("sports"):
@@ -66,6 +92,8 @@ def _template_briefing(ctx: dict[str, Any]) -> dict[str, Any]:
         watch.append("Scan stock swings to refresh technical setups.")
     if needs.get("options"):
         watch.append("Run a deep options scan for new ranked contracts.")
+    if needs.get("news"):
+        watch.append("Refresh news so Atlas can brief on the latest headlines.")
 
     learning = ""
     if perf.get("learning_active"):
@@ -75,15 +103,32 @@ def _template_briefing(ctx: dict[str, Any]) -> dict[str, Any]:
         learning = "Keep logging Win/Loss on settled picks — Atlas learns after 8+ outcomes."
 
     total_signals = len(top) + len(ctx.get("budget_opportunities") or []) + len(stocks) + len(sports)
-    headline = "Your Atlas snapshot" if total_signals else "Ready when you scan"
+    lead_news = ""
+    if news:
+        lead_news = str(news[0].get("headline") or news[0].get("title") or "").strip()
+    if lead_news:
+        headline = lead_news[:110]
+    elif total_signals:
+        headline = "Your Atlas snapshot"
+    else:
+        headline = "Ready when you scan"
 
     summary_parts: list[str] = []
-    if total_signals:
-        summary_parts.append(f"{total_signals} active signals across your modules.")
-    else:
-        summary_parts.append("No live signals yet — use the scanner bar to populate the dashboard.")
+    if lead_news:
+        summary_parts.append(f"Latest market move: {lead_news}.")
+    if sports:
+        summary_parts.append(f"Best sports edge right now: {sports[0].get('title', '—')}.")
+    if top:
+        summary_parts.append(f"Top options pick: {top[0].get('title', '—')}.")
+    if not summary_parts:
+        if total_signals:
+            summary_parts.append(f"{total_signals} active signals across your modules.")
+        else:
+            summary_parts.append("No live signals yet — use the scanner bar to populate the dashboard.")
     if perf.get("win_rate_30d") is not None:
-        summary_parts.append(f"30-day win rate: {perf['win_rate_30d']}% on {perf.get('total_logged', 0)} logged picks.")
+        summary_parts.append(
+            f"30-day win rate: {perf['win_rate_30d']}% on {perf.get('total_logged', 0)} logged picks."
+        )
 
     return {
         "headline": headline,
@@ -106,49 +151,73 @@ class AiNarrativeService:
         refresh: bool = False,
         use_llm: bool = True,
     ) -> dict[str, Any]:
+        reload_settings()
+        fingerprint = _ctx_fingerprint(ctx)
         cache_key = f"{user_id}:{_today_key()}"
+        now = time.time()
         if not refresh and cache_key in _BRIEFING_CACHE:
-            return dict(_BRIEFING_CACHE[cache_key][1])
+            expires_at, cached_fp, cached = _BRIEFING_CACHE[cache_key]
+            if now < expires_at and cached_fp == fingerprint:
+                return dict(cached)
 
         base = _template_briefing(ctx)
         if not use_llm or not llm_service.is_configured():
-            _BRIEFING_CACHE[cache_key] = (_today_key(), base)
+            _BRIEFING_CACHE[cache_key] = (now + _BRIEFING_TTL_SEC, fingerprint, base)
             return dict(base)
 
+        news_rows = ctx.get("briefing_news") or ctx.get("breaking_news") or []
         payload = {
             "top_options": _pick_titles(ctx.get("top_opportunities") or []),
             "budget_options": _pick_titles(ctx.get("budget_opportunities") or [], limit=2),
             "stocks": _pick_titles(ctx.get("stock_opportunities") or []),
             "sports": _pick_titles(ctx.get("sports_opportunities") or []),
             "news_headlines": [
-                str(n.get("headline") or n.get("title") or "")[:120]
-                for n in (ctx.get("breaking_news") or [])[:3]
+                {
+                    "title": str(n.get("headline") or n.get("title") or "")[:140],
+                    "published_at": n.get("published_at"),
+                    "impact": n.get("impact_score"),
+                }
+                for n in news_rows[:5]
                 if n.get("headline") or n.get("title")
             ],
             "performance": ctx.get("performance_summary") or {},
             "needs_refresh": ctx.get("needs_refresh") or {},
             "parlay": (ctx.get("best_parlay") or {}).get("title") if ctx.get("best_parlay") else None,
             "market_intelligence": ctx.get("market_intelligence") or {},
+            "required_highlights": base.get("highlights") or [],
         }
 
         llm_result = await llm_service.complete_json(
             system=_BRIEFING_SYSTEM,
             user=(
                 "Create a daily Atlas briefing JSON with keys: "
-                "headline (string), summary (2-3 sentences), highlights (array of 2-4 short strings), "
-                "watch_items (array of 0-3 actionable strings), learning_insight (string or null).\n\n"
+                "headline (string — prefer the freshest news title when available), "
+                "summary (2-3 sentences covering latest news + best sports pick + top option), "
+                "highlights (array of 3-4 short strings — MUST include at least one News:, one Best sports pick:, "
+                "and one Top option: when those exist in DATA), "
+                "watch_items (array of 0-3 actionable strings), learning_insight (string or null).\n"
+                "Prefer the newest headlines in news_headlines over older stories.\n\n"
                 f"DATA:\n{payload}"
             ),
             max_tokens=700,
         )
 
         if llm_result:
+            highlights = [
+                str(h)[:160] for h in (llm_result.get("highlights") or [])[:4]
+            ]
+            # Guarantee required slots even if the model drifts.
+            required = list(base.get("highlights") or [])
+            merged: list[str] = []
+            for item in highlights + required:
+                if item and item not in merged:
+                    merged.append(item)
+                if len(merged) >= 4:
+                    break
             briefing = {
                 "headline": str(llm_result.get("headline") or base["headline"])[:120],
                 "summary": str(llm_result.get("summary") or base["summary"])[:600],
-                "highlights": [
-                    str(h)[:160] for h in (llm_result.get("highlights") or base["highlights"])[:4]
-                ],
+                "highlights": merged[:4] or base["highlights"],
                 "watch_items": [
                     str(w)[:160] for w in (llm_result.get("watch_items") or base["watch_items"])[:3]
                 ],
@@ -160,7 +229,7 @@ class AiNarrativeService:
         else:
             briefing = base
 
-        _BRIEFING_CACHE[cache_key] = (_today_key(), briefing)
+        _BRIEFING_CACHE[cache_key] = (now + _BRIEFING_TTL_SEC, fingerprint, briefing)
         return dict(briefing)
 
     async def coach_insight(self, *, user_id: str, summary: dict[str, Any], refresh: bool = False) -> dict[str, Any]:
@@ -178,6 +247,7 @@ class AiNarrativeService:
             "model": None,
         }
 
+        reload_settings()
         if not llm_service.is_configured():
             _COACH_CACHE[cache_key] = (_today_key(), template)
             return dict(template)
@@ -229,6 +299,7 @@ class AiNarrativeService:
             "model": None,
         }
 
+        reload_settings()
         if not llm_service.is_configured():
             return template
 
