@@ -123,6 +123,7 @@ export function SportsEventSearch({
         headers: apiRequestHeaders(token),
         credentials: usesBffProxy() ? "include" : "same-origin",
         cache: "no-store",
+        signal: AbortSignal.timeout(120_000),
       });
       const body = await res.json();
       if (!res.ok) {
@@ -147,9 +148,17 @@ export function SportsEventSearch({
 
   function onSubmit(e: FormEvent) {
     e.preventDefault();
+    const q = query.trim();
+    if (!q) {
+      setMessage("Type a team or player name, then press Search.");
+      setHasSearched(true);
+      setItems([]);
+      setMarkets([]);
+      return;
+    }
     setSelected(null);
     setManualMode(false);
-    void loadEvents(query.trim());
+    void loadEvents(q);
   }
 
   function pickEvent(event: SportsEventHit) {
@@ -272,8 +281,8 @@ export function SportsEventSearch({
         <div>
           <h2 className="text-sm font-semibold text-foreground">Search & log my bet</h2>
           <p className="mt-1 text-xs text-muted">
-            Search teams or players on verified FanDuel/DraftKings lines (0 Odds credits). Log picks
-            so Atlas can track and learn.
+            Atlas Insight search (OpenAI) finds teams and player props on real books — FanDuel /
+            DraftKings preferred. 0 Odds API credits. Log picks so Atlas can learn.
           </p>
         </div>
         <button
@@ -312,7 +321,11 @@ export function SportsEventSearch({
         </p>
       )}
 
-      {loading && <p className="mt-3 text-xs text-muted">Searching verified book markets…</p>}
+      {loading && (
+        <p className="mt-3 text-xs text-muted">
+          Atlas Insight is searching live books via OpenAI — this can take a few seconds…
+        </p>
+      )}
 
       {showResults && markets.length > 0 && (
         <div className="mt-3">

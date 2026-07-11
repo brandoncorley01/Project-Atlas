@@ -28,9 +28,11 @@ async function proxyRequest(request: NextRequest, pathSegments: string[]) {
     const target = `${API_BASE}/${subpath}${request.nextUrl.search}`;
     const timeoutMs = subpath.startsWith("ai/")
       ? AI_PROXY_TIMEOUT_MS
-      : subpath === "dashboard"
-        ? DASHBOARD_PROXY_TIMEOUT_MS
-        : PROXY_TIMEOUT_MS;
+      : subpath === "signals/sports/events"
+        ? AI_PROXY_TIMEOUT_MS
+        : subpath === "dashboard"
+          ? DASHBOARD_PROXY_TIMEOUT_MS
+          : PROXY_TIMEOUT_MS;
 
     const hasBody = request.method !== "GET" && request.method !== "HEAD";
     const body = hasBody ? await request.text() : undefined;

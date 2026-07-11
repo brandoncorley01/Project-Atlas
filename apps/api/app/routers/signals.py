@@ -103,11 +103,11 @@ async def search_sports_events(
     sport: str | None = None,
     limit: int = 40,
 ) -> dict:
-    """Verified FanDuel/DraftKings search — teams, events, players (0 Odds credits)."""
-    from app.services.sports_user_bets_service import search_cached_events
+    """Atlas Insight search — OpenAI web search for teams/players (0 Odds credits)."""
+    from app.services.sports_openai_search_service import search_markets_with_openai
 
     _ = user_id, token  # auth required
-    return search_cached_events(query=q, sport=sport, limit=limit)
+    return await search_markets_with_openai(query=q, sport=sport, limit=limit)
 
 
 @router.post("/sports/user-bets")
