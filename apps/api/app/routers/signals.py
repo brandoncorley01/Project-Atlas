@@ -103,7 +103,7 @@ async def search_sports_events(
     sport: str | None = None,
     limit: int = 40,
 ) -> dict:
-    """FanDuel-style search over cached odds events (0 Odds API credits)."""
+    """Verified FanDuel/DraftKings search — teams, events, players (0 Odds credits)."""
     from app.services.sports_user_bets_service import search_cached_events
 
     _ = user_id, token  # auth required

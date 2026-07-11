@@ -1,7 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, type FormEvent } from "react";
 import { apiRequestHeaders, getApiUrl, usesBffProxy } from "@/lib/api-url";
+
+export interface BookAvailability {
+  book_key: string;
+  book_title: string;
+  odds_american?: number | null;
+}
 
 export interface SportsEventMarket {
   bet_type: string;
@@ -11,6 +17,9 @@ export interface SportsEventMarket {
   book_key?: string;
   book_title?: string;
   team_or_side?: string;
+  player_name?: string | null;
+  available_on?: BookAvailability[];
+  available_books?: string[];
 }
 
 export interface SportsEventHit {
@@ -23,6 +32,19 @@ export interface SportsEventHit {
   event_start?: string | null;
   hours_until_start?: number | null;
   markets: SportsEventMarket[];
+}
+
+export interface SportsMarketHit extends SportsEventMarket {
+  event_id?: string;
+  sport?: string;
+  sport_key?: string;
+  home_team?: string;
+  away_team?: string;
+  event_name?: string;
+  event_start?: string | null;
+  hours_until_start?: number | null;
+  prop_market?: string | null;
+  fanduel_verified?: boolean;
 }
 
 async function getToken() {
@@ -51,17 +73,34 @@ function oddsLabel(n: number) {
   return n > 0 ? `+${n}` : `${n}`;
 }
 
+function booksLabel(m: SportsEventMarket | SportsMarketHit) {
+  const books = m.available_on?.length
+    ? m.available_on
+    : m.book_title
+      ? [{ book_key: m.book_key || "", book_title: m.book_title, odds_american: m.odds_american }]
+      : [];
+  if (!books.length) return "Unverified";
+  return books
+    .map((b) => {
+      const odds =
+        typeof b.odds_american === "number" ? ` ${oddsLabel(b.odds_american)}` : "";
+      return `${b.book_title}${odds}`;
+    })
+    .join(" · ");
+}
+
 export function SportsEventSearch({
   onBetLogged,
 }: {
   onBetLogged?: () => void | Promise<void>;
 }) {
   const [query, setQuery] = useState("");
-  const [debounced, setDebounced] = useState("");
   const [items, setItems] = useState<SportsEventHit[]>([]);
+  const [markets, setMarkets] = useState<SportsMarketHit[]>([]);
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
   const [selected, setSelected] = useState<SportsEventHit | null>(null);
   const [market, setMarket] = useState<SportsEventMarket | null>(null);
   const [customOdds, setCustomOdds] = useState("");
@@ -71,14 +110,10 @@ export function SportsEventSearch({
   const [stake, setStake] = useState("");
   const [manualMode, setManualMode] = useState(false);
 
-  useEffect(() => {
-    const t = window.setTimeout(() => setDebounced(query.trim()), 280);
-    return () => window.clearTimeout(t);
-  }, [query]);
-
   const loadEvents = useCallback(async (q: string) => {
     setLoading(true);
     setMessage(null);
+    setHasSearched(true);
     try {
       const token = await getToken();
       const apiUrl = getApiUrl();
@@ -93,23 +128,29 @@ export function SportsEventSearch({
       if (!res.ok) {
         setMessage(typeof body.detail === "string" ? body.detail : "Search failed");
         setItems([]);
+        setMarkets([]);
         return;
       }
       setItems((body.items as SportsEventHit[]) ?? []);
-      if (body.message && !(body.items as SportsEventHit[] | undefined)?.length) {
+      setMarkets((body.markets as SportsMarketHit[]) ?? []);
+      if (body.message) {
         setMessage(body.message as string);
       }
     } catch {
       setMessage("Could not reach the API for event search");
       setItems([]);
+      setMarkets([]);
     } finally {
       setLoading(false);
     }
   }, []);
 
-  useEffect(() => {
-    void loadEvents(debounced);
-  }, [debounced, loadEvents]);
+  function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    setSelected(null);
+    setManualMode(false);
+    void loadEvents(query.trim());
+  }
 
   function pickEvent(event: SportsEventHit) {
     setSelected(event);
@@ -119,6 +160,28 @@ export function SportsEventSearch({
     setCustomSelection(first?.selection ?? "");
     setCustomOdds(first ? String(first.odds_american) : "");
     setCustomBetType(first?.bet_type ?? "moneyline");
+    setNotes("");
+    setStake("");
+  }
+
+  function pickMarketHit(hit: SportsMarketHit) {
+    const event: SportsEventHit = {
+      event_id: hit.event_id || "",
+      sport: hit.sport || "Sports",
+      sport_key: hit.sport_key,
+      home_team: hit.home_team || "",
+      away_team: hit.away_team || "",
+      event_name: hit.event_name || "Event",
+      event_start: hit.event_start,
+      hours_until_start: hit.hours_until_start,
+      markets: [hit],
+    };
+    setSelected(event);
+    setManualMode(false);
+    setMarket(hit);
+    setCustomSelection(hit.selection);
+    setCustomOdds(String(hit.odds_american));
+    setCustomBetType(hit.bet_type || "player_prop");
     setNotes("");
     setStake("");
   }
@@ -139,12 +202,10 @@ export function SportsEventSearch({
     return (market?.selection || customSelection).trim();
   }, [manualMode, market, customSelection]);
 
-  async function submitBet(eventOverride?: Partial<SportsEventHit>) {
+  async function submitBet() {
     const event = selected;
     const eventName =
-      event?.event_name ||
-      (eventOverride?.event_name as string | undefined) ||
-      (manualMode ? customSelection.split(" ").slice(0, 3).join(" ") : "");
+      event?.event_name || (manualMode ? customSelection.split(" ").slice(0, 3).join(" ") : "");
     const selection = previewSelection;
     const oddsRaw = customOdds.trim() || (market ? String(market.odds_american) : "");
     const odds = Number.parseInt(oddsRaw, 10);
@@ -203,14 +264,16 @@ export function SportsEventSearch({
     }
   }
 
+  const showResults = hasSearched && !selected && !manualMode;
+
   return (
     <section className="mb-6 rounded-xl border border-orange-500/25 bg-orange-500/5 p-4">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h2 className="text-sm font-semibold text-foreground">Search events & log my bet</h2>
+          <h2 className="text-sm font-semibold text-foreground">Search & log my bet</h2>
           <p className="mt-1 text-xs text-muted">
-            FanDuel-style search over cached lines (0 Odds credits). Log picks so Atlas can track,
-            grade, and learn.
+            Search teams or players on verified FanDuel/DraftKings lines (0 Odds credits). Log picks
+            so Atlas can track and learn.
           </p>
         </div>
         <button
@@ -222,18 +285,26 @@ export function SportsEventSearch({
         </button>
       </div>
 
-      <div className="mt-3">
+      <form className="mt-3 flex gap-2" onSubmit={onSubmit}>
         <label className="sr-only" htmlFor="sports-event-search">
-          Search sports events
+          Search teams or players
         </label>
         <input
           id="sports-event-search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search teams or events — e.g. Yankees, Lakers, Chiefs…"
-          className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground outline-none focus:border-orange-400"
+          placeholder="Team or player — e.g. Yankees, Judge, Aces…"
+          className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground outline-none focus:border-orange-400"
+          enterKeyHint="search"
         />
-      </div>
+        <button
+          type="submit"
+          disabled={loading}
+          className="shrink-0 rounded-lg bg-orange-500 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+        >
+          {loading ? "…" : "Search"}
+        </button>
+      </form>
 
       {message && (
         <p className="mt-2 rounded-lg border border-border bg-surface-elevated px-3 py-2 text-xs text-muted">
@@ -241,26 +312,60 @@ export function SportsEventSearch({
         </p>
       )}
 
-      {loading && <p className="mt-3 text-xs text-muted">Searching cached events…</p>}
+      {loading && <p className="mt-3 text-xs text-muted">Searching verified book markets…</p>}
 
-      {!loading && items.length > 0 && !selected && !manualMode && (
-        <ul className="mt-3 max-h-64 space-y-2 overflow-y-auto">
-          {items.map((event) => (
-            <li key={event.event_id || event.event_name}>
-              <button
-                type="button"
-                onClick={() => pickEvent(event)}
-                className="flex w-full flex-col rounded-lg border border-border/80 bg-background/80 px-3 py-2 text-left hover:border-orange-400/50"
-              >
-                <span className="text-sm font-semibold text-foreground">{event.event_name}</span>
-                <span className="mt-0.5 text-xs text-muted">
-                  {event.sport} · {formatStart(event.event_start)}
-                  {event.markets?.length ? ` · ${event.markets.length} lines` : ""}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
+      {showResults && markets.length > 0 && (
+        <div className="mt-3">
+          <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">
+            Verified markets
+          </p>
+          <ul className="max-h-56 space-y-2 overflow-y-auto">
+            {markets.slice(0, 24).map((hit, idx) => (
+              <li key={`${hit.event_id}-${hit.selection}-${hit.bet_type}-${idx}`}>
+                <button
+                  type="button"
+                  onClick={() => pickMarketHit(hit)}
+                  className="flex w-full flex-col rounded-lg border border-border/80 bg-background/80 px-3 py-2 text-left hover:border-orange-400/50"
+                >
+                  <span className="text-sm font-semibold text-foreground">{hit.selection}</span>
+                  <span className="mt-0.5 text-xs text-muted">
+                    {hit.event_name} · {hit.sport} · {oddsLabel(hit.odds_american)}
+                  </span>
+                  <span className="mt-1 text-[11px] text-orange-200/90">
+                    On {booksLabel(hit)}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {showResults && items.length > 0 && (
+        <div className="mt-3">
+          <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">Events</p>
+          <ul className="max-h-56 space-y-2 overflow-y-auto">
+            {items.map((event) => (
+              <li key={event.event_id || event.event_name}>
+                <button
+                  type="button"
+                  onClick={() => pickEvent(event)}
+                  className="flex w-full flex-col rounded-lg border border-border/80 bg-background/80 px-3 py-2 text-left hover:border-orange-400/50"
+                >
+                  <span className="text-sm font-semibold text-foreground">{event.event_name}</span>
+                  <span className="mt-0.5 text-xs text-muted">
+                    {event.sport} · {formatStart(event.event_start)}
+                    {event.markets?.length ? ` · ${event.markets.length} verified lines` : ""}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {showResults && !loading && items.length === 0 && markets.length === 0 && !message && (
+        <p className="mt-3 text-xs text-muted">No verified markets found for that search.</p>
       )}
 
       {(selected || manualMode) && (
@@ -305,17 +410,25 @@ export function SportsEventSearch({
                       setCustomOdds(String(m.odds_american));
                       setCustomBetType(m.bet_type);
                     }}
-                    className={`rounded-full border px-2.5 py-1 text-xs font-medium ${
+                    className={`rounded-lg border px-2.5 py-1.5 text-left text-xs font-medium ${
                       active
                         ? "border-orange-400 bg-orange-500/20 text-orange-100"
                         : "border-border text-muted hover:border-orange-400/40"
                     }`}
                   >
-                    {m.bet_type.slice(0, 2).toUpperCase()} {m.selection} {oddsLabel(m.odds_american)}
+                    <span className="block">
+                      {m.bet_type === "player_prop" ? "PROP" : m.bet_type.slice(0, 2).toUpperCase()}{" "}
+                      {m.selection} {oddsLabel(m.odds_american)}
+                    </span>
+                    <span className="mt-0.5 block text-[10px] opacity-80">On {booksLabel(m)}</span>
                   </button>
                 );
               })}
             </div>
+          )}
+
+          {market && !manualMode && (
+            <p className="mt-2 text-[11px] text-orange-200/90">Selected line: {booksLabel(market)}</p>
           )}
 
           <div className="mt-3 grid gap-2 sm:grid-cols-2">
@@ -325,7 +438,7 @@ export function SportsEventSearch({
                 value={customSelection}
                 onChange={(e) => setCustomSelection(e.target.value)}
                 className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
-                placeholder="Team / Over 8.5 / etc."
+                placeholder="Team / Player Over 1.5 / etc."
               />
             </label>
             <label className="flex flex-col gap-1 text-xs text-muted">

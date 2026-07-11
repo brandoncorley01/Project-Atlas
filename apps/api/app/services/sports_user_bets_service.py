@@ -133,54 +133,10 @@ def search_cached_events(
     sport: str | None = None,
     limit: int = 40,
 ) -> dict[str, Any]:
-    """FanDuel-style event search over disk odds cache — 0 Odds API credits."""
-    cache = _read_cache()
-    if not cache or not cache.get("events"):
-        return {
-            "items": [],
-            "total": 0,
-            "credits_used": 0,
-            "cache": False,
-            "message": "No cached odds yet — tap Fetch live odds once to seed the event catalog.",
-        }
+    """Verified FanDuel/DraftKings search — teams, events, and player props (0 credits)."""
+    from app.services.fanduel_catalog import search_verified_markets
 
-    events = filter_upcoming_events(list(cache.get("events") or []))
-    # Drop outrights/futures from the live bet slip search.
-    events = [e for e in events if not e.get("_is_outright") and e.get("home_team") and e.get("away_team")]
-
-    sport_norm = _norm(sport or "")
-    if sport_norm:
-        events = [
-            e
-            for e in events
-            if sport_norm in _norm(str(e.get("_sport_label") or ""))
-            or sport_norm in _norm(str(e.get("_sport_key") or ""))
-        ]
-
-    tokens = _tokens(query)
-    scored: list[tuple[float, dict[str, Any]]] = []
-    for event in events:
-        hay = _event_haystack(event)
-        score = _match_score(hay, tokens) if tokens else 1.0
-        if score <= 0:
-            continue
-        hours = hours_until_event(event.get("commence_time")) or 9999
-        # Prefer sooner games when query is empty or tied.
-        rank = score * 100 - min(hours, 200) * 0.05
-        scored.append((rank, event))
-
-    scored.sort(key=lambda x: x[0], reverse=True)
-    items = [_serialize_event(e) for _, e in scored[: max(1, min(limit, 80))]]
-    age = _cache_age_minutes(cache.get("fetched_at"))
-    return {
-        "items": items,
-        "total": len(items),
-        "credits_used": 0,
-        "cache": True,
-        "cache_age_minutes": round(age, 1) if age is not None else None,
-        "query": query,
-        "sport": sport,
-    }
+    return search_verified_markets(query=query, sport=sport, limit=limit)
 
 
 class SportsUserBetsService:

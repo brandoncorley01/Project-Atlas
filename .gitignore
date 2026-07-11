@@ -25,6 +25,8 @@ build/
 .env.*.local
 !.env.example
 apps/api/.odds_cache.json
+apps/api/.props_cache.json
+apps/api/.scores_cache.json
 
 # Next.js
 apps/web/.next/
