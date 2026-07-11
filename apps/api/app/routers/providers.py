@@ -145,9 +145,10 @@ async def providers_status(refresh: bool = False) -> dict:
             "features": [
                 "multi-key failover",
                 "response cache",
-                "full global league scan",
+                "priority live scan (~12 credits)",
+                "zero-credit rescore",
+                "credit guard",
                 "seasonal priority",
-                "futures / outrights",
                 "soccer & tennis",
                 "moneyline / spread / totals",
                 "+EV edge scan",

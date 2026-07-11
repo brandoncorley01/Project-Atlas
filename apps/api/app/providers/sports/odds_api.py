@@ -433,14 +433,38 @@ def odds_cache_status() -> dict[str, Any]:
 
 
 def estimate_live_scan_credits(sport_count: int | None = None) -> int:
-    """Rough credits for a live pull: list_sports (1) + one odds call per sport."""
+    """Rough credits for a live pull: one odds call per sport (/sports list is free)."""
     if sport_count is None:
-        max_sports = config.settings.odds_max_sports_per_scan
-        if config.settings.odds_scan_scope == "full" or max_sports == 0:
-            sport_count = len(PRIORITY_SPORT_KEYS) + 20
+        max_sports = int(config.settings.odds_max_sports_per_scan or 0)
+        if max_sports > 0:
+            sport_count = max_sports
+        elif config.settings.odds_scan_scope == "full":
+            sport_count = len(PRIORITY_SPORT_KEYS) + 8
         else:
-            sport_count = max_sports if max_sports > 0 else len(PRIORITY_SPORT_KEYS)
-    return sport_count + 1
+            sport_count = min(12, len(PRIORITY_SPORT_KEYS))
+        if config.settings.odds_include_futures_on_live:
+            sport_count += min(6, MAX_FUTURES_SPORTS_PER_SCAN)
+    return max(1, int(sport_count))
+
+
+def _merge_cached_events(
+    existing: list[dict[str, Any]],
+    refreshed: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Replace only leagues we just fetched; keep other cached leagues (0 extra credits)."""
+    refreshed_keys = {
+        str(e.get("_sport_key") or "")
+        for e in refreshed
+        if e.get("_sport_key")
+    }
+    kept = [
+        e
+        for e in existing
+        if str(e.get("_sport_key") or "") not in refreshed_keys
+    ]
+    merged = kept + list(refreshed)
+    merged = filter_upcoming_events(merged)
+    return filter_events_within_horizon(merged)
 
 
 def _off_season_deprioritize_keys() -> frozenset[str]:
@@ -464,26 +488,28 @@ def _sport_family(key: str) -> str:
 
 
 def _limit_sport_keys(keys: tuple[str, ...], *, force_refresh: bool = False) -> tuple[str, ...]:
-    """Apply scan scope / max-sports settings. Full scope keeps every active game sport."""
-    del force_refresh  # retained for call-site compatibility; off-season is never hard-dropped
-    scope = (config.settings.odds_scan_scope or "full").lower()
+    """Apply scan scope / max-sports. Live Fetch uses a tight priority allowlist to save credits."""
+    scope = (config.settings.odds_scan_scope or "priority").lower()
     max_sports = int(config.settings.odds_max_sports_per_scan or 0)
+    # Routine live Fetch always credit-caps even if env still says full/0.
+    tight_live = bool(force_refresh)
 
-    if scope == "priority":
+    if scope == "priority" or tight_live:
         priority = {k for k in PRIORITY_SPORT_KEYS}
-        # Keep exact priority leagues plus every active tournament/league in a
-        # rotating family (tennis, MMA, boxing, golf, soccer, cricket).
-        filtered = tuple(
-            k
-            for k in keys
-            if k in priority or _sport_family(k) in PRIORITY_SPORT_PREFIXES
-        )
+        if tight_live:
+            # Exact priority keys only — do not expand every soccer/tennis tournament key.
+            filtered = tuple(k for k in keys if k in priority)
+        else:
+            filtered = tuple(
+                k
+                for k in keys
+                if k in priority or _sport_family(k) in PRIORITY_SPORT_PREFIXES
+            )
         if filtered:
             keys = filtered
 
     keys = _seasonal_key_order(keys)
 
-    # Soft-deprioritize off-season majors (scan last) instead of dropping them.
     deprioritized = _off_season_deprioritize_keys()
     if deprioritized:
         front = tuple(k for k in keys if k not in deprioritized)
@@ -491,8 +517,13 @@ def _limit_sport_keys(keys: tuple[str, ...], *, force_refresh: bool = False) -> 
         keys = front + back
 
     essential = _essential_keys_for_month()
-    # Pin in-season essentials + full-book families so any cap trims only the
-    # long tail, never tennis/MMA/soccer/etc.
+    if tight_live:
+        pinned = tuple(k for k in keys if k in essential)
+        rest = tuple(k for k in keys if k not in pinned)
+        cap = max_sports if max_sports > 0 else 12
+        remaining = max(0, cap - len(pinned))
+        return pinned + rest[:remaining]
+
     pinned = tuple(
         k
         for k in keys
@@ -946,7 +977,9 @@ async def fetch_all_sports_odds(
             key=lambda s: (priority_index.get(s["key"], 999), str(s.get("title") or s["key"])),
         )
         keys = tuple(s["key"] for s in active_game) or DEFAULT_SPORT_KEYS
-        futures_keys = _resolve_futures_keys(all_sports)
+        # Futures cost extra credits — off unless explicitly enabled.
+        include_futures = bool(getattr(config.settings, "odds_include_futures_on_live", False))
+        futures_keys = _resolve_futures_keys(all_sports) if include_futures else ()
     else:
         keys = sport_keys
         title_by_key = {s["key"]: s.get("title") for s in all_sports if s.get("key")} if all_sports else {}
@@ -955,6 +988,44 @@ async def fetch_all_sports_odds(
     keys = _limit_sport_keys(keys, force_refresh=force_refresh)
     deprioritized = _off_season_deprioritize_keys()
     stats_deprioritized = sorted(_sport_label(k) for k in deprioritized if k in keys)
+
+    # Credit guard — never start a live pull that would wipe the free-tier budget.
+    remaining = info.get("total_remaining")
+    estimated = len(keys) + len(futures_keys)
+    reserve = max(0, int(getattr(config.settings, "odds_min_credits_reserve", 15) or 0))
+    if remaining is not None and remaining < estimated + reserve:
+        stale = _stale_cache_response(cache, info)
+        if stale is not None:
+            events, stats = stale
+            stats = dict(stats)
+            stats.update(
+                {
+                    "credit_guard": True,
+                    "credits_blocked": True,
+                    "credits_needed": estimated,
+                    "credits_reserve": reserve,
+                    "total_remaining": remaining,
+                    "message": (
+                        f"Odds credits low ({remaining} left; need ~{estimated}+{reserve} reserve). "
+                        "Using cached lines — Rescore is free. OpenAI still explains picks from cache."
+                    ),
+                }
+            )
+            return events, stats
+        return [], {
+            "configured": True,
+            "events": 0,
+            "sports": {},
+            "credit_guard": True,
+            "credits_blocked": True,
+            "credits_needed": estimated,
+            "total_remaining": remaining,
+            "error": (
+                f"Odds credits too low for a live scan ({remaining} left). "
+                "Wait for quota reset or add another ODDS_API_KEY."
+            ),
+            **info,
+        }
 
     # League catalog for UI tabs — every scanned game + futures label, seasonally ordered.
     league_catalog = [
@@ -975,9 +1046,10 @@ async def fetch_all_sports_odds(
         "league_catalog": league_catalog,
         "key_count": info.get("key_count"),
         "active_key_index": info.get("active_key_index"),
-        "scan_scope": config.settings.odds_scan_scope,
+        "scan_scope": "priority_live" if force_refresh else config.settings.odds_scan_scope,
         "max_sports_per_scan": config.settings.odds_max_sports_per_scan,
-        "credits_used": len(keys) + len(futures_keys) + 1,
+        # /sports is free — only per-league odds calls cost credits.
+        "credits_used": len(keys) + len(futures_keys),
     }
     if info.get("total_remaining") is not None:
         stats["total_remaining"] = info.get("total_remaining")
@@ -1000,6 +1072,8 @@ async def fetch_all_sports_odds(
 
     if client.requests_remaining is not None:
         stats["requests_remaining"] = client.requests_remaining
+        # Prefer live remaining after the pull when available.
+        stats["total_remaining"] = client.requests_remaining
     if client.requests_used is not None:
         stats["requests_used"] = client.requests_used
     if client.quota_exhausted:
@@ -1020,10 +1094,19 @@ async def fetch_all_sports_odds(
     stats["leagues_with_near_term_games"] = sorted(
         {str(e.get("_sport_label") or e.get("sport_title") or "Sports") for e in events}
     )
-    stats["skipped_off_season"] = []  # hard skips removed — soft deprioritize only
+    stats["skipped_off_season"] = []
     stats["deprioritized_off_season"] = stats_deprioritized
 
-    # Cache upcoming games + futures within horizon for zero-credit rescans.
+    # Merge into existing cache so priority live Fetch doesn't wipe other leagues.
+    existing = list(cache.get("events") or []) if cache else []
+    if force_refresh and existing:
+        events = _merge_cached_events(existing, events)
+        stats["cache_merged"] = True
+        stats["events"] = len(events)
+        stats["leagues_with_near_term_games"] = sorted(
+            {str(e.get("_sport_label") or e.get("sport_title") or "Sports") for e in events}
+        )
+
     if events:
         _write_cache(events, stats)
 

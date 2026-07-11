@@ -266,7 +266,7 @@ export function SportsSignalsView({
             type="button"
             onClick={() => refreshSports(true)}
             disabled={loading}
-            title="Uses API credits — fetches fresh odds from The Odds API. Your current picks stay until this scan finds new plays."
+            title="Uses ~12 Odds API credits for in-season leagues only. Prefer Rescore (0 credits) when cache is warm. OpenAI explains picks — it does not invent live lines."
             className="rounded-lg border border-violet-500/40 bg-violet-500/10 px-4 py-2 text-sm font-medium text-violet-200 hover:bg-violet-500/20 disabled:opacity-50"
           >
             {loading ? "Scanning…" : "Fetch live odds"}

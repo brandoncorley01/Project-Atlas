@@ -214,6 +214,17 @@ class SportsRefreshService:
                 ),
             }
 
+        if fetch_stats.get("credits_blocked") and not events:
+            return {
+                "signals_created": 0,
+                "events_scanned": 0,
+                "stats": fetch_stats,
+                "top_opportunity": None,
+                "message": fetch_stats.get("error")
+                or fetch_stats.get("message")
+                or "Odds credits too low for a live scan — use Rescore on cached lines.",
+            }
+
         setups: list[dict[str, Any]] = []
         try:
             stats_index = await build_stats_index(events)
@@ -385,7 +396,12 @@ class SportsRefreshService:
         skipped = stats.get("skipped_off_season") or []
 
         scan_note = ""
-        if stats.get("cached"):
+        if stats.get("credit_guard") or stats.get("credits_blocked"):
+            scan_note = (
+                stats.get("message")
+                or "Odds credits low — rescored from cache (0 credits). OpenAI still explains picks."
+            )
+        elif stats.get("cached"):
             scan_note = f"Rescored from cache · {len(near_leagues)} leagues with games this week ({near_label})"
             if stats.get("cache_needs_live_refresh"):
                 scan_note += (
@@ -393,10 +409,13 @@ class SportsRefreshService:
                     "use Fetch live odds (~12 credits), not Rescore"
                 )
         else:
+            scanned = int(stats.get("sports_scanned") or 0)
             scan_note = (
                 f"Live scan: {scanned} leagues{credit_note} · "
                 f"{len(near_leagues)} had games in the next 7 days ({near_label})"
             )
+            if stats.get("cache_merged"):
+                scan_note += " · merged into existing cache"
             if dropped > 0:
                 scan_note += f" · ignored {dropped} far-future lines"
             if skipped:

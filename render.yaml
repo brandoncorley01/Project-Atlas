@@ -32,9 +32,15 @@ services:
       - key: ODDS_API_KEY
         sync: false
       - key: ODDS_SCAN_SCOPE
-        value: full
+        value: priority
       - key: ODDS_MAX_SPORTS_PER_SCAN
-        value: "0"
+        value: "12"
+      - key: ODDS_CACHE_TTL_MINUTES
+        value: "90"
+      - key: ODDS_INCLUDE_FUTURES_ON_LIVE
+        value: "false"
+      - key: ODDS_MIN_CREDITS_RESERVE
+        value: "15"
       - key: ATLAS_EXPERT_INTELLIGENCE_ENABLED
         value: "true"
       - key: OPENAI_API_KEY
@@ -69,9 +75,15 @@ services:
       - key: ODDS_API_KEY
         sync: false
       - key: ODDS_SCAN_SCOPE
-        value: full
+        value: priority
       - key: ODDS_MAX_SPORTS_PER_SCAN
-        value: "0"
+        value: "12"
+      - key: ODDS_CACHE_TTL_MINUTES
+        value: "90"
+      - key: ODDS_INCLUDE_FUTURES_ON_LIVE
+        value: "false"
+      - key: ODDS_MIN_CREDITS_RESERVE
+        value: "15"
       - key: ATLAS_EXPERT_INTELLIGENCE_ENABLED
         value: "true"
       - key: OPENAI_API_KEY

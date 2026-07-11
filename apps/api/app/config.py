@@ -33,14 +33,20 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o-mini"
 
     # Minutes to reuse cached odds before spending API credits on a fresh scan.
-    odds_cache_ttl_minutes: int = 30
+    odds_cache_ttl_minutes: int = 90
 
-    # Max sportsbooks leagues fetched per live scan (1 credit each). 0 = no cap.
-    # Default uncapped so Atlas covers the full global slate (WNBA, tennis, soccer, etc.).
-    odds_max_sports_per_scan: int = 0
+    # Max sportsbooks leagues fetched per live scan (1 credit each).
+    # Default 12 keeps free-tier quotas usable; 0 = no cap (expensive).
+    odds_max_sports_per_scan: int = 12
 
-    # priority = US majors + top soccer/tennis/combat first; full = every active game sport.
-    odds_scan_scope: str = "full"
+    # priority = in-season majors only (credit-safe); full = every active game sport.
+    odds_scan_scope: str = "priority"
+
+    # Championship futures cost extra credits — off for routine Fetch live odds.
+    odds_include_futures_on_live: bool = False
+
+    # Refuse a live pull when remaining credits are below this + estimated scan cost.
+    odds_min_credits_reserve: int = 15
 
     environment: str = "development"
     default_user_id: str = ""

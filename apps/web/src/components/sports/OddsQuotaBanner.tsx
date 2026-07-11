@@ -53,7 +53,7 @@ export function OddsQuotaBanner({ status }: { status: OddsApiStatus | null }) {
   const remaining = resolveOddsTotalCredits(status);
   const keyCount = status.key_count ?? status.keys?.length ?? 1;
   const capacity = status.monthly_capacity ?? keyCount * 500;
-  const estimate = status.estimated_live_scan_credits ?? 13;
+  const estimate = status.estimated_live_scan_credits ?? 12;
 
   return (
     <div
@@ -76,13 +76,12 @@ export function OddsQuotaBanner({ status }: { status: OddsApiStatus | null }) {
         {status.cache_rescore_free ? (
           <>
             Cached odds are warm — <strong className="text-emerald-400">{rescoreButtonLabel(status)}</strong>{" "}
-            costs 0 credits and keeps your current board unless new plays are found. Use{" "}
-            <strong className="text-amber-300">Fetch live odds</strong> only when you need fresh lines.
+            costs 0 credits. Prefer that over Fetch. OpenAI explains picks from cache; it does not invent odds.
           </>
         ) : (
           <>
-            Cache is cold or expired — <strong className="text-amber-300">Fetch live odds</strong> uses ~
-            {estimate} credits.
+            Cache is cold — <strong className="text-amber-300">Fetch live odds</strong> uses ~
+            {estimate} credits (in-season leagues only). OpenAI fills insight gaps after lines are cached.
           </>
         )}
       </p>
