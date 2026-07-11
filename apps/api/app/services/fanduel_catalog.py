@@ -28,8 +28,8 @@ US_SEARCH_BOOKS = "fanduel,draftkings"
 # Credit-safe prop market allowlists (each market key = 1 Odds credit per event).
 PROP_MARKETS_BY_SPORT: dict[str, tuple[str, ...]] = {
     "baseball_mlb": ("batter_hits", "batter_home_runs", "pitcher_strikeouts"),
-    "basketball_wnba": ("player_points", "player_rebounds", "player_assists"),
-    "basketball_nba": ("player_points", "player_rebounds", "player_assists"),
+    "basketball_wnba": ("player_points", "player_rebounds", "player_assists", "player_threes"),
+    "basketball_nba": ("player_points", "player_rebounds", "player_assists", "player_threes"),
     "americanfootball_nfl": ("player_pass_yds", "player_rush_yds", "player_receptions"),
     "icehockey_nhl": ("player_points", "player_shots_on_goal"),
 }
@@ -41,10 +41,31 @@ PROP_MARKET_LABELS: dict[str, str] = {
     "player_points": "Points",
     "player_rebounds": "Rebounds",
     "player_assists": "Assists",
+    "player_threes": "Threes",
     "player_pass_yds": "Pass yards",
     "player_rush_yds": "Rush yards",
     "player_receptions": "Receptions",
     "player_shots_on_goal": "Shots",
+}
+
+# Common team aliases so "Portland" / "Fire" hit WNBA cache events.
+TEAM_ALIASES: dict[str, tuple[str, ...]] = {
+    "portland": ("portland fire", "portland", "fire"),
+    "fire": ("portland fire", "portland"),
+    "aces": ("las vegas aces", "aces", "las vegas"),
+    "liberty": ("new york liberty", "liberty"),
+    "fever": ("indiana fever", "fever"),
+    "dream": ("atlanta dream", "dream"),
+    "sky": ("chicago sky", "sky"),
+    "sun": ("connecticut sun", "sun"),
+    "wings": ("dallas wings", "wings"),
+    "sparks": ("los angeles sparks", "sparks", "la sparks"),
+    "storm": ("seattle storm", "storm"),
+    "mercury": ("phoenix mercury", "mercury"),
+    "lynx": ("minnesota lynx", "lynx"),
+    "mystics": ("washington mystics", "mystics"),
+    "valkyries": ("golden state valkyries", "valkyries", "golden state"),
+    "tempo": ("toronto tempo", "tempo", "toronto"),
 }
 
 
@@ -698,4 +719,257 @@ def search_verified_markets(
         "sport": sport,
         "message": msg,
         "books": ["FanDuel", "DraftKings"],
+    }
+
+
+def _player_match(player_name: str | None, needles: list[str]) -> bool:
+    if not needles:
+        return True
+    hay = _norm(player_name or "")
+    if not hay:
+        return False
+    # Prefer last-name hits (leite) and full-token coverage.
+    if any(n in hay for n in needles if len(n) >= 4):
+        return True
+    return all(n in hay for n in needles if len(n) >= 3) or any(n in hay for n in needles)
+
+
+def _event_matches_teams(event: dict[str, Any], team_needles: list[str]) -> bool:
+    if not team_needles:
+        return False
+    hay = _norm(
+        " ".join(
+            [
+                str(event.get("home_team") or ""),
+                str(event.get("away_team") or ""),
+                str(event.get("_sport_label") or ""),
+            ]
+        )
+    )
+    expanded: list[str] = []
+    for n in team_needles:
+        expanded.append(n)
+        head = n.split()[0] if n else ""
+        for alias in TEAM_ALIASES.get(head, ()):
+            expanded.extend(_norm(alias).split())
+        for alias in TEAM_ALIASES.get(n, ()):
+            expanded.extend(_norm(alias).split())
+    return any(tok in hay for tok in expanded if len(tok) >= 3)
+
+
+def _props_from_cache_for_player(needles: list[str]) -> list[dict[str, Any]]:
+    cache = _read_props_cache(respect_ttl=False) or {}
+    out: list[dict[str, Any]] = []
+    for row in cache.get("items") or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("book_key") or "") not in US_PREFERRED_BOOK_KEYS:
+            continue
+        if needles and not _player_match(str(row.get("player_name") or row.get("selection") or ""), needles):
+            continue
+        out.append(dict(row))
+    return out
+
+
+async def fetch_verified_markets_for_search(
+    *,
+    query: str,
+    player_name: str | None = None,
+    team_names: list[str] | None = None,
+    sport_key: str | None = None,
+    max_events: int | None = None,
+) -> dict[str, Any]:
+    """Pull real FanDuel/DraftKings markets for a player/team search (credit-capped)."""
+    q_tokens = [t for t in _norm(query).split() if len(t) >= 2]
+    player_needles = [t for t in _norm(player_name or "").split() if len(t) >= 2] or [
+        t for t in q_tokens if t not in TEAM_ALIASES and t not in {"wnba", "nba", "mlb", "nfl", "nhl"}
+    ]
+    team_needles = [_norm(t) for t in (team_names or []) if _norm(t)]
+    for t in q_tokens:
+        if t in TEAM_ALIASES or any(t in _norm(a) for aliases in TEAM_ALIASES.values() for a in aliases):
+            team_needles.append(t)
+    for t in list(team_needles):
+        head = t.split()[0] if t else ""
+        for alias in TEAM_ALIASES.get(head, ()):
+            team_needles.append(_norm(alias))
+        for alias in TEAM_ALIASES.get(t, ()):
+            team_needles.append(_norm(alias))
+    team_needles = list(dict.fromkeys([t for t in team_needles if t]))
+
+    cached_props = _props_from_cache_for_player(player_needles)
+    raw: list[dict[str, Any]] = list(cached_props)
+
+    cache = _read_cache()
+    events = filter_upcoming_events(list(cache.get("events") or [])) if cache else []
+    events = [e for e in events if not e.get("_is_outright")]
+    if sport_key:
+        events = [
+            e
+            for e in events
+            if sport_key in str(e.get("_sport_key") or e.get("sport_key") or "")
+            or (sport_key == "basketball_wnba" and "wnba" in _norm(str(e.get("_sport_label") or "")))
+        ]
+
+    matched = [e for e in events if _event_matches_teams(e, team_needles)]
+    if not matched and cached_props:
+        eids = {str(p.get("event_id") or "") for p in cached_props}
+        matched = [e for e in events if str(e.get("id") or "") in eids]
+
+    if not matched and q_tokens:
+        matched = [
+            e
+            for e in events
+            if any(
+                tok in _norm(f"{e.get('home_team')} {e.get('away_team')}")
+                for tok in q_tokens
+                if len(tok) >= 4
+            )
+        ]
+
+    # If the odds cache has no matching game (common for expansion teams),
+    # pull that sport's FanDuel/DK board once so Search can still find the slate.
+    seed_credits = 0
+    if not matched:
+        sk = sport_key or ""
+        if not sk and any("portland" in t or t == "fire" or "tempo" in t for t in team_needles):
+            sk = "basketball_wnba"
+        if sk in PROP_MARKETS_BY_SPORT:
+            try:
+                client, _, info = await _select_active_client()
+                rem = info.get("total_remaining")
+                reserve = max(0, int(getattr(config.settings, "odds_search_min_credits_reserve", 4) or 0))
+                if client and (rem is None or rem >= 1 + reserve):
+                    live = await client.fetch_odds(sk, bookmakers=US_SEARCH_BOOKS)
+                    seed_credits = 1
+                    for ev in live or []:
+                        if not isinstance(ev, dict):
+                            continue
+                        ev["_sport_key"] = sk
+                        ev["_sport_label"] = {
+                            "basketball_wnba": "WNBA",
+                            "basketball_nba": "NBA",
+                            "baseball_mlb": "MLB",
+                            "americanfootball_nfl": "NFL",
+                            "icehockey_nhl": "NHL",
+                        }.get(sk, sk)
+                        events.append(ev)
+                    matched = [e for e in events if _event_matches_teams(e, team_needles)]
+                    if not matched and q_tokens:
+                        matched = [
+                            e
+                            for e in events
+                            if any(
+                                tok in _norm(f"{e.get('home_team')} {e.get('away_team')}")
+                                for tok in q_tokens
+                                if len(tok) >= 4
+                            )
+                        ]
+                    logger.info(
+                        "Search seeded %s live odds (%s events, %s matched)",
+                        sk,
+                        len(live or []),
+                        len(matched),
+                    )
+            except Exception as exc:
+                logger.info("Search live seed skipped: %s", exc)
+
+    matched.sort(key=lambda e: hours_until_event(e.get("commence_time")) or 9999)
+    cap = max_events
+    if cap is None:
+        cap = int(getattr(config.settings, "odds_search_prop_events", 2) or 2)
+    cap = max(0, min(cap, 3))
+    matched = matched[:cap]
+
+    credits_used = seed_credits
+    props_events = 0
+    for event in matched:
+        _append_game_lines(raw, event, all_preferred_books=True)
+
+    remaining_credits: int | None = None
+    if matched and cap > 0:
+        client, _, info = await _select_active_client()
+        remaining_credits = info.get("total_remaining")
+        if remaining_credits is not None and seed_credits:
+            remaining_credits = max(0, remaining_credits - seed_credits)
+        reserve = max(0, int(getattr(config.settings, "odds_search_min_credits_reserve", 4) or 0))
+        for event in matched:
+            sk = str(event.get("_sport_key") or event.get("sport_key") or sport_key or "")
+            markets = PROP_MARKETS_BY_SPORT.get(sk) or ()
+            if not markets or not client:
+                break
+            cost = len(markets)
+            if remaining_credits is not None and remaining_credits < cost + reserve:
+                logger.info(
+                    "Search props skipped — credits low (%s left, need %s+%s)",
+                    remaining_credits,
+                    cost,
+                    reserve,
+                )
+                break
+            payload = await _fetch_event_props(
+                client,
+                sport_key=sk,
+                event_id=str(event.get("id") or ""),
+                markets=markets,
+            )
+            credits_used += cost
+            if remaining_credits is not None:
+                remaining_credits = max(0, remaining_credits - cost)
+            if not payload:
+                continue
+            payload["_sport_key"] = sk
+            payload["_sport_label"] = event.get("_sport_label") or event.get("sport_title")
+            payload.setdefault("home_team", event.get("home_team"))
+            payload.setdefault("away_team", event.get("away_team"))
+            payload.setdefault("commence_time", event.get("commence_time"))
+            before = len(raw)
+            _append_prop_markets(raw, payload, preferred_only=True)
+            new_props = [c for c in raw[before:] if c.get("bet_type") == "player_prop"]
+            if new_props:
+                props_events += 1
+                _write_props_cache(new_props, credits_used=cost)
+        if credits_used:
+            invalidate_key_probe_cache()
+
+    collapsed = collapse_available_on(raw)
+
+    player_rows = [
+        m
+        for m in collapsed
+        if m.get("bet_type") == "player_prop"
+        and _player_match(str(m.get("player_name") or m.get("selection") or ""), player_needles)
+    ]
+    game_rows = [m for m in collapsed if m.get("bet_type") != "player_prop"]
+    other_props = [
+        m
+        for m in collapsed
+        if m.get("bet_type") == "player_prop"
+        and not _player_match(str(m.get("player_name") or m.get("selection") or ""), player_needles)
+    ]
+
+    if player_needles and player_rows:
+        markets = player_rows + game_rows[:8]
+    elif matched:
+        markets = game_rows[:12] + other_props[:8]
+    else:
+        markets = player_rows or collapsed[:20]
+
+    for m in markets:
+        m["fanduel_verified"] = True
+        m["openai_search"] = False
+
+    return {
+        "markets": markets,
+        "credits_used": credits_used,
+        "props_events": props_events,
+        "matched_events": len(matched),
+        "player_props": len(player_rows),
+        "player_needles": player_needles,
+        "team_needles": team_needles,
+        "message": None
+        if markets
+        else (
+            "No FanDuel/DraftKings lines matched yet — tap Fetch live odds for WNBA/MLB, "
+            "then search again."
+        ),
     }

@@ -353,8 +353,8 @@ export function SportsEventSearch({
         <div>
           <h2 className="text-sm font-semibold text-foreground">Search & log my bet</h2>
           <p className="mt-1 text-xs text-muted">
-            Atlas Insight finds player/team markets on FanDuel/DraftKings, then deep-dives which
-            are most likely to hit and where the best odds are. 0 Odds API credits.
+            Atlas Insight resolves the player/team, pulls real FanDuel/DraftKings lines, then ranks
+            which are most likely to hit and where the best odds are.
           </p>
         </div>
         <button
@@ -374,7 +374,7 @@ export function SportsEventSearch({
           id="sports-event-search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Team or player — e.g. Aces, Wilson, Judge…"
+          placeholder="Player or team — e.g. Carla Leite, Portland, Aces…"
           className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground outline-none focus:border-orange-400"
           enterKeyHint="search"
         />
@@ -461,7 +461,10 @@ export function SportsEventSearch({
                     {hit.thesis ||
                       `Atlas Insight ranked this #${rank}. Open for full analysis.`}
                   </span>
-                  <span className="mt-1 text-[11px] text-muted">On {booksLabel(hit)}</span>
+                  <span className="mt-1 text-[11px] text-muted">
+                    {hit.fanduel_verified ? "FanDuel/DK verified · " : ""}
+                    On {booksLabel(hit)}
+                  </span>
                 </button>
               </li>
               );

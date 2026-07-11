@@ -54,6 +54,12 @@ class Settings(BaseSettings):
     # Keep a small reserve so Insight prop pulls don't zero the free-tier quota.
     odds_insight_min_credits_reserve: int = 5
 
+    # Search: max matching games to pull FanDuel/DK player props for (credit-capped).
+    odds_search_prop_events: int = 2
+
+    # Search prop pull reserve — leave credits for Fetch live.
+    odds_search_min_credits_reserve: int = 4
+
     environment: str = "development"
     default_user_id: str = ""
 
