@@ -95,6 +95,40 @@ async def get_sports_category(
     return detail
 
 
+@router.get("/sports/events")
+async def search_sports_events(
+    user_id: str = Depends(get_current_user_id),
+    token: str = Depends(get_access_token),
+    q: str = "",
+    sport: str | None = None,
+    limit: int = 40,
+) -> dict:
+    """FanDuel-style search over cached odds events (0 Odds API credits)."""
+    from app.services.sports_user_bets_service import search_cached_events
+
+    _ = user_id, token  # auth required
+    return search_cached_events(query=q, sport=sport, limit=limit)
+
+
+@router.post("/sports/user-bets")
+async def create_sports_user_bet(
+    payload: dict,
+    user_id: str = Depends(get_current_user_id),
+    token: str = Depends(get_access_token),
+) -> dict:
+    """Log a user bet/pick for Atlas tracking and learning (0 Odds API credits)."""
+    from app.services.sports_user_bets_service import SportsUserBetsService
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="JSON body required")
+    result = await SportsUserBetsService(SupabaseClient(token), user_id).create_user_bet(payload)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("message") or "Could not save bet")
+    item = result.get("item")
+    formatted = _service(user_id, token).format_sports_item(item) if item else None
+    return {**result, "item": formatted}
+
+
 @router.get("/sports")
 async def list_sports_signals(
     user_id: str = Depends(get_current_user_id),

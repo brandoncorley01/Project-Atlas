@@ -16,7 +16,8 @@ export type SportsFilterKey =
   | "futures"
   | "steam"
   | "value"
-  | "openai";
+  | "openai"
+  | "my_bets";
 export type SportsWindowKey = "today" | "soon" | "week" | "month" | "futures" | "all";
 
 const NEAR_TERM_HOURS = 48;
@@ -31,6 +32,17 @@ export function isOpenAiSportsPick(row: SportsSignal): boolean {
       || row.scoring_snapshot?.source === "openai_web"
       || row.scoring_snapshot?.openai_web
       || row.line_movement?.source === "openai_web",
+  );
+}
+
+export function isUserSportsPick(row: SportsSignal): boolean {
+  return Boolean(
+    row.user_entry
+      || row.pick_source === "user_entry"
+      || row.scoring_snapshot?.source === "user_entry"
+      || row.scoring_snapshot?.user_entry
+      || row.scoring_snapshot?.pick_origin === "user"
+      || row.line_movement?.source === "user_entry",
   );
 }
 
@@ -101,7 +113,7 @@ function compositeRank(row: SportsSignal): number {
 export function filterByWindow(items: SportsSignal[], window: SportsWindowKey): SportsSignal[] {
   const started = items.filter((i) => (i.hours_until_start ?? 0) <= 0 && i.hours_until_start != null);
   const undatedOpenAi = (i: SportsSignal) =>
-    isOpenAiSportsPick(i) && (i.hours_until_start == null || !i.event_start);
+    (isOpenAiSportsPick(i) || isUserSportsPick(i)) && (i.hours_until_start == null || !i.event_start);
 
   if (window === "all") {
     return items;
@@ -157,6 +169,8 @@ export function filterSports(items: SportsSignal[], filter: SportsFilterKey): Sp
       });
     case "openai":
       return items.filter((i) => isOpenAiSportsPick(i));
+    case "my_bets":
+      return items.filter((i) => isUserSportsPick(i));
     default:
       return items;
   }
@@ -215,8 +229,8 @@ function marketFamilyKey(row: SportsSignal): string {
     row.event_name ||
     row.id;
   const betType = (row.bet_type || "moneyline").toLowerCase();
-  // Keep Odds and OpenAI picks side-by-side instead of deduping one away.
-  const source = isOpenAiSportsPick(row) ? "openai" : "odds";
+  // Keep Odds, OpenAI, and user-logged picks side-by-side instead of deduping one away.
+  const source = isUserSportsPick(row) ? "user" : isOpenAiSportsPick(row) ? "openai" : "odds";
   return `${eventId}|${betType}|${source}`;
 }
 

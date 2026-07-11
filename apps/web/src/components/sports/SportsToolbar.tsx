@@ -25,6 +25,7 @@ const SORT_OPTIONS: { value: SportsSortKey; label: string }[] = [
 
 const FILTER_OPTIONS: { value: SportsFilterKey; label: string }[] = [
   { value: "all", label: "All bet types" },
+  { value: "my_bets", label: "My bets" },
   { value: "openai", label: "OpenAI picks" },
   { value: "moneyline", label: "Moneyline" },
   { value: "spread", label: "Spread" },

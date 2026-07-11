@@ -371,7 +371,7 @@ class SportsRefreshService:
             )
             for row in active:
                 snap = row.get("scoring_snapshot") or {}
-                if str(snap.get("source") or "") == "openai_web":
+                if str(snap.get("source") or "") in {"openai_web", "user_entry"}:
                     continue
                 sid = row.get("id")
                 if not sid:

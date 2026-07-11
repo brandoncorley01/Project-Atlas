@@ -52,9 +52,12 @@ export interface SportsSignal {
   stats_support?: number | null;
   pick_source?: string | null;
   openai_web?: boolean;
+  user_entry?: boolean;
   scoring_snapshot?: {
     source?: string;
     openai_web?: boolean;
+    user_entry?: boolean;
+    pick_origin?: string;
     [key: string]: unknown;
   } | null;
   team_stats?: {
@@ -146,14 +149,22 @@ export function SportsSignalCard({
       || row.pick_source === "openai_web"
       || row.scoring_snapshot?.source === "openai_web"
       || row.scoring_snapshot?.openai_web
-      || (row.line_movement as { source?: string } | undefined)?.source === "openai_web",
+      || row.line_movement?.source === "openai_web",
+  );
+  const isMyBet = Boolean(
+    row.user_entry
+      || row.pick_source === "user_entry"
+      || row.scoring_snapshot?.source === "user_entry"
+      || row.scoring_snapshot?.user_entry
+      || row.scoring_snapshot?.pick_origin === "user"
+      || row.line_movement?.source === "user_entry",
   );
 
   return (
     <article
       className={`signal-card atlas-card atlas-card-interactive p-4 sm:p-5 ${
         isTopPick ? "border-violet-500/50 ring-2 ring-violet-500/20" : ""
-      } ${isOpenAiPick ? "border-sky-500/40" : ""}`}
+      } ${isOpenAiPick ? "border-sky-500/40" : ""} ${isMyBet ? "border-orange-500/40" : ""}`}
     >
       {onParlayToggle && (
         <div className="signal-card__parlay-toggle">
@@ -176,6 +187,14 @@ export function SportsSignalCard({
               className="rounded-full border border-sky-400/50 bg-sky-500/20 px-2 py-0.5 text-xs font-bold tracking-wide text-sky-200"
             >
               OpenAI
+            </span>
+          )}
+          {isMyBet && (
+            <span
+              title="You logged this bet — Atlas tracks and grades it to improve learning."
+              className="rounded-full border border-orange-400/50 bg-orange-500/20 px-2 py-0.5 text-xs font-bold tracking-wide text-orange-100"
+            >
+              My bet
             </span>
           )}
           <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${sportMeta.accentClass}`}>

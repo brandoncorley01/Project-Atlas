@@ -10,6 +10,7 @@ import { SportFilterTabs } from "@/components/sports/SportFilterTabs";
 import { SportsToolbar } from "@/components/sports/SportsToolbar";
 import { SportsHeroBanner, SportsStatsBar } from "@/components/sports/SportsStatsBar";
 import { OddsQuotaBanner, useOddsApiStatus } from "@/components/sports/OddsQuotaBanner";
+import { SportsEventSearch } from "@/components/sports/SportsEventSearch";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ListSkeleton } from "@/components/ui/Skeleton";
 import type { SportsCategoryMeta } from "@/lib/sports-categories";
@@ -283,6 +284,14 @@ export function SportsSignalsView({
       />
 
       <OddsQuotaBanner status={oddsStatus} />
+
+      <SportsEventSearch
+        onBetLogged={async () => {
+          const token = await getToken();
+          await Promise.all([loadCategories(token), loadItems(token, activeCategory)]);
+          router.refresh();
+        }}
+      />
 
       {intelligenceEnabled && (
         <div className="mb-4 rounded-xl border border-violet-500/30 bg-violet-500/10 px-4 py-3 text-sm text-violet-100">

@@ -46,7 +46,7 @@ export default async function SportsPage() {
             ONE SIDE / MARKET
           </span>
         }
-        description="One Atlas decision per market. Use Scan / Fetch live / Rescore for Odds API lines, or OpenAI web picks for analyst consensus (0 Odds credits)."
+        description="Search events like FanDuel, log your own bets for Atlas learning, or use Scan / Fetch / Rescore / OpenAI for ranked plays."
       />
       <SportsSignalsView initialItems={items} initialCategories={categories} />
     </>

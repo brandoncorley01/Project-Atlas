@@ -43,29 +43,54 @@ def _is_openai_web_row(row: dict) -> bool:
     )
 
 
+def _is_user_entry_row(row: dict) -> bool:
+    snap = row.get("scoring_snapshot") or {}
+    lm = row.get("line_movement") or {}
+    return (
+        bool(snap.get("user_entry"))
+        or str(snap.get("source") or "") == "user_entry"
+        or str(lm.get("source") or "") == "user_entry"
+        or str(snap.get("pick_origin") or "") == "user"
+    )
+
+
 def _sports_window_match(row: dict, window: str) -> bool:
     """Include started games until the next scan replaces them."""
     hours = hours_until_event(row.get("event_start"))
     if hours is None:
-        # OpenAI web picks often lack a precise kickoff — still list them in every window.
-        if _is_openai_web_row(row):
+        # OpenAI / user-logged picks often lack a precise kickoff — still list them.
+        if _is_openai_web_row(row) or _is_user_entry_row(row):
             return window != "futures" or is_futures_row(row)
         # Futures without a commence time still listable
         return is_futures_row(row) and window in {"all", "futures", "month"}
     if hours <= 0:
         return True
     if window == "today":
-        return is_calendar_today(row) or _is_openai_web_row(row)
+        return is_calendar_today(row) or _is_openai_web_row(row) or _is_user_entry_row(row)
     if window == "soon":
-        return (hours <= NEAR_TERM_HOURS and not is_futures_row(row)) or _is_openai_web_row(row)
+        return (
+            (hours <= NEAR_TERM_HOURS and not is_futures_row(row))
+            or _is_openai_web_row(row)
+            or _is_user_entry_row(row)
+        )
     if window == "week":
-        return hours <= WEEK_HOURS or _is_openai_web_row(row)
+        return hours <= WEEK_HOURS or _is_openai_web_row(row) or _is_user_entry_row(row)
     if window == "month":
-        return hours <= MONTH_HOURS or is_futures_row(row) or _is_openai_web_row(row)
+        return (
+            hours <= MONTH_HOURS
+            or is_futures_row(row)
+            or _is_openai_web_row(row)
+            or _is_user_entry_row(row)
+        )
     if window == "futures":
         return is_futures_row(row) or hours > WEEK_HOURS
     # window == "all" (and anything else)
-    return is_within_horizon(row) or is_futures_row(row) or _is_openai_web_row(row)
+    return (
+        is_within_horizon(row)
+        or is_futures_row(row)
+        or _is_openai_web_row(row)
+        or _is_user_entry_row(row)
+    )
 
 
 def _safe_float(value: object, default: float = 0.0) -> float:
@@ -350,6 +375,12 @@ class SignalService:
                 snapshot.get("openai_web")
                 or snapshot.get("source") == "openai_web"
                 or line_movement.get("source") == "openai_web"
+            ),
+            "user_entry": bool(
+                snapshot.get("user_entry")
+                or snapshot.get("source") == "user_entry"
+                or line_movement.get("source") == "user_entry"
+                or snapshot.get("pick_origin") == "user"
             ),
             "confidence_score": _safe_float(row.get("confidence_score")),
             "risk_score": _safe_float(row.get("risk_score")),

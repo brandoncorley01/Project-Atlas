@@ -273,9 +273,23 @@ class SignalRegistryService:
             signal_id=signal_id,
             outcome="pending",
             resolution_source=TRACKING_SOURCE,
-            signal_snapshot={**(row if isinstance(row, dict) else {}), "pick_origin": "atlas", "atlas_tracked": True},
+            signal_snapshot=self._snapshot_for_register(row),
         )
         return True
+
+    @staticmethod
+    def _snapshot_for_register(row: dict[str, Any]) -> dict[str, Any]:
+        snap = dict(row) if isinstance(row, dict) else {}
+        nested = snap.get("scoring_snapshot") if isinstance(snap.get("scoring_snapshot"), dict) else {}
+        origin = nested.get("pick_origin") or snap.get("pick_origin")
+        if origin == "user" or nested.get("user_entry") or nested.get("source") == "user_entry":
+            snap["pick_origin"] = "user"
+            snap["user_tracked"] = True
+            snap["atlas_tracked"] = False
+        else:
+            snap["pick_origin"] = "atlas"
+            snap["atlas_tracked"] = True
+        return snap
 
     async def _tracked_ids(self) -> set[tuple[str, str]]:
         rows = await self.db.select(
