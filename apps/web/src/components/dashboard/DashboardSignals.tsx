@@ -14,120 +14,100 @@ interface DashboardSignalsProps {
   sportsOpportunities: SignalSummary[];
 }
 
+type BoardTab = "top" | "sports" | "stocks" | "budget";
+
 export function DashboardSignals({
   topOpportunities,
   budgetOpportunities,
   stockOpportunities,
   sportsOpportunities,
 }: DashboardSignalsProps) {
-  const [topSort, setTopSort] = useState<SortKey>("win_prob");
-  const [topFilter, setTopFilter] = useState<FilterKey>("all");
-  const [budgetSort, setBudgetSort] = useState<SortKey>("win_prob");
-  const [budgetFilter, setBudgetFilter] = useState<FilterKey>("all");
+  const [tab, setTab] = useState<BoardTab>("top");
+  const [sort, setSort] = useState<SortKey>("win_prob");
+  const [filter, setFilter] = useState<FilterKey>("all");
 
-  const topItems = useMemo(
-    () => sortSignals(filterSignals(topOpportunities, topFilter), topSort),
-    [topOpportunities, topFilter, topSort],
+  const tabs: { id: BoardTab; label: string; count: number; href: string }[] = [
+    { id: "top", label: "Top", count: topOpportunities.length, href: "/" },
+    { id: "sports", label: "Sports", count: sportsOpportunities.length, href: "/sports" },
+    { id: "stocks", label: "Stocks", count: stockOpportunities.length, href: "/stocks" },
+    { id: "budget", label: "Budget", count: budgetOpportunities.length, href: "/options" },
+  ];
+
+  const source = useMemo(() => {
+    switch (tab) {
+      case "sports":
+        return sportsOpportunities;
+      case "stocks":
+        return stockOpportunities;
+      case "budget":
+        return budgetOpportunities;
+      default:
+        return topOpportunities;
+    }
+  }, [tab, topOpportunities, sportsOpportunities, stockOpportunities, budgetOpportunities]);
+
+  const items = useMemo(
+    () => sortSignals(filterSignals(source, filter), sort),
+    [source, filter, sort],
   );
 
-  const budgetItems = useMemo(
-    () => sortSignals(filterSignals(budgetOpportunities, budgetFilter), budgetSort),
-    [budgetOpportunities, budgetFilter, budgetSort],
-  );
+  const emptyByTab: Record<BoardTab, string> = {
+    top: 'No signals yet. Use the scanner bar above — Options, Stocks, or Sports.',
+    sports: 'No sports plays yet. Tap Sports → Scan sports odds.',
+    stocks: 'No stock swings yet. Tap Stocks → Scan stock swings.',
+    budget: "No budget options yet. Run a deep options scan.",
+  };
+
+  const activeHref = tabs.find((t) => t.id === tab)?.href ?? "/";
 
   return (
-    <>
-      <section className="mb-8">
-        <SectionHeader title="Top Opportunities Today" />
-        <SignalsToolbar
-          sort={topSort}
-          filter={topFilter}
-          onSortChange={setTopSort}
-          onFilterChange={setTopFilter}
-          resultCount={topItems.length}
+    <section className="mb-6">
+      <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+        <SectionHeader
+          title="Opportunities"
+          description="One board — switch modules without scrolling past duplicates."
         />
-        <OpportunityList
-          items={topItems}
-          highlightBudget
-          emptyMessage='No signals yet. Click "Deep scan market" above to hunt across movers, actives, and growth names.'
-        />
-      </section>
-
-      {/* Sports featured — 24/7 priority module */}
-      <section className="mb-8 overflow-hidden rounded-2xl border border-violet-500/35 bg-gradient-to-br from-violet-600/15 via-violet-500/8 to-surface p-5 sm:p-6">
-        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="mb-2 flex flex-wrap items-center gap-2">
-              <span className="rounded-full bg-violet-600 px-2.5 py-0.5 text-[10px] font-bold text-white">
-                24/7
-              </span>
-              {sportsOpportunities.length > 0 && (
-                <span className="rounded-full bg-violet-500/25 px-2 py-0.5 text-xs font-semibold text-violet-200">
-                  {sportsOpportunities.length} plays
-                </span>
-              )}
-            </div>
-            <SectionHeader
-              title="Sports +EV Picks"
-              description="NBA, NFL, MLB, NHL, soccer & more — ranked by edge vs FanDuel. Scan → pick #1 → build parlays."
-              href="/sports"
-            />
-          </div>
-          <Link
-            href="/parlays"
-            className="shrink-0 rounded-lg bg-orange-500 px-3 py-2 text-xs font-bold text-white hover:bg-orange-500/90"
-          >
-            Build parlays →
-          </Link>
-        </div>
-        <OpportunityList
-          items={sportsOpportunities}
-          emptyMessage='No sports plays yet. Click "Scan sports odds" in the scanner bar — leagues run around the clock worldwide.'
-          moduleLinkBase="/sports"
-        />
-        {sportsOpportunities.length > 0 && (
-          <Link
-            href="/sports"
-            className="mt-4 inline-flex items-center gap-1 text-sm font-semibold text-violet-300 hover:text-violet-200 hover:underline"
-          >
-            Open full sports command center →
+        {tab !== "top" && (
+          <Link href={activeHref} className="text-xs font-semibold text-accent hover:underline">
+            Open {tab} →
           </Link>
         )}
-      </section>
+      </div>
 
-      <section className="mb-8">
-        <SectionHeader
-          title="Stock Swing Picks"
-          description="RSI, MACD, and volume-ranked swing trades with entry zones and stops."
-          href="/stocks"
-          count={stockOpportunities.length}
-        />
-        <OpportunityList
-          items={stockOpportunities}
-          emptyMessage='No stock swings yet. Click "Scan stock swings" in the scanner bar above.'
-          moduleLinkBase="/stocks"
-        />
-      </section>
+      <div className="mb-3 flex gap-1 overflow-x-auto rounded-lg border border-border bg-surface-elevated p-1">
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => setTab(t.id)}
+            className={`shrink-0 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
+              tab === t.id
+                ? "bg-accent/20 text-accent"
+                : "text-muted hover:bg-surface-hover hover:text-foreground"
+            }`}
+          >
+            {t.label}
+            {t.count > 0 ? ` · ${t.count}` : ""}
+          </button>
+        ))}
+      </div>
 
-      <section className="mb-8">
-        <SectionHeader
-          title="Budget Picks · Under $100 / Contract"
-          description="Same deep scan and scoring — filtered to options costing $100 or less per contract."
-        />
-        <SignalsToolbar
-          sort={budgetSort}
-          filter={budgetFilter}
-          onSortChange={setBudgetSort}
-          onFilterChange={setBudgetFilter}
-          resultCount={budgetItems.length}
-        />
-        <OpportunityList
-          items={budgetItems}
-          highlightBudget
-          showContractCost
-          emptyMessage="No budget picks match your filters. Run a deep scan or loosen filters."
-        />
-      </section>
-    </>
+      <SignalsToolbar
+        sort={sort}
+        filter={filter}
+        onSortChange={setSort}
+        onFilterChange={setFilter}
+        resultCount={items.length}
+      />
+      <OpportunityList
+        items={items}
+        highlightBudget={tab === "budget" || tab === "top"}
+        showContractCost={tab === "budget"}
+        emptyMessage={emptyByTab[tab]}
+        moduleLinkBase={
+          tab === "sports" ? "/sports" : tab === "stocks" ? "/stocks" : tab === "budget" ? "/options" : undefined
+        }
+      />
+    </section>
   );
 }

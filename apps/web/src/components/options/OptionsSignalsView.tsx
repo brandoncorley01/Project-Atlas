@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { OptionSignalCard, type OptionSignal } from "@/components/options/OptionSignalCard";
+import { AtlasModuleInsight } from "@/components/ai/AtlasModuleInsight";
 import { SignalsToolbar } from "@/components/dashboard/SignalsToolbar";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ListSkeleton } from "@/components/ui/Skeleton";
@@ -223,10 +224,22 @@ export function OptionsSignalsView({
   }
 
   return (
-    <div className="space-y-10">
+    <div className="space-y-8">
+      <AtlasModuleInsight
+        module="options"
+        signalId={topOrdered[0]?.id ?? allItems[0]?.id}
+        headline="Options move on time — Atlas prioritizes catalysts, DTE, and premium velocity."
+        urgencyNote={
+          (topOrdered[0] ?? allItems[0]) &&
+          Number((topOrdered[0] ?? allItems[0])?.days_to_expiration ?? 99) <= 14
+            ? `Top pick has ${Number((topOrdered[0] ?? allItems[0])?.days_to_expiration)} DTE — near-term monetary risk/reward is elevated.`
+            : "Short-dated contracts reprice faster than stocks — size carefully."
+        }
+      />
+
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm text-muted">
-          Ranked by profit probability · expand any card for entry dates, breakeven, and trade plan.
+          Ranked by profit probability · expand any card for entry, breakeven, and trade plan.
         </p>
         <button
           type="button"

@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { StockTickerLookup } from "@/components/stocks/StockTickerLookup";
 import { StockSignalCard, type StockSignal } from "@/components/stocks/StockSignalCard";
+import { AtlasModuleInsight } from "@/components/ai/AtlasModuleInsight";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ListSkeleton } from "@/components/ui/Skeleton";
 import { apiRequestHeaders, getApiUrl, usesBffProxy } from "@/lib/api-url";
@@ -75,9 +76,24 @@ export function StocksSignalsView({ initialItems, initialTicker }: StocksSignals
     <div>
       <StockTickerLookup initialTicker={initialTicker} />
 
+      <AtlasModuleInsight
+        module="stock"
+        signalId={items[0]?.id}
+        headline={
+          items[0]
+            ? `#1 ${items[0].ticker ?? "swing"} — technicals + catalyst thesis`
+            : "Scan swings — Atlas ranks RSI/MACD setups like sports Insight ranks props."
+        }
+        urgencyNote={
+          items[0]?.opportunity_score != null && items[0].opportunity_score >= 70
+            ? "High opportunity score — review entry/stop before the move extends."
+            : null
+        }
+      />
+
       <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm text-muted">
-          Ranked by opportunity score · RSI, MACD, relative volume, and news catalysts.
+          Ranked by opportunity · RSI, MACD, relative volume, and news catalysts.
         </p>
         <button
           type="button"

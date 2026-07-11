@@ -20,7 +20,6 @@ import { SectionHeader } from "@/components/ui/SectionHeader";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { DashboardSkeleton } from "@/components/ui/Skeleton";
 import { QuickStartGuide } from "@/components/ui/QuickStartGuide";
-import { DashboardLegend } from "@/components/dashboard/DashboardLegend";
 import { AtlasBriefingCard, type AtlasBriefing } from "@/components/dashboard/AtlasBriefingCard";
 import {
   MarketIntelligenceCard,
@@ -141,6 +140,8 @@ export function DashboardView() {
       );
       setApiStatusColor("text-success");
       hasLoadedOnceRef.current = true;
+      apiRestartingRef.current = false;
+      setApiRestarting(false);
     } catch (err) {
       if (controller.signal.aborted) {
         return;
@@ -151,24 +152,27 @@ export function DashboardView() {
         setApiStatusColor("text-warning");
       } else if (status === 401) {
         setApiStatus("Session expired — sign out and sign in again");
+        setApiStatusColor("text-danger");
       } else if (status === 404 || status === 502) {
         setApiStatus(
           err instanceof Error
             ? err.message
             : "Backend not configured — check NEXT_PUBLIC_API_URL on Vercel (must end with /api/v1)",
         );
+        setApiStatusColor("text-danger");
       } else if (status === 503) {
         setApiStatus(err instanceof Error ? err.message : `Backend unreachable — ${API_START_HINT}`);
-      } else if (status === 502) {
-        setApiStatus("Database error — check Supabase connection");
+        setApiStatusColor("text-danger");
       } else if (status === 500) {
         setApiStatus(err instanceof Error ? err.message : "API server error");
+        setApiStatusColor("text-danger");
       } else if (err instanceof ApiError) {
         setApiStatus(err.message);
+        setApiStatusColor("text-danger");
       } else {
         setApiStatus(`Cannot reach API — ${API_START_HINT}`);
+        setApiStatusColor("text-danger");
       }
-      setApiStatusColor("text-danger");
     } finally {
       if (!controller.signal.aborted) {
         setLoading(false);
@@ -184,7 +188,6 @@ export function DashboardView() {
       const { data } = await supabase.auth.getSession();
       const token = data.session?.access_token;
       const apiUrl = getApiUrl();
-      // Pull fresh headlines first, then rebuild the briefing off that slate.
       try {
         await fetch(`${apiUrl}/engine/refresh-news`, {
           method: "POST",
@@ -199,7 +202,6 @@ export function DashboardView() {
         timeoutMs: 45_000,
       });
       setAtlasBriefing(briefing);
-      // Keep the breaking strip in sync with the same refresh.
       void loadDashboard({ background: true });
     } catch {
       // keep existing briefing on failure
@@ -261,10 +263,12 @@ export function DashboardView() {
             ? "danger"
             : "warning";
 
+  const perfLogged = performanceSummary?.total_logged ?? 0;
+
   return (
     <>
       <PageHeader
-        title="Dashboard"
+        title="Home"
         description={<StatusPill label={loading ? "Loading…" : apiStatus} variant={statusVariant} />}
         actions={
           !loading && apiStatusColor === "text-danger" ? (
@@ -283,103 +287,99 @@ export function DashboardView() {
         <DashboardSkeleton />
       ) : (
         <>
-      <QuickStartGuide />
-
-      <DashboardLegend />
-
-      <StaleDataBanner meta={freshnessMeta ?? undefined} />
-
-      <AtlasBriefingCard
-        briefing={atlasBriefing}
-        onRefresh={() => void refreshBriefing()}
-        refreshing={briefingRefreshing}
-      />
-
-      <MarketIntelligenceCard intelligence={marketIntelligence} tracking={trackingStats} />
-
-      {(performanceSummary?.total_logged ?? 0) > 0 || performanceSummary?.learning_active ? (
-        <section className="mb-8 rounded-xl border border-violet-500/30 bg-violet-500/5 p-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-semibold">Pick performance (30 days)</h2>
-              <p className="mt-1 text-sm text-muted">
-                {performanceSummary?.win_rate_30d != null
-                  ? `${performanceSummary.win_rate_30d}% win rate · ${performanceSummary.total_logged ?? 0} logged`
-                  : `${performanceSummary?.total_logged ?? 0} outcomes logged`}
-                {performanceSummary?.learning_active && " · Atlas is learning from your results"}
-              </p>
-              {performanceSummary?.learning_notes?.[0] && (
-                <p className="mt-2 text-xs text-violet-200">{performanceSummary.learning_notes[0]}</p>
-              )}
+          {!hasSignals && (
+            <div className="mb-5">
+              <QuickStartGuide compact />
             </div>
-            <Link
-              href="/performance"
-              className="rounded-lg border border-violet-500/40 px-3 py-1.5 text-sm font-medium text-violet-200 hover:bg-violet-500/10"
-            >
-              View learning →
-            </Link>
+          )}
+
+          <StaleDataBanner meta={freshnessMeta ?? undefined} />
+
+          <AtlasBriefingCard
+            briefing={atlasBriefing}
+            onRefresh={() => void refreshBriefing()}
+            refreshing={briefingRefreshing}
+          />
+
+          <div className="mb-5 grid gap-3 lg:grid-cols-2">
+            <div className="min-w-0 [&_section]:mb-0">
+              <MarketIntelligenceCard intelligence={marketIntelligence} tracking={trackingStats} />
+            </div>
+            <section className="rounded-xl border border-border bg-surface/50 p-4">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <h2 className="text-sm font-semibold text-foreground">Performance</h2>
+                  <p className="mt-1 text-xs text-muted">
+                    {perfLogged > 0
+                      ? `${performanceSummary?.win_rate_30d != null ? `${performanceSummary.win_rate_30d}% win · ` : ""}${perfLogged} logged (30d)`
+                      : "Log wins/losses on cards — Atlas learns."}
+                  </p>
+                  {performanceSummary?.learning_notes?.[0] && (
+                    <p className="mt-2 text-[11px] text-violet-200/90">
+                      {performanceSummary.learning_notes[0]}
+                    </p>
+                  )}
+                </div>
+                <Link href="/performance" className="text-xs font-semibold text-accent hover:underline">
+                  Open →
+                </Link>
+              </div>
+            </section>
           </div>
-        </section>
-      ) : (
-        <section className="mb-8 rounded-xl border border-dashed border-border bg-surface/40 p-4 text-sm text-muted">
-          After picks settle, tap <strong className="text-foreground">Win</strong> or{" "}
-          <strong className="text-foreground">Loss</strong> on any card — or let Atlas auto-grade expired picks.
-          Every scan is tracked automatically, even without watchlist.{" "}
-          <Link href="/performance" className="text-accent hover:underline">
-            Performance →
-          </Link>
-        </section>
-      )}
 
-      <section className="mb-8">
-        <SectionHeader title="Breaking News" />
-        <BreakingNewsStrip items={breakingNews} />
-      </section>
+          {breakingNews.length > 0 && (
+            <section className="mb-5">
+              <SectionHeader title="News" href="/news" linkLabel="All news →" />
+              <BreakingNewsStrip items={breakingNews.slice(0, 6)} />
+            </section>
+          )}
 
-      <DashboardSignals
-        topOpportunities={topOpportunities}
-        budgetOpportunities={budgetOpportunities}
-        stockOpportunities={stockOpportunities}
-        sportsOpportunities={sportsOpportunities}
-      />
+          <DashboardSignals
+            topOpportunities={topOpportunities}
+            budgetOpportunities={budgetOpportunities}
+            stockOpportunities={stockOpportunities}
+            sportsOpportunities={sportsOpportunities}
+          />
 
-      {bestParlay && (
-        <section className="mb-8">
-          <SectionHeader title="Best Cross-Sport Parlay" href="/parlays" linkLabel="All parlays →" />
-          <ParlayCard row={bestParlay} rank={1} />
-        </section>
-      )}
+          {bestParlay && (
+            <section className="mb-5">
+              <SectionHeader title="Featured parlay" href="/parlays" linkLabel="All parlays →" />
+              <ParlayCard row={bestParlay} rank={1} />
+            </section>
+          )}
 
-      <section className="mb-8">
-        <SectionHeader
-          title="Data Providers"
-          description="Dial gauges show live provider health. The Odds API dial tracks pooled credits across all failover keys and updates after each scan."
-        />
-        <DataProvidersPanel />
-      </section>
+          <details id="data-providers" className="mb-6 rounded-xl border border-border bg-surface/40 open:pb-3">
+            <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-foreground">
+              Data providers
+              <span className="ml-2 text-xs font-normal text-muted">Odds · market data · AI</span>
+            </summary>
+            <div className="px-4 pb-1">
+              <DataProvidersPanel />
+            </div>
+          </details>
 
-      {!hasSignals && apiStatusColor === "text-success" && (
-        <section>
-          <SectionHeader title="Quick Picks" description="Run a scan from the bar above to populate these modules." />
-          <div className="grid gap-4 md:grid-cols-2">
-            <PlaceholderCard
-              module="Stocks"
-              title="Best Stock Swing Setup"
-              description='Use "Scan stock swings" in the scanner bar above to find ranked technical setups.'
-            />
-            <PlaceholderCard
-              module="Sports"
-              title="Best Sports +EV Play"
-              description='Add ODDS_API_KEY and use "Scan sports odds" in the scanner bar for ranked lines.'
-            />
-            <PlaceholderCard
-              module="Options"
-              title="Best Retail Options Setup"
-              description='Use "Deep scan market" above to find ranked options opportunities.'
-            />
-          </div>
-        </section>
-      )}
+          {!hasSignals && apiStatusColor === "text-success" && (
+            <section className="mb-4">
+              <SectionHeader title="Start here" description="Run a scan from the bar above." />
+              <div className="grid gap-3 sm:grid-cols-3">
+                <PlaceholderCard
+                  module="Stocks"
+                  title="Stock swings"
+                  description="Scan stock swings for RSI/MACD setups."
+                />
+                <PlaceholderCard
+                  module="Options"
+                  title="Options"
+                  description="Deep scan for near-term premium moves."
+                />
+                <PlaceholderCard
+                  module="Sports"
+                  title="Sports +EV"
+                  description="Scan sports odds, then build parlays."
+                />
+              </div>
+            </section>
+          )}
         </>
       )}
     </>

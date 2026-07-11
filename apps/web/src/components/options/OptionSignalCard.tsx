@@ -83,7 +83,17 @@ export function OptionSignalCard({ row, rank }: { row: OptionSignal; rank: numbe
             {isBudget && <BudgetTag cost={contractCost} />}
             {ctx?.has_catalyst && (
               <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs font-medium text-amber-300">
-                📰 Catalyst
+                Catalyst
+              </span>
+            )}
+            {row.days_to_expiration <= 14 && (
+              <span className="rounded-full bg-sky-500/20 px-2 py-0.5 text-xs font-medium text-sky-200">
+                Near-term · {row.days_to_expiration}d
+              </span>
+            )}
+            {row.opportunity_score >= 72 && row.days_to_expiration <= 21 && (
+              <span className="rounded-full bg-orange-500/20 px-2 py-0.5 text-xs font-medium text-orange-200">
+                Fast premium
               </span>
             )}
             <PickPerformanceBadge module="options" signalId={row.id} />
