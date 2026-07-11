@@ -193,7 +193,7 @@ class SportsUserBetsService:
         event_name = str(payload.get("event_name") or "").strip()[:160]
         selection = str(payload.get("selection") or "").strip()[:120]
         bet_type = str(payload.get("bet_type") or "moneyline").strip().lower()
-        if bet_type not in {"moneyline", "spread", "total", "futures"}:
+        if bet_type not in {"moneyline", "spread", "total", "futures", "player_prop"}:
             bet_type = "moneyline"
         if not event_name or not selection:
             return {"ok": False, "message": "Event and selection are required."}

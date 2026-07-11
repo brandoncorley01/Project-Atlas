@@ -58,6 +58,7 @@ export interface SportsSignal {
     openai_web?: boolean;
     user_entry?: boolean;
     pick_origin?: string;
+    is_player_prop?: boolean;
     [key: string]: unknown;
   } | null;
   team_stats?: {
@@ -89,6 +90,7 @@ function betTypeLabel(betType: string) {
   if (betType === "moneyline") return "Moneyline";
   if (betType === "spread") return "Spread";
   if (betType === "total") return "Total";
+  if (betType === "player_prop") return "Player prop";
   if (betType === "futures" || betType === "outright") return "Futures";
   return betType;
 }
@@ -187,6 +189,14 @@ export function SportsSignalCard({
               className="rounded-full border border-sky-400/50 bg-sky-500/20 px-2 py-0.5 text-xs font-bold tracking-wide text-sky-200"
             >
               OpenAI
+            </span>
+          )}
+          {(row.bet_type === "player_prop" || row.scoring_snapshot?.is_player_prop) && (
+            <span
+              title="Player prop pick — verify the live FanDuel/DraftKings line and lineup status."
+              className="rounded-full border border-fuchsia-400/50 bg-fuchsia-500/20 px-2 py-0.5 text-xs font-bold tracking-wide text-fuchsia-100"
+            >
+              Prop
             </span>
           )}
           {isMyBet && (

@@ -347,6 +347,7 @@ export function SportsEventSearch({
                 <option value="moneyline">Moneyline</option>
                 <option value="spread">Spread</option>
                 <option value="total">Total</option>
+                <option value="player_prop">Player prop</option>
               </select>
             </label>
             <label className="flex flex-col gap-1 text-xs text-muted">

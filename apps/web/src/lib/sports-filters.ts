@@ -17,7 +17,8 @@ export type SportsFilterKey =
   | "steam"
   | "value"
   | "openai"
-  | "my_bets";
+  | "my_bets"
+  | "player_props";
 export type SportsWindowKey = "today" | "soon" | "week" | "month" | "futures" | "all";
 
 const NEAR_TERM_HOURS = 48;
@@ -43,6 +44,17 @@ export function isUserSportsPick(row: SportsSignal): boolean {
       || row.scoring_snapshot?.user_entry
       || row.scoring_snapshot?.pick_origin === "user"
       || row.line_movement?.source === "user_entry",
+  );
+}
+
+export function isPlayerPropPick(row: SportsSignal): boolean {
+  const bet = (row.bet_type || "").toLowerCase();
+  return (
+    bet === "player_prop"
+    || Boolean(row.scoring_snapshot?.is_player_prop)
+    || bet.startsWith("player_")
+    || bet.startsWith("batter_")
+    || bet.startsWith("pitcher_")
   );
 }
 
@@ -158,6 +170,8 @@ export function filterSports(items: SportsSignal[], filter: SportsFilterKey): Sp
       return items.filter((i) => i.bet_type === "total");
     case "futures":
       return items.filter((i) => isFutures(i));
+    case "player_props":
+      return items.filter((i) => isPlayerPropPick(i));
     case "steam":
       return items.filter(
         (i) => (i.sharp_indicator ?? i.context?.sharp_indicator) === "steam",
@@ -231,6 +245,10 @@ function marketFamilyKey(row: SportsSignal): string {
   const betType = (row.bet_type || "moneyline").toLowerCase();
   // Keep Odds, OpenAI, and user-logged picks side-by-side instead of deduping one away.
   const source = isUserSportsPick(row) ? "user" : isOpenAiSportsPick(row) ? "openai" : "odds";
+  // Player props need selection in the key or every prop on a game collapses to one card.
+  if (isPlayerPropPick(row)) {
+    return `${eventId}|${betType}|${row.selection}|${source}`;
+  }
   return `${eventId}|${betType}|${source}`;
 }
 

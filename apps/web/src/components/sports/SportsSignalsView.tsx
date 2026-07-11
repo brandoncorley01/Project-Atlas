@@ -343,7 +343,7 @@ export function SportsSignalsView({
             type="button"
             onClick={() => refreshOpenAiPicks()}
             disabled={busy}
-            title="OpenAI browses the public web for analyst and popular-bettor picks. Uses OPENAI_API_KEY only — 0 Odds API credits."
+            title="OpenAI browses the web for analyst consensus — prioritizes player props, plus strong ML/spread/totals. 0 Odds API credits."
             className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-4 py-2 text-sm font-medium text-sky-200 hover:bg-sky-500/20 disabled:opacity-50"
           >
             {loading === "openai" ? "OpenAI searching…" : "OpenAI web picks"}
