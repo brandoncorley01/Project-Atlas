@@ -6,7 +6,8 @@ export type SportsSortKey =
   | "edge"
   | "ev"
   | "confidence"
-  | "risk_low";
+  | "risk_low"
+  | "openai";
 export type SportsFilterKey =
   | "all"
   | "moneyline"
@@ -14,7 +15,8 @@ export type SportsFilterKey =
   | "total"
   | "futures"
   | "steam"
-  | "value";
+  | "value"
+  | "openai";
 export type SportsWindowKey = "today" | "soon" | "week" | "month" | "futures" | "all";
 
 const NEAR_TERM_HOURS = 48;
@@ -22,16 +24,38 @@ const WEEK_HOURS = 168;
 const MONTH_HOURS = 720;
 const SPORTS_TZ = "America/New_York";
 
+export function isOpenAiSportsPick(row: SportsSignal): boolean {
+  return Boolean(
+    row.openai_web
+      || row.pick_source === "openai_web"
+      || row.scoring_snapshot?.source === "openai_web"
+      || row.scoring_snapshot?.openai_web
+      || row.line_movement?.source === "openai_web",
+  );
+}
+
 function getEdge(row: SportsSignal): number {
-  return Number(row.line_movement?.edge_pct ?? row.context?.edge_pct ?? 0);
+  const edge = Number(row.line_movement?.edge_pct ?? row.context?.edge_pct ?? 0);
+  // OpenAI consensus picks often have no Odds-API edge — fall back to opportunity so they sort.
+  if (edge === 0 && isOpenAiSportsPick(row)) {
+    return Number(row.opportunity_score ?? 0) * 0.08;
+  }
+  return edge;
 }
 
 function getEv(row: SportsSignal): number {
-  return Number(row.expected_value ?? row.context?.expected_value ?? 0);
+  const ev = Number(row.expected_value ?? row.context?.expected_value ?? 0);
+  if (ev === 0 && isOpenAiSportsPick(row)) {
+    return Number(row.opportunity_score ?? 0) * 0.05;
+  }
+  return ev;
 }
 
 function getSoonest(row: SportsSignal): number {
-  return row.hours_until_start ?? 9999;
+  if (row.hours_until_start != null) return row.hours_until_start;
+  // Undated OpenAI picks stay visible near the top of "soonest" rather than sinking to 9999.
+  if (isOpenAiSportsPick(row)) return 20;
+  return 9999;
 }
 
 function isFutures(row: SportsSignal): boolean {
@@ -70,22 +94,27 @@ function compositeRank(row: SportsSignal): number {
       ? Math.min(12, (hours - NEAR_TERM_HOURS) * 0.04)
       : 0;
   const todayBoost = isSportsCalendarToday(row) ? 4 : 0;
-  return opp + soonBoost + edge * 0.35 - latePenalty + todayBoost;
+  const openaiBoost = isOpenAiSportsPick(row) ? 3 : 0;
+  return opp + soonBoost + edge * 0.35 - latePenalty + todayBoost + openaiBoost;
 }
 
 export function filterByWindow(items: SportsSignal[], window: SportsWindowKey): SportsSignal[] {
-  const started = items.filter((i) => (i.hours_until_start ?? 0) <= 0);
+  const started = items.filter((i) => (i.hours_until_start ?? 0) <= 0 && i.hours_until_start != null);
+  const undatedOpenAi = (i: SportsSignal) =>
+    isOpenAiSportsPick(i) && (i.hours_until_start == null || !i.event_start);
+
   if (window === "all") {
     return items;
   }
   if (window === "today") {
-    return items.filter((i) => isSportsCalendarToday(i));
+    return items.filter((i) => isSportsCalendarToday(i) || undatedOpenAi(i));
   }
   if (window === "futures") {
     return items.filter((i) => isFutures(i) || (i.hours_until_start ?? 0) > WEEK_HOURS);
   }
   if (window === "month") {
     const upcoming = items.filter((i) => {
+      if (undatedOpenAi(i)) return true;
       const h = i.hours_until_start ?? 9999;
       return (h > 0 && h <= MONTH_HOURS) || isFutures(i);
     });
@@ -93,12 +122,14 @@ export function filterByWindow(items: SportsSignal[], window: SportsWindowKey): 
   }
   if (window === "week") {
     const upcoming = items.filter((i) => {
+      if (undatedOpenAi(i)) return true;
       const h = i.hours_until_start ?? 9999;
       return h > 0 && h <= WEEK_HOURS;
     });
     return [...started, ...upcoming];
   }
   const upcoming = items.filter((i) => {
+    if (undatedOpenAi(i)) return true;
     const h = i.hours_until_start ?? 9999;
     return h > 0 && h <= NEAR_TERM_HOURS && !isFutures(i);
   });
@@ -120,9 +151,12 @@ export function filterSports(items: SportsSignal[], filter: SportsFilterKey): Sp
         (i) => (i.sharp_indicator ?? i.context?.sharp_indicator) === "steam",
       );
     case "value":
-      return items.filter(
-        (i) => (i.sharp_indicator ?? i.context?.sharp_indicator) === "value",
-      );
+      return items.filter((i) => {
+        const sharp = i.sharp_indicator ?? i.context?.sharp_indicator;
+        return sharp === "value" || isOpenAiSportsPick(i);
+      });
+    case "openai":
+      return items.filter((i) => isOpenAiSportsPick(i));
     default:
       return items;
   }
@@ -137,13 +171,18 @@ export function sortSports(items: SportsSignal[], sort: SportsSortKey): SportsSi
       case "opportunity":
         return compositeRank(b) - compositeRank(a);
       case "edge":
-        return getEdge(b) - getEdge(a);
+        return getEdge(b) - getEdge(a) || compositeRank(b) - compositeRank(a);
       case "ev":
-        return getEv(b) - getEv(a);
+        return getEv(b) - getEv(a) || compositeRank(b) - compositeRank(a);
       case "confidence":
-        return b.confidence_score - a.confidence_score;
+        return b.confidence_score - a.confidence_score || compositeRank(b) - compositeRank(a);
       case "risk_low":
-        return a.risk_score - b.risk_score;
+        return a.risk_score - b.risk_score || compositeRank(b) - compositeRank(a);
+      case "openai": {
+        const ao = isOpenAiSportsPick(a) ? 1 : 0;
+        const bo = isOpenAiSportsPick(b) ? 1 : 0;
+        return bo - ao || compositeRank(b) - compositeRank(a);
+      }
       default:
         return 0;
     }
@@ -176,7 +215,9 @@ function marketFamilyKey(row: SportsSignal): string {
     row.event_name ||
     row.id;
   const betType = (row.bet_type || "moneyline").toLowerCase();
-  return `${eventId}|${betType}`;
+  // Keep Odds and OpenAI picks side-by-side instead of deduping one away.
+  const source = isOpenAiSportsPick(row) ? "openai" : "odds";
+  return `${eventId}|${betType}|${source}`;
 }
 
 /** Drop alternate sides of the same event+market so the board never shows both ML/spread/total sides. */
