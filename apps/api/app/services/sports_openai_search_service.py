@@ -6,7 +6,7 @@ import logging
 import re
 from typing import Any
 
-from app.agents.sports_analyst import PREFERRED_BOOK_KEY, US_PREFERRED_BOOK_KEYS
+from app.agents.sports_analyst import PREFERRED_BOOK_KEY, US_PREFERRED_BOOK_KEYS, american_to_decimal
 from app.services.llm_service import llm_service
 
 logger = logging.getLogger(__name__)
@@ -18,6 +18,49 @@ _BOOK_TITLE_MAP = {
     "caesars": "Caesars",
     "williamhill_us": "Caesars",
 }
+
+_ANALYSIS_SYSTEM = """You are Atlas Insight analyzing a shortlist of real sportsbook markets
+the user just searched (player props and/or team/event lines).
+
+Deep-dive EVERY market id in the catalog. Use web search for recent form, matchup,
+injuries, weather, public consensus, and line value.
+
+For each market decide:
+1) How likely the selection is to hit (hit_probability 1-99).
+2) Whether the posted American odds are good value vs that likelihood.
+3) Which book offers the best number among available_on.
+4) A concise thesis a bettor can act on.
+
+HARD RULES:
+- Only analyze catalog ids provided. Do not invent new bets.
+- Prefer higher hit probability when value is similar; prefer better odds when probability is similar.
+- Be honest — mark weak plays with lower confidence/opportunity.
+- Rank 1 = best overall play for this search.
+
+Return JSON only:
+{
+  "analyses": [
+    {
+      "id": "m1",
+      "rank": 1,
+      "hit_probability": 58,
+      "confidence": 55-85,
+      "opportunity": 40-90,
+      "risk": 25-80,
+      "value_grade": "A|B|C|D",
+      "best_book_key": "fanduel|draftkings|...",
+      "thesis": "2-3 sentences: why this is likely / why the price is good or bad",
+      "bull_case": "short",
+      "bear_case": "short",
+      "sources": ["site names"]
+    }
+  ],
+  "top_pick_id": "m1",
+  "best_odds_id": "m3",
+  "most_likely_id": "m2",
+  "summary": "one sentence Insight takeaway for this search"
+}"""
+
 
 _SYSTEM = """You are Atlas sports bet search for Project Atlas.
 The user is searching for real sportsbook markets by TEAM name OR PLAYER name
@@ -388,6 +431,20 @@ def _group_events(markets: list[dict[str, Any]], *, limit: int) -> list[dict[str
                 "player_name": m.get("player_name"),
                 "available_on": m.get("available_on") or [],
                 "available_books": m.get("available_books") or [],
+                "insight_rank": m.get("insight_rank"),
+                "hit_probability": m.get("hit_probability"),
+                "confidence": m.get("confidence"),
+                "opportunity": m.get("opportunity"),
+                "risk": m.get("risk"),
+                "value_grade": m.get("value_grade"),
+                "thesis": m.get("thesis"),
+                "bull_case": m.get("bull_case"),
+                "bear_case": m.get("bear_case"),
+                "best_odds_american": m.get("best_odds_american"),
+                "best_book_title": m.get("best_book_title"),
+                "is_top_pick": m.get("is_top_pick"),
+                "is_best_odds": m.get("is_best_odds"),
+                "is_most_likely": m.get("is_most_likely"),
             }
         )
     return [by_event[k] for k in order[: max(1, min(limit, 40))]]
@@ -461,13 +518,238 @@ def _rank_and_filter(markets: list[dict[str, Any]], query: str) -> list[dict[str
     return [m for _, m in use]
 
 
+def _best_available_price(available: list[dict[str, Any]], fallback: int) -> tuple[int, str, str]:
+    """Return best American price for the bettor + book identity."""
+    if not available:
+        return fallback, PREFERRED_BOOK_KEY, "FanDuel"
+    best = max(available, key=lambda a: american_to_decimal(_safe_american(a.get("odds_american"), fallback)))
+    odds = _safe_american(best.get("odds_american"), fallback)
+    key = str(best.get("book_key") or PREFERRED_BOOK_KEY)
+    title = str(best.get("book_title") or _BOOK_TITLE_MAP.get(key) or key)
+    return odds, key, title
+
+
+def _attach_best_odds(market: dict[str, Any]) -> None:
+    odds, key, title = _best_available_price(
+        list(market.get("available_on") or []),
+        int(market.get("odds_american") or -110),
+    )
+    market["best_odds_american"] = odds
+    market["best_book_key"] = key
+    market["best_book_title"] = title
+    # Display price should prefer the best available number.
+    market["odds_american"] = odds
+    market["book_key"] = key
+    market["book_title"] = title
+
+
+def _clamp(n: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, n))
+
+
+async def _deep_dive_markets(
+    markets: list[dict[str, Any]],
+    *,
+    query: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Atlas Insight pass: likelihood, value, best odds, ranked thesis per market."""
+    if not markets:
+        return [], {}
+
+    for m in markets:
+        _attach_best_odds(m)
+
+    slim = []
+    for i, m in enumerate(markets):
+        mid = f"m{i + 1}"
+        m["insight_id"] = mid
+        slim.append(
+            {
+                "id": mid,
+                "sport": m.get("sport"),
+                "event": m.get("event_name"),
+                "bet_type": m.get("bet_type"),
+                "selection": m.get("selection"),
+                "player": m.get("player_name"),
+                "odds": m.get("odds_american"),
+                "best_odds": m.get("best_odds_american"),
+                "best_book": m.get("best_book_title"),
+                "available_on": m.get("available_on") or [],
+            }
+        )
+
+    user = (
+        f"User searched: {query!r}.\n"
+        "Deep-dive and rank these markets. Compare hit likelihood vs price. "
+        "Call out the single best overall play, the most likely to hit, and the best odds value.\n\n"
+        f"Catalog:\n{slim}"
+    )
+
+    try:
+        result = await llm_service.complete_json_with_web_search(
+            system=_ANALYSIS_SYSTEM,
+            user=user,
+            max_tokens=2600,
+        )
+    except Exception as exc:
+        logger.warning("Atlas Insight search deep-dive failed: %s", exc)
+        result = None
+
+    meta: dict[str, Any] = {
+        "insight_analyzed": False,
+        "insight_summary": None,
+        "top_pick_id": None,
+        "best_odds_id": None,
+        "most_likely_id": None,
+        "web_search": False,
+    }
+    if not result or not isinstance(result.get("analyses"), list):
+        # Deterministic fallback ranking by best decimal odds.
+        ranked = sorted(
+            markets,
+            key=lambda m: american_to_decimal(int(m.get("best_odds_american") or m.get("odds_american") or -110)),
+            reverse=True,
+        )
+        for rank, m in enumerate(ranked, start=1):
+            m["insight_rank"] = rank
+            m["hit_probability"] = None
+            m["confidence"] = 55.0
+            m["opportunity"] = 52.0
+            m["risk"] = 50.0
+            m["value_grade"] = "C"
+            m["thesis"] = (
+                "Atlas Insight ranking unavailable — sorted by best available sportsbook price."
+            )
+            m["bull_case"] = "Best listed price among returned books."
+            m["bear_case"] = "No live form/consensus deep-dive on this pass."
+            m["is_top_pick"] = rank == 1
+            m["is_best_odds"] = rank == 1
+            m["is_most_likely"] = False
+        meta["insight_summary"] = "Price-sorted fallback (Insight deep-dive empty)."
+        return ranked, meta
+
+    by_id = {str(m.get("insight_id")): m for m in markets}
+    analyses = [a for a in result["analyses"] if isinstance(a, dict)]
+    seen: set[str] = set()
+    enriched: list[dict[str, Any]] = []
+
+    for a in analyses:
+        mid = str(a.get("id") or "").strip()
+        m = by_id.get(mid)
+        if not m or mid in seen:
+            continue
+        seen.add(mid)
+        try:
+            rank = int(a.get("rank") or 99)
+        except (TypeError, ValueError):
+            rank = 99
+        try:
+            hit_p = float(a.get("hit_probability"))
+            hit_p = _clamp(hit_p, 1.0, 99.0)
+        except (TypeError, ValueError):
+            hit_p = None
+        try:
+            confidence = _clamp(float(a.get("confidence") or 62), 40.0, 90.0)
+            opportunity = _clamp(float(a.get("opportunity") or 55), 35.0, 95.0)
+            risk = _clamp(float(a.get("risk") or 50), 20.0, 85.0)
+        except (TypeError, ValueError):
+            confidence, opportunity, risk = 62.0, 55.0, 50.0
+        grade = str(a.get("value_grade") or "C").strip().upper()[:1]
+        if grade not in {"A", "B", "C", "D"}:
+            grade = "C"
+        # Prefer model's best book when it matches an available_on row.
+        want_book = _norm_book_key(str(a.get("best_book_key") or ""))
+        for book in m.get("available_on") or []:
+            if str(book.get("book_key")) == want_book and book.get("odds_american") is not None:
+                m["best_book_key"] = want_book
+                m["best_book_title"] = book.get("book_title") or _BOOK_TITLE_MAP.get(want_book) or want_book
+                m["best_odds_american"] = _safe_american(book.get("odds_american"), m["odds_american"])
+                m["odds_american"] = m["best_odds_american"]
+                m["book_key"] = m["best_book_key"]
+                m["book_title"] = m["best_book_title"]
+                break
+        m["insight_rank"] = rank
+        m["hit_probability"] = hit_p
+        m["confidence"] = confidence
+        m["opportunity"] = opportunity
+        m["risk"] = risk
+        m["value_grade"] = grade
+        m["thesis"] = str(a.get("thesis") or "").strip()[:500]
+        m["bull_case"] = str(a.get("bull_case") or "").strip()[:240]
+        m["bear_case"] = str(a.get("bear_case") or "").strip()[:240]
+        m["insight_sources"] = [str(s) for s in (a.get("sources") or []) if s][:6]
+        enriched.append(m)
+
+    # Append any markets the model skipped.
+    for m in markets:
+        if str(m.get("insight_id")) in seen:
+            continue
+        m["insight_rank"] = 99
+        m["hit_probability"] = None
+        m["confidence"] = 50.0
+        m["opportunity"] = 45.0
+        m["risk"] = 55.0
+        m["value_grade"] = "C"
+        m["thesis"] = "Listed market — not fully scored in this Insight pass."
+        m["bull_case"] = ""
+        m["bear_case"] = ""
+        enriched.append(m)
+
+    enriched.sort(
+        key=lambda m: (
+            int(m.get("insight_rank") or 99),
+            -(float(m.get("opportunity") or 0)),
+            -(float(m.get("hit_probability") or 0)),
+        )
+    )
+    # Re-number contiguous ranks for display.
+    for i, m in enumerate(enriched, start=1):
+        m["insight_rank"] = i
+
+    top_id = str(result.get("top_pick_id") or "").strip()
+    best_odds_id = str(result.get("best_odds_id") or "").strip()
+    most_likely_id = str(result.get("most_likely_id") or "").strip()
+    if not top_id and enriched:
+        top_id = str(enriched[0].get("insight_id") or "")
+    if not best_odds_id and enriched:
+        best_odds_id = str(
+            max(
+                enriched,
+                key=lambda m: american_to_decimal(int(m.get("best_odds_american") or -110)),
+            ).get("insight_id")
+            or ""
+        )
+    if not most_likely_id and enriched:
+        with_p = [m for m in enriched if m.get("hit_probability") is not None]
+        if with_p:
+            most_likely_id = str(max(with_p, key=lambda m: float(m["hit_probability"])).get("insight_id") or "")
+
+    for m in enriched:
+        mid = str(m.get("insight_id") or "")
+        m["is_top_pick"] = mid == top_id
+        m["is_best_odds"] = mid == best_odds_id
+        m["is_most_likely"] = mid == most_likely_id
+
+    meta.update(
+        {
+            "insight_analyzed": True,
+            "insight_summary": str(result.get("summary") or "").strip() or None,
+            "top_pick_id": top_id or None,
+            "best_odds_id": best_odds_id or None,
+            "most_likely_id": most_likely_id or None,
+            "web_search": bool(result.get("_web_search")),
+        }
+    )
+    return enriched, meta
+
+
 async def search_markets_with_openai(
     *,
     query: str = "",
     sport: str | None = None,
     limit: int = 40,
 ) -> dict[str, Any]:
-    """Search teams/players via OpenAI web search — 0 Odds API credits."""
+    """Search teams/players via OpenAI, then Atlas Insight deep-dive ranks them."""
     q = (query or "").strip()
     if not q:
         return {
@@ -503,17 +785,24 @@ async def search_markets_with_openai(
         payload = await _ask_openai(_build_user_prompt(q, sport, player_retry=True))
         markets = _rank_and_filter(_markets_from_payload(payload, limit=limit), q)
 
-    # Re-index event ids after ranking.
+    insight_meta: dict[str, Any] = {}
+    if markets:
+        markets, insight_meta = await _deep_dive_markets(markets, query=q)
+
+    # Re-index event ids after Insight ranking.
     for i, m in enumerate(markets):
         m["event_id"] = f"openai-search-{i + 1}"
 
     items = _group_events(markets, limit=limit)
-    web = bool((payload or {}).get("_web_search"))
+    web = bool((payload or {}).get("_web_search")) or bool(insight_meta.get("web_search"))
     summary = str((payload or {}).get("summary") or "").strip()
     resolved = str((payload or {}).get("resolved_as") or "").strip()
+    insight_summary = str(insight_meta.get("insight_summary") or "").strip()
     msg = summary or None
     if resolved and markets:
         msg = f"{resolved}. {summary}".strip() if summary else resolved
+    if insight_summary:
+        msg = f"{msg} Insight: {insight_summary}".strip() if msg else f"Insight: {insight_summary}"
     if not markets:
         msg = (
             "No sportsbook markets found for that search. "
@@ -530,10 +819,14 @@ async def search_markets_with_openai(
         "credits_used": 0,
         "cache": False,
         "openai_search": True,
+        "insight_analyzed": bool(insight_meta.get("insight_analyzed")),
         "web_search": web,
         "query": q,
         "sport": sport,
         "person_query": person,
         "books": ["FanDuel", "DraftKings"],
+        "top_pick_id": insight_meta.get("top_pick_id"),
+        "best_odds_id": insight_meta.get("best_odds_id"),
+        "most_likely_id": insight_meta.get("most_likely_id"),
         "message": msg,
     }

@@ -20,6 +20,20 @@ export interface SportsEventMarket {
   player_name?: string | null;
   available_on?: BookAvailability[];
   available_books?: string[];
+  insight_rank?: number | null;
+  hit_probability?: number | null;
+  confidence?: number | null;
+  opportunity?: number | null;
+  risk?: number | null;
+  value_grade?: string | null;
+  thesis?: string | null;
+  bull_case?: string | null;
+  bear_case?: string | null;
+  best_odds_american?: number | null;
+  best_book_title?: string | null;
+  is_top_pick?: boolean;
+  is_best_odds?: boolean;
+  is_most_likely?: boolean;
 }
 
 export interface SportsEventHit {
@@ -45,6 +59,20 @@ export interface SportsMarketHit extends SportsEventMarket {
   hours_until_start?: number | null;
   prop_market?: string | null;
   fanduel_verified?: boolean;
+  insight_rank?: number | null;
+  hit_probability?: number | null;
+  confidence?: number | null;
+  opportunity?: number | null;
+  risk?: number | null;
+  value_grade?: string | null;
+  thesis?: string | null;
+  bull_case?: string | null;
+  bear_case?: string | null;
+  best_odds_american?: number | null;
+  best_book_title?: string | null;
+  is_top_pick?: boolean;
+  is_best_odds?: boolean;
+  is_most_likely?: boolean;
 }
 
 async function getToken() {
@@ -123,7 +151,7 @@ export function SportsEventSearch({
         headers: apiRequestHeaders(token),
         credentials: usesBffProxy() ? "include" : "same-origin",
         cache: "no-store",
-        signal: AbortSignal.timeout(120_000),
+        signal: AbortSignal.timeout(150_000),
       });
       const body = await res.json();
       if (!res.ok) {
@@ -281,8 +309,8 @@ export function SportsEventSearch({
         <div>
           <h2 className="text-sm font-semibold text-foreground">Search & log my bet</h2>
           <p className="mt-1 text-xs text-muted">
-            Atlas Insight search (OpenAI) finds teams and player props on real books — FanDuel /
-            DraftKings preferred. 0 Odds API credits. Log picks so Atlas can learn.
+            Atlas Insight finds player/team markets on FanDuel/DraftKings, then deep-dives which
+            are most likely to hit and where the best odds are. 0 Odds API credits.
           </p>
         </div>
         <button
@@ -323,30 +351,72 @@ export function SportsEventSearch({
 
       {loading && (
         <p className="mt-3 text-xs text-muted">
-          Atlas Insight is searching live books via OpenAI — this can take a few seconds…
+          Atlas Insight is searching books, then deep-diving hit likelihood and odds value — can
+          take up to a minute…
         </p>
       )}
 
       {showResults && markets.length > 0 && (
         <div className="mt-3">
           <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">
-            Verified markets
+            Insight-ranked markets
           </p>
-          <ul className="max-h-56 space-y-2 overflow-y-auto">
+          <ul className="max-h-80 space-y-2 overflow-y-auto">
             {markets.slice(0, 24).map((hit, idx) => (
               <li key={`${hit.event_id}-${hit.selection}-${hit.bet_type}-${idx}`}>
                 <button
                   type="button"
                   onClick={() => pickMarketHit(hit)}
-                  className="flex w-full flex-col rounded-lg border border-border/80 bg-background/80 px-3 py-2 text-left hover:border-orange-400/50"
+                  className={`flex w-full flex-col rounded-lg border px-3 py-2.5 text-left hover:border-orange-400/50 ${
+                    hit.is_top_pick
+                      ? "border-orange-400/60 bg-orange-500/15"
+                      : "border-border/80 bg-background/80"
+                  }`}
                 >
-                  <span className="text-sm font-semibold text-foreground">{hit.selection}</span>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {typeof hit.insight_rank === "number" && (
+                      <span className="rounded bg-orange-500/25 px-1.5 py-0.5 text-[10px] font-semibold text-orange-100">
+                        #{hit.insight_rank}
+                      </span>
+                    )}
+                    {hit.is_top_pick && (
+                      <span className="rounded bg-orange-500/30 px-1.5 py-0.5 text-[10px] font-semibold text-orange-50">
+                        Top pick
+                      </span>
+                    )}
+                    {hit.is_most_likely && (
+                      <span className="rounded border border-border px-1.5 py-0.5 text-[10px] text-muted">
+                        Most likely
+                      </span>
+                    )}
+                    {hit.is_best_odds && (
+                      <span className="rounded border border-border px-1.5 py-0.5 text-[10px] text-muted">
+                        Best odds
+                      </span>
+                    )}
+                    {hit.value_grade && (
+                      <span className="rounded border border-border px-1.5 py-0.5 text-[10px] text-muted">
+                        Value {hit.value_grade}
+                      </span>
+                    )}
+                  </div>
+                  <span className="mt-1 text-sm font-semibold text-foreground">{hit.selection}</span>
                   <span className="mt-0.5 text-xs text-muted">
-                    {hit.event_name} · {hit.sport} · {oddsLabel(hit.odds_american)}
+                    {hit.event_name} · {hit.sport}
+                    {typeof hit.hit_probability === "number"
+                      ? ` · ~${Math.round(hit.hit_probability)}% hit`
+                      : ""}
+                    {typeof hit.best_odds_american === "number"
+                      ? ` · best ${oddsLabel(hit.best_odds_american)}`
+                      : ` · ${oddsLabel(hit.odds_american)}`}
+                    {hit.best_book_title ? ` @ ${hit.best_book_title}` : ""}
                   </span>
-                  <span className="mt-1 text-[11px] text-orange-200/90">
-                    On {booksLabel(hit)}
-                  </span>
+                  {hit.thesis && (
+                    <span className="mt-1.5 text-[11px] leading-snug text-orange-100/90">
+                      {hit.thesis}
+                    </span>
+                  )}
+                  <span className="mt-1 text-[11px] text-muted">On {booksLabel(hit)}</span>
                 </button>
               </li>
             ))}
@@ -442,6 +512,27 @@ export function SportsEventSearch({
 
           {market && !manualMode && (
             <p className="mt-2 text-[11px] text-orange-200/90">Selected line: {booksLabel(market)}</p>
+          )}
+
+          {market && !manualMode && market.thesis && (
+            <div className="mt-2 rounded-lg border border-orange-500/20 bg-orange-500/10 px-3 py-2 text-xs text-orange-50/95">
+              <p className="font-medium text-orange-100">Atlas Insight</p>
+              <p className="mt-1 leading-snug">{market.thesis}</p>
+              {(market.bull_case || market.bear_case) && (
+                <p className="mt-1.5 text-[11px] text-muted">
+                  {market.bull_case ? `Bull: ${market.bull_case}` : ""}
+                  {market.bull_case && market.bear_case ? " · " : ""}
+                  {market.bear_case ? `Bear: ${market.bear_case}` : ""}
+                </p>
+              )}
+              {typeof market.hit_probability === "number" && (
+                <p className="mt-1 text-[11px] text-muted">
+                  ~{Math.round(market.hit_probability)}% hit · conf{" "}
+                  {typeof market.confidence === "number" ? Math.round(market.confidence) : "—"}
+                  {market.value_grade ? ` · value ${market.value_grade}` : ""}
+                </p>
+              )}
+            </div>
           )}
 
           <div className="mt-3 grid gap-2 sm:grid-cols-2">

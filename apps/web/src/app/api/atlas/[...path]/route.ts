@@ -6,6 +6,7 @@ const API_BASE = resolveApiBase();
 const PROXY_TIMEOUT_MS = 60_000;
 const DASHBOARD_PROXY_TIMEOUT_MS = 50_000;
 const AI_PROXY_TIMEOUT_MS = 90_000;
+const INSIGHT_SEARCH_PROXY_TIMEOUT_MS = 150_000;
 
 async function proxyRequest(request: NextRequest, pathSegments: string[]) {
   try {
@@ -29,7 +30,7 @@ async function proxyRequest(request: NextRequest, pathSegments: string[]) {
     const timeoutMs = subpath.startsWith("ai/")
       ? AI_PROXY_TIMEOUT_MS
       : subpath === "signals/sports/events"
-        ? AI_PROXY_TIMEOUT_MS
+        ? INSIGHT_SEARCH_PROXY_TIMEOUT_MS
         : subpath === "dashboard"
           ? DASHBOARD_PROXY_TIMEOUT_MS
           : PROXY_TIMEOUT_MS;
