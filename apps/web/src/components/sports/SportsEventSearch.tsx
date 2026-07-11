@@ -302,7 +302,7 @@ export function SportsEventSearch({
           id="sports-event-search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Team or player — e.g. Yankees, Judge, Aces…"
+          placeholder="Team or player — e.g. Aces, Wilson, Judge…"
           className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground outline-none focus:border-orange-400"
           enterKeyHint="search"
         />
