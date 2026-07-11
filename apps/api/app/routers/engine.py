@@ -93,7 +93,7 @@ async def refresh_sports_openai(
     token: str = Depends(get_access_token),
     limit: int = 16,
 ) -> dict:
-    """OpenAI web desk — find analyst / popular-bettor picks from the public internet.
+    """Atlas Insight — find analyst / popular-bettor picks from the public internet.
 
     Uses OPENAI_API_KEY + web search. Does not spend Odds API credits.
     Merges onto the board without wiping Odds-derived picks.

@@ -16,7 +16,7 @@ interface SportsToolbarProps {
 const SORT_OPTIONS: { value: SportsSortKey; label: string }[] = [
   { value: "soonest", label: "Starting soonest" },
   { value: "opportunity", label: "Best overall" },
-  { value: "openai", label: "OpenAI picks first" },
+  { value: "openai", label: "Atlas Insight first" },
   { value: "edge", label: "Highest edge" },
   { value: "ev", label: "Highest EV" },
   { value: "confidence", label: "Most confident" },
@@ -26,7 +26,7 @@ const SORT_OPTIONS: { value: SportsSortKey; label: string }[] = [
 const FILTER_OPTIONS: { value: SportsFilterKey; label: string }[] = [
   { value: "all", label: "All bet types" },
   { value: "my_bets", label: "My bets" },
-  { value: "openai", label: "OpenAI picks" },
+  { value: "openai", label: "Atlas Insight" },
   { value: "player_props", label: "Player props" },
   { value: "moneyline", label: "Moneyline" },
   { value: "spread", label: "Spread" },

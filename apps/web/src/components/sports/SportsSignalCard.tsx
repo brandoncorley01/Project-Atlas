@@ -185,10 +185,10 @@ export function SportsSignalCard({
           </p>
           {isOpenAiPick && (
             <span
-              title="Found via OpenAI web search of analyst and popular-bettor consensus — not Odds API +EV math. Verify the live FanDuel/DraftKings number."
+              title="Atlas Insight — analyst/popular-bettor consensus from the web. Not Odds API +EV math. Verify the live FanDuel/DraftKings number."
               className="rounded-full border border-sky-400/50 bg-sky-500/20 px-2 py-0.5 text-xs font-bold tracking-wide text-sky-200"
             >
-              OpenAI
+              Atlas Insight
             </span>
           )}
           {(row.bet_type === "player_prop" || row.scoring_snapshot?.is_player_prop) && (

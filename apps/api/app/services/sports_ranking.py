@@ -112,14 +112,20 @@ def composite_score(row: dict[str, Any]) -> float:
     lm = row.get("line_movement") or {}
     edge = float(snap.get("edge_pct") or lm.get("edge_pct") or 0)
     hours = hours_to_start(row)
+    source = str(snap.get("source") or lm.get("source") or "")
+    insight = source in {"openai_web", "user_entry"} or bool(snap.get("openai_web")) or bool(snap.get("user_entry"))
     boost = timing_boost(hours)
+    # Undated Insight/user picks shouldn't sink to the bottom of the board.
+    if hours is None and insight:
+        boost = 6.0
     soon_penalty = 0.0
     if hours is not None and hours > NEAR_TERM_HOURS and not is_futures_row(row):
         # Soft penalty so future game lines remain visible when edge is strong.
         soon_penalty = min(12.0, (hours - NEAR_TERM_HOURS) * 0.04)
     stats_support = float(snap.get("stats_support") or 0)
     today_boost = 4.0 if is_calendar_today(row) else 0.0
-    return opp + boost + edge * 0.35 - soon_penalty + stats_support * 0.2 + today_boost
+    insight_boost = 3.0 if insight else 0.0
+    return opp + boost + edge * 0.35 - soon_penalty + stats_support * 0.2 + today_boost + insight_boost
 
 
 def sort_for_display(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -139,6 +145,13 @@ def market_family_key(row: dict[str, Any]) -> str:
     lm = row.get("line_movement") or {}
     event_id = snap.get("event_id") or lm.get("event_id") or row.get("event_name") or row.get("id") or ""
     bet_type = str(row.get("bet_type") or "moneyline").lower()
+    source = str(snap.get("source") or lm.get("source") or "odds")
+    # Keep Odds / Atlas Insight / user bets distinct; keep each player prop visible.
+    if bet_type == "player_prop" or snap.get("is_player_prop"):
+        selection = str(row.get("selection") or "")
+        return f"{event_id}|{bet_type}|{selection}|{source}"
+    if source in {"openai_web", "user_entry"}:
+        return f"{event_id}|{bet_type}|{source}"
     return f"{event_id}|{bet_type}"
 
 

@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 SOURCE = "openai_web"
 
-_SYSTEM = """You are Atlas OpenAI sports desk. Search the public internet for today's
+_SYSTEM = """You are Atlas Insight, the Project Atlas sports desk. Search the public internet for today's
 most-talked-about sports bets from betting analysts, touts, and popular sports bettors
 (MLB, WNBA, NFL, NBA, NHL, MLS, UFC when in season). Prefer FanDuel/DraftKings boards.
 
@@ -142,7 +142,7 @@ def _pick_to_row(user_id: str, pick: dict[str, Any]) -> dict[str, Any] | None:
     sources = [str(s) for s in (pick.get("sources") or []) if s][:6]
     thesis = str(pick.get("thesis") or pick.get("explanation") or "").strip()
     if not thesis:
-        thesis = "OpenAI web consensus from public analyst / bettor coverage."
+        thesis = "Atlas Insight consensus from public analyst / bettor coverage."
     bull = str(pick.get("bull_case") or thesis)[:400]
     bear = str(pick.get("bear_case") or "Public consensus can be late; lines may already be steamed.")[:400]
     action = str(pick.get("suggested_action") or f"Check FanDuel/DraftKings for {selection}")[:240]
@@ -181,14 +181,14 @@ def _pick_to_row(user_id: str, pick: dict[str, Any]) -> dict[str, Any] | None:
         "confidence_score": confidence,
         "risk_score": risk,
         "opportunity_score": opportunity,
-        "recommendation": f"OpenAI · {type_label} — {selection} · {event_name}",
+        "recommendation": f"Atlas Insight · {type_label} — {selection} · {event_name}",
         "explanation": thesis[:800],
         "bull_case": bull,
         "bear_case": bear,
         "invalidation": "Consensus flips, lineup scratch, or key injury news after this scan.",
         "suggested_action": action,
         "risk_warning": (
-            "OpenAI web picks are analyst/public consensus, not Odds API +EV math. "
+            "Atlas Insight picks are analyst/public consensus, not Odds API +EV math. "
             "Verify the live FanDuel/DraftKings number before betting."
         ),
         "scoring_snapshot": {
@@ -250,7 +250,7 @@ class SportsOpenAiPicksService:
         try:
             news = await fetch_sports_news(limit_per_feed=8)
         except Exception as exc:
-            logger.warning("OpenAI picks news prefetch skipped: %s", exc)
+            logger.warning("Atlas Insight picks news prefetch skipped: %s", exc)
 
         headlines = [
             {
@@ -262,13 +262,16 @@ class SportsOpenAiPicksService:
             for n in news[:24]
         ]
         today = datetime.now(UTC).strftime("%Y-%m-%d")
+        # Anchor undated picks to "today" so list/window filters keep them visible.
+        today_iso = datetime.now(UTC).replace(hour=23, minute=0, second=0, microsecond=0).isoformat()
         user = (
             f"Today's UTC date: {today}. Search the web for today's FanDuel/DraftKings "
             "consensus bets from analysts and popular sports bettors. "
             "PRIMARY: player props (hits, HRs, Ks, points, rebounds, assists, threes, PRA, etc.). "
             "SECONDARY: strong moneylines, spreads, and totals. "
             "Prioritize MLB and WNBA if those games are on the slate. "
-            "Return a mixed slate — mostly props, not props-only.\n\n"
+            "Return a mixed slate — mostly props, not props-only. "
+            "Always include event_start as an ISO UTC timestamp when the game time is known.\n\n"
             f"Recent headlines (extra context, may be incomplete):\n{headlines}"
         )
 
@@ -291,6 +294,8 @@ class SportsOpenAiPicksService:
         for pick in result["picks"]:
             if not isinstance(pick, dict):
                 continue
+            if not str(pick.get("event_start") or "").strip():
+                pick = {**pick, "event_start": today_iso}
             row = _pick_to_row(self.user_id, pick)
             if row:
                 rows.append(row)
@@ -306,17 +311,17 @@ class SportsOpenAiPicksService:
 
                 await SignalRegistryService(self.db, self.user_id).register_batch("sports", saved)
             except Exception as exc:
-                logger.warning("OpenAI sports registry skipped: %s", exc)
+                logger.warning("Atlas Insight sports registry skipped: %s", exc)
 
         used_web = bool(result.get("_web_search"))
         prop_count = sum(1 for r in (saved or rows) if str(r.get("bet_type")) == "player_prop")
         summary = str(result.get("summary") or "").strip()
         msg = (
-            f"OpenAI web desk found {len(saved)} picks"
+            f"Atlas Insight found {len(saved)} picks"
             f" ({prop_count} player props)"
             f"{' via live web search' if used_web else ' from model + headlines'} "
             f"(0 Odds API credits"
-            f"{f'; replaced {expired} prior OpenAI picks' if expired else ''})."
+            f"{f'; replaced {expired} prior Atlas Insight picks' if expired else ''})."
         )
         if summary:
             msg = f"{msg} {summary}"

@@ -457,7 +457,7 @@ class SportsRefreshService:
         if stats.get("credit_guard") or stats.get("credits_blocked"):
             scan_note = (
                 stats.get("message")
-                or "Odds credits low — rescored from cache (0 Odds credits). OpenAI still ranks FanDuel/DraftKings picks."
+                or "Odds credits low — rescored from cache (0 Odds credits). Atlas Insight still ranks FanDuel/DraftKings picks."
             )
         elif stats.get("cached"):
             scan_note = f"Rescored from cache · {len(near_leagues)} leagues with games this week ({near_label})"
@@ -467,7 +467,7 @@ class SportsRefreshService:
                     "use Fetch live odds (~4 credits), not Rescore"
                 )
             if stats.get("openai_slate"):
-                scan_note += f" · OpenAI ranked {stats.get('openai_ranked', '?')} picks"
+                scan_note += f" · Atlas Insight ranked {stats.get('openai_ranked', '?')} picks"
         else:
             scanned = int(stats.get("sports_scanned") or 0)
             scan_note = (
@@ -477,7 +477,7 @@ class SportsRefreshService:
             if stats.get("cache_merged"):
                 scan_note += " · merged into existing cache"
             if stats.get("openai_slate"):
-                scan_note += f" · OpenAI ranked {stats.get('openai_ranked', '?')} picks"
+                scan_note += f" · Atlas Insight ranked {stats.get('openai_ranked', '?')} picks"
             if stats.get("slate_mode"):
                 scan_note += " · slate mode (board fill)"
             if dropped > 0:

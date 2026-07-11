@@ -201,7 +201,7 @@ export function SportsSignalsView({
             ? "No new edges found — kept your current picks on the board"
             : created > 0
               ? `Found ${created} plays · ${cacheUsed ? "0 Odds credits (cached)" : `~${creditsUsed ?? "?"} Odds credits`}`
-              : "No edges met the threshold — try Fetch live odds or OpenAI"),
+              : "No edges met the threshold — try Fetch live odds or Atlas Insight"),
       );
 
       await Promise.all([
@@ -238,22 +238,40 @@ export function SportsSignalsView({
       });
       const body = await res.json();
       if (!res.ok) {
-        const detail = typeof body.detail === "string" ? body.detail : "OpenAI scan failed";
+        const detail = typeof body.detail === "string" ? body.detail : "Atlas Insight scan failed";
         setMessage(
           res.status === 404
-            ? "OpenAI sports endpoint not found — redeploy/restart the API"
+            ? "Atlas Insight endpoint not found — redeploy/restart the API"
             : detail,
         );
         setLoading(null);
         return;
       }
+      const created = Number(body.signals_created ?? 0);
       setMessage(
         (body.message as string | undefined) ??
-          `OpenAI web desk added ${body.signals_created ?? 0} analyst/popular-bettor picks (0 Odds credits)`,
+          `Atlas Insight added ${created} picks (0 Odds credits)`,
       );
+      // Show Insight results immediately — widen window and focus the filter.
+      setWindow("all");
+      setFilter("openai");
+      setSort("openai");
+      setActiveSport(null);
+      setActiveCategory(null);
       await Promise.all([
         loadCategories(token),
-        loadItems(token, activeCategory),
+        (async () => {
+          const params = new URLSearchParams({ limit: "100", window: "all" });
+          const listRes = await fetch(`${apiUrl}/signals/sports?${params}`, {
+            headers: apiRequestHeaders(token),
+            cache: "no-store",
+            credentials: usesBffProxy() ? "include" : "same-origin",
+          });
+          if (listRes.ok) {
+            const data = await listRes.json();
+            setItems(dedupeOneSidePerMarket(data.items ?? []));
+          }
+        })(),
         refreshOddsStatus(),
       ]);
       router.refresh();
@@ -304,7 +322,7 @@ export function SportsSignalsView({
         <div className="text-sm text-muted">
           <p>
             <strong className="text-foreground">Odds API:</strong> Scan / Fetch / Rescore ·{" "}
-            <strong className="text-foreground">OpenAI:</strong> web analyst consensus (0 Odds credits) ·{" "}
+            <strong className="text-foreground">Atlas Insight:</strong> web analyst consensus (0 Odds credits) ·{" "}
             Tap <strong className="text-foreground">+</strong> for parlays ·{" "}
             <Link href="/parlays" className="font-semibold text-orange-400 hover:underline">
               Build parlays
@@ -343,10 +361,10 @@ export function SportsSignalsView({
             type="button"
             onClick={() => refreshOpenAiPicks()}
             disabled={busy}
-            title="OpenAI browses the web for analyst consensus — prioritizes player props, plus strong ML/spread/totals. 0 Odds API credits."
+            title="Atlas Insight browses the web for analyst consensus — prioritizes player props, plus strong ML/spread/totals. 0 Odds API credits."
             className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-4 py-2 text-sm font-medium text-sky-200 hover:bg-sky-500/20 disabled:opacity-50"
           >
-            {loading === "openai" ? "OpenAI searching…" : "OpenAI web picks"}
+            {loading === "openai" ? "Atlas Insight searching…" : "Atlas Insight"}
           </button>
         </div>
       </div>
@@ -420,7 +438,7 @@ export function SportsSignalsView({
           description={
             activeCategory || activeSport || filter !== "all"
               ? "Try All leagues, set Window to Today for same-day parlays, or widen (Next 48h / Next 30 days), then scan."
-              : "Use Fetch live odds for FanDuel/DraftKings lines, Rescore for free re-ranks, or OpenAI web picks for analyst consensus."
+              : "Use Fetch live odds for FanDuel/DraftKings lines, Rescore for free re-ranks, or Atlas Insight for analyst consensus."
           }
           action={
             <div className="flex flex-wrap justify-center gap-2">
@@ -438,7 +456,7 @@ export function SportsSignalsView({
                 disabled={busy}
                 className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-4 py-2 text-sm font-medium text-sky-200 disabled:opacity-50"
               >
-                {loading === "openai" ? "OpenAI searching…" : "OpenAI web picks"}
+                {loading === "openai" ? "Atlas Insight searching…" : "Atlas Insight"}
               </button>
             </div>
           }

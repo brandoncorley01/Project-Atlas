@@ -55,8 +55,20 @@ def is_sports_actionable(row: dict[str, Any]) -> bool:
 
 
 def is_sports_listable(row: dict[str, Any]) -> bool:
-    """True for any active saved pick with a known kickoff (including started games)."""
-    return hours_until_event(row.get("event_start")) is not None
+    """True for active saved picks — including OpenAI/user picks without a kickoff time."""
+    hours = hours_until_event(row.get("event_start"))
+    if hours is not None:
+        return True
+    snap = row.get("scoring_snapshot") or {}
+    lm = row.get("line_movement") or {}
+    source = str(snap.get("source") or lm.get("source") or "")
+    # Atlas Insight (openai_web) and user-logged bets often omit commence_time.
+    return (
+        source in {"openai_web", "user_entry"}
+        or bool(snap.get("openai_web"))
+        or bool(snap.get("user_entry"))
+        or str(snap.get("pick_origin") or "") == "user"
+    )
 
 
 def is_event_upcoming(commence_time: str | None) -> bool:

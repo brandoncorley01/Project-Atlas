@@ -76,14 +76,14 @@ export function OddsQuotaBanner({ status }: { status: OddsApiStatus | null }) {
         {status.cache_rescore_free ? (
           <>
             Cached odds are warm — <strong className="text-emerald-400">Rescore</strong>{" "}
-            costs 0 Odds credits. Prefer that over Fetch. Use <strong className="text-sky-300">OpenAI web picks</strong>{" "}
+            costs 0 Odds credits. Prefer that over Fetch. Use <strong className="text-sky-300">Atlas Insight</strong>{" "}
             for analyst consensus without Odds credits.
           </>
         ) : (
           <>
             Cache is cold — <strong className="text-amber-300">Fetch live odds</strong> uses ~
             {estimate} credits for US-core FanDuel/DraftKings lines. Or skip Odds entirely with{" "}
-            <strong className="text-sky-300">OpenAI web picks</strong>.
+            <strong className="text-sky-300">Atlas Insight</strong>.
           </>
         )}
       </p>
