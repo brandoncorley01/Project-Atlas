@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from openai import AsyncOpenAI
@@ -107,6 +108,65 @@ class LlmService:
         except Exception as exc:
             logger.warning("OpenAI complete_json failed: %s", exc)
             return None
+
+    async def complete_json_with_web_search(
+        self,
+        *,
+        system: str,
+        user: str,
+        max_tokens: int = 1600,
+    ) -> dict[str, Any] | None:
+        """Use OpenAI Responses API + hosted web_search for live internet grounding.
+
+        Falls back to chat JSON (no browse) if Responses/web_search is unavailable.
+        """
+        client = self._get_client()
+        if client is None:
+            return None
+
+        prompt = (
+            f"{system}\n\n{_SYSTEM_JSON_SUFFIX}\n\n"
+            "You MUST browse the public web for today's sports betting consensus from "
+            "analysts, touts, and popular sports bettors before answering.\n\n"
+            f"{user}"
+        )
+        try:
+            response = await client.responses.create(
+                model=self.model,
+                input=prompt,
+                tools=[{"type": "web_search"}],
+                tool_choice="required",
+                max_output_tokens=max_tokens,
+            )
+            content = getattr(response, "output_text", None)
+            if not content:
+                # Some SDK shapes nest text in output items.
+                chunks: list[str] = []
+                for item in getattr(response, "output", None) or []:
+                    for part in getattr(item, "content", None) or []:
+                        text = getattr(part, "text", None)
+                        if text:
+                            chunks.append(str(text))
+                content = "\n".join(chunks).strip() or None
+            if not content:
+                raise RuntimeError("empty web_search response")
+            # Strip optional markdown fences if the model ignores JSON mode.
+            cleaned = content.strip()
+            if cleaned.startswith("```"):
+                cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+                cleaned = re.sub(r"\s*```$", "", cleaned)
+            parsed = json.loads(cleaned)
+            if isinstance(parsed, dict):
+                parsed["_web_search"] = True
+                return parsed
+        except Exception as exc:
+            logger.warning("OpenAI web_search path failed (%s); falling back to chat JSON", exc)
+
+        fallback = await self.complete_json(system=system, user=user, max_tokens=max_tokens, temperature=0.25)
+        if fallback is not None:
+            fallback["_web_search"] = False
+        return fallback
+
 
 
 llm_service = LlmService()

@@ -75,14 +75,15 @@ export function OddsQuotaBanner({ status }: { status: OddsApiStatus | null }) {
         )}{" "}
         {status.cache_rescore_free ? (
           <>
-            Cached odds are warm — <strong className="text-emerald-400">{rescoreButtonLabel(status)}</strong>{" "}
-            costs 0 Odds credits. Prefer that over Fetch. OpenAI ranks FanDuel/DraftKings picks from cache.
+            Cached odds are warm — <strong className="text-emerald-400">Rescore</strong>{" "}
+            costs 0 Odds credits. Prefer that over Fetch. Use <strong className="text-sky-300">OpenAI web picks</strong>{" "}
+            for analyst consensus without Odds credits.
           </>
         ) : (
           <>
             Cache is cold — <strong className="text-amber-300">Fetch live odds</strong> uses ~
-            {estimate} credits for US-core leagues (MLB/WNBA first on FanDuel/DraftKings). OpenAI
-            ranks the slate after lines are cached.
+            {estimate} credits for US-core FanDuel/DraftKings lines. Or skip Odds entirely with{" "}
+            <strong className="text-sky-300">OpenAI web picks</strong>.
           </>
         )}
       </p>

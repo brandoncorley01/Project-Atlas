@@ -937,6 +937,7 @@ async def fetch_all_sports_odds(
     sport_keys: tuple[str, ...] | None = None,
     *,
     force_refresh: bool = False,
+    cache_only: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Fetch odds for all active game sports. Returns (events, stats).
 
@@ -947,6 +948,41 @@ async def fetch_all_sports_odds(
         return [], {"configured": False, "error": "ODDS_API_KEY is not configured"}
 
     cache = _read_cache()
+
+    # Explicit Rescore path — never spend Odds credits.
+    if cache_only:
+        if not cache or not cache.get("events"):
+            return [], {
+                "configured": True,
+                "cached": False,
+                "cache_only": True,
+                "credits_used": 0,
+                "error": "No cached odds yet — tap Fetch live odds once to seed the board.",
+            }
+        age = _cache_age_minutes(cache.get("fetched_at"))
+        raw_events = list(cache.get("events") or [])
+        events, near_meta = _near_term_cache_events(raw_events)
+        near_keys = frozenset(near_meta.get("near_term_league_keys") or [])
+        needs_live = _cache_needs_live_refresh(near_keys) if events else bool(raw_events)
+        stats = dict(cache.get("stats") or {})
+        stats.update(
+            {
+                "configured": True,
+                "cached": True,
+                "cache_only": True,
+                "stale": False,
+                "cache_age_minutes": round(age, 1) if age is not None else None,
+                "events": len(events),
+                "events_dropped_past": len(raw_events) - len(events),
+                "events_dropped_far_out": near_meta.get("dropped_far_out", 0),
+                "leagues_with_near_term_games": near_meta.get("near_term_leagues") or [],
+                "cache_needs_live_refresh": needs_live,
+                "credits_used": 0,
+                "scan_scope": "rescore",
+                "max_sports_per_scan": config.settings.odds_max_sports_per_scan,
+            }
+        )
+        return events, stats
 
     # Serve fresh cache without spending any credits.
     if not force_refresh and cache:

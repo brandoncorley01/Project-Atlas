@@ -63,14 +63,47 @@ async def refresh_sports(
     replace: bool = True,
     limit: int = 120,
     force_refresh: bool = False,
+    cache_only: bool = False,
 ) -> dict:
-    """Fetch odds from The Odds API and rank +EV moneyline, spread, total, and futures plays."""
+    """Fetch odds from The Odds API and rank +EV moneyline, spread, total, and futures plays.
+
+    - Default / Scan: use warm cache when available, otherwise live pull.
+    - force_refresh=true (Fetch live odds): spend Odds credits for US-core books.
+    - cache_only=true (Rescore): never spend Odds credits; requires existing cache.
+    """
     from app.services.sports_service import SportsRefreshService
 
+    if force_refresh and cache_only:
+        raise HTTPException(status_code=400, detail="force_refresh and cache_only cannot both be true")
+
     service = SportsRefreshService(SupabaseClient(token), user_id)
-    result = await service.refresh_sports(replace=replace, limit=limit, force_refresh=force_refresh)
+    result = await service.refresh_sports(
+        replace=replace,
+        limit=limit,
+        force_refresh=force_refresh,
+        cache_only=cache_only,
+    )
     set_last_job("refresh_sports")
     return {"status": "ok", "module": "sports", **result}
+
+
+@router.post("/refresh-sports-openai")
+async def refresh_sports_openai(
+    user_id: str = Depends(get_current_user_id),
+    token: str = Depends(get_access_token),
+    limit: int = 16,
+) -> dict:
+    """OpenAI web desk — find analyst / popular-bettor picks from the public internet.
+
+    Uses OPENAI_API_KEY + web search. Does not spend Odds API credits.
+    Merges onto the board without wiping Odds-derived picks.
+    """
+    from app.services.sports_openai_picks_service import SportsOpenAiPicksService
+
+    service = SportsOpenAiPicksService(SupabaseClient(token), user_id)
+    result = await service.refresh_openai_picks(limit=limit)
+    set_last_job("refresh_sports_openai")
+    return {"status": "ok", "module": "sports_openai", **result}
 
 
 @router.post("/coach-aggregate")

@@ -9,7 +9,7 @@ import { SportsCategoryTabs } from "@/components/sports/SportsCategoryTabs";
 import { SportFilterTabs } from "@/components/sports/SportFilterTabs";
 import { SportsToolbar } from "@/components/sports/SportsToolbar";
 import { SportsHeroBanner, SportsStatsBar } from "@/components/sports/SportsStatsBar";
-import { OddsQuotaBanner, rescoreButtonLabel, useOddsApiStatus } from "@/components/sports/OddsQuotaBanner";
+import { OddsQuotaBanner, useOddsApiStatus } from "@/components/sports/OddsQuotaBanner";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ListSkeleton } from "@/components/ui/Skeleton";
 import type { SportsCategoryMeta } from "@/lib/sports-categories";
@@ -43,7 +43,7 @@ export function SportsSignalsView({
   const [sort, setSort] = useState<SportsSortKey>("soonest");
   const [filter, setFilter] = useState<SportsFilterKey>("all");
   const [window, setWindow] = useState<SportsWindowKey>("month");
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState<null | "scan" | "live" | "rescore" | "openai">(null);
   const [message, setMessage] = useState<string | null>(null);
   const [parlaySelection, setParlaySelection] = useState<Set<string>>(new Set());
   const [intelligenceEnabled, setIntelligenceEnabled] = useState(false);
@@ -154,22 +154,24 @@ export function SportsSignalsView({
     await loadItems(token, slug);
   }
 
-  async function refreshSports(forceRefresh = false) {
-    setLoading(true);
+  async function refreshSports(mode: "scan" | "live" | "rescore") {
+    setLoading(mode);
     setMessage(null);
 
     const token = await getToken();
     if (!usesBffProxy() && !token) {
       setMessage("Not signed in");
-      setLoading(false);
+      setLoading(null);
       return;
     }
 
-    const shouldForceLive = forceRefresh;
     const apiUrl = getApiUrl();
-    const params = shouldForceLive ? "?force_refresh=true" : "";
+    const params = new URLSearchParams();
+    if (mode === "live") params.set("force_refresh", "true");
+    if (mode === "rescore") params.set("cache_only", "true");
+    const query = params.toString() ? `?${params}` : "";
     try {
-      const res = await fetch(`${apiUrl}/engine/refresh-sports${params}`, {
+      const res = await fetch(`${apiUrl}/engine/refresh-sports${query}`, {
         method: "POST",
         headers: apiRequestHeaders(token),
         credentials: usesBffProxy() ? "include" : "same-origin",
@@ -183,7 +185,7 @@ export function SportsSignalsView({
             ? "Sports scan endpoint not found — restart API with .\\scripts\\start-dev.ps1"
             : detail,
         );
-        setLoading(false);
+        setLoading(null);
         return;
       }
 
@@ -197,8 +199,8 @@ export function SportsSignalsView({
           (kept
             ? "No new edges found — kept your current picks on the board"
             : created > 0
-              ? `Found ${created} plays across active leagues · ${cacheUsed ? "0 credits (cached)" : `~${creditsUsed ?? "?"} credits`}`
-              : "No edges met the threshold — try Fetch live odds for a fresh slate"),
+              ? `Found ${created} plays · ${cacheUsed ? "0 Odds credits (cached)" : `~${creditsUsed ?? "?"} Odds credits`}`
+              : "No edges met the threshold — try Fetch live odds or OpenAI"),
       );
 
       await Promise.all([
@@ -211,14 +213,61 @@ export function SportsSignalsView({
     } catch {
       setMessage("Backend not responding — run .\\scripts\\start-dev.ps1");
     }
-    setLoading(false);
+    setLoading(null);
+  }
+
+  async function refreshOpenAiPicks() {
+    setLoading("openai");
+    setMessage(null);
+
+    const token = await getToken();
+    if (!usesBffProxy() && !token) {
+      setMessage("Not signed in");
+      setLoading(null);
+      return;
+    }
+
+    const apiUrl = getApiUrl();
+    try {
+      const res = await fetch(`${apiUrl}/engine/refresh-sports-openai`, {
+        method: "POST",
+        headers: apiRequestHeaders(token),
+        credentials: usesBffProxy() ? "include" : "same-origin",
+        signal: AbortSignal.timeout(300000),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        const detail = typeof body.detail === "string" ? body.detail : "OpenAI scan failed";
+        setMessage(
+          res.status === 404
+            ? "OpenAI sports endpoint not found — redeploy/restart the API"
+            : detail,
+        );
+        setLoading(null);
+        return;
+      }
+      setMessage(
+        (body.message as string | undefined) ??
+          `OpenAI web desk added ${body.signals_created ?? 0} analyst/popular-bettor picks (0 Odds credits)`,
+      );
+      await Promise.all([
+        loadCategories(token),
+        loadItems(token, activeCategory),
+        refreshOddsStatus(),
+      ]);
+      router.refresh();
+      globalThis.dispatchEvent(new Event("atlas:dashboard-refresh"));
+    } catch {
+      setMessage("Backend not responding — run .\\scripts\\start-dev.ps1");
+    }
+    setLoading(null);
   }
 
   const activeMeta = categories.find((c) => c.slug === activeCategory);
   const cacheRescoreFree = oddsStatus?.cache_rescore_free ?? false;
   const cacheFresh = oddsStatus?.cache_fresh ?? false;
   const cacheNeedsLive = oddsStatus?.cache_needs_live_refresh ?? false;
-  const primaryScanLabel = rescoreButtonLabel(oddsStatus, loading);
+  const busy = loading !== null;
 
   return (
     <div className="w-full min-w-0 overflow-x-clip">
@@ -242,12 +291,12 @@ export function SportsSignalsView({
         </div>
       )}
 
-      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="text-sm text-muted">
           <p>
-            <strong className="text-foreground">Step 1:</strong> Scan odds (this week) ·{" "}
-            <strong className="text-foreground">Step 2:</strong> Tap <strong className="text-foreground">+</strong> to build a manual parlay or save bets ·{" "}
-            <strong className="text-foreground">Step 3:</strong>{" "}
+            <strong className="text-foreground">Odds API:</strong> Scan / Fetch / Rescore ·{" "}
+            <strong className="text-foreground">OpenAI:</strong> web analyst consensus (0 Odds credits) ·{" "}
+            Tap <strong className="text-foreground">+</strong> for parlays ·{" "}
             <Link href="/parlays" className="font-semibold text-orange-400 hover:underline">
               Build parlays
             </Link>
@@ -256,20 +305,39 @@ export function SportsSignalsView({
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
-            onClick={() => refreshSports(false)}
-            disabled={loading}
+            onClick={() => refreshSports("scan")}
+            disabled={busy}
+            title="Scan sports odds — uses warm cache when available, otherwise a live pull."
             className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-md shadow-violet-600/25 disabled:opacity-50"
           >
-            {primaryScanLabel}
+            {loading === "scan" ? "Scanning…" : "Scan sports odds"}
           </button>
           <button
             type="button"
-            onClick={() => refreshSports(true)}
-            disabled={loading}
-            title="Uses ~4 Odds API credits for MLB/WNBA-first US books (FanDuel/DraftKings). Prefer Rescore (0 credits) when cache is warm. OpenAI ranks the slate from real lines — it does not invent odds."
+            onClick={() => refreshSports("live")}
+            disabled={busy}
+            title="Fetch live FanDuel/DraftKings lines for US-core leagues (~4 Odds API credits)."
             className="rounded-lg border border-violet-500/40 bg-violet-500/10 px-4 py-2 text-sm font-medium text-violet-200 hover:bg-violet-500/20 disabled:opacity-50"
           >
-            {loading ? "Scanning…" : "Fetch live odds"}
+            {loading === "live" ? "Fetching…" : "Fetch live odds"}
+          </button>
+          <button
+            type="button"
+            onClick={() => refreshSports("rescore")}
+            disabled={busy}
+            title="Rescore cached odds only — 0 Odds API credits. Seed cache with Fetch live odds first."
+            className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-200 hover:bg-emerald-500/20 disabled:opacity-50"
+          >
+            {loading === "rescore" ? "Rescoring…" : "Rescore (0 credits)"}
+          </button>
+          <button
+            type="button"
+            onClick={() => refreshOpenAiPicks()}
+            disabled={busy}
+            title="OpenAI browses the public web for analyst and popular-bettor picks. Uses OPENAI_API_KEY only — 0 Odds API credits."
+            className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-4 py-2 text-sm font-medium text-sky-200 hover:bg-sky-500/20 disabled:opacity-50"
+          >
+            {loading === "openai" ? "OpenAI searching…" : "OpenAI web picks"}
           </button>
         </div>
       </div>
@@ -343,17 +411,27 @@ export function SportsSignalsView({
           description={
             activeCategory || activeSport || filter !== "all"
               ? "Try All leagues, set Window to Today for same-day parlays, or widen (Next 48h / Next 30 days), then scan."
-              : "Global leagues run 24/7 — scan sports odds for WNBA, MLB, soccer, tennis, MMA, futures, and more."
+              : "Use Fetch live odds for FanDuel/DraftKings lines, Rescore for free re-ranks, or OpenAI web picks for analyst consensus."
           }
           action={
-            <button
-              type="button"
-              onClick={() => refreshSports(false)}
-              disabled={loading}
-              className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-            >
-              {primaryScanLabel}
-            </button>
+            <div className="flex flex-wrap justify-center gap-2">
+              <button
+                type="button"
+                onClick={() => refreshSports("scan")}
+                disabled={busy}
+                className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                {loading === "scan" ? "Scanning…" : "Scan sports odds"}
+              </button>
+              <button
+                type="button"
+                onClick={() => refreshOpenAiPicks()}
+                disabled={busy}
+                className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-4 py-2 text-sm font-medium text-sky-200 disabled:opacity-50"
+              >
+                {loading === "openai" ? "OpenAI searching…" : "OpenAI web picks"}
+              </button>
+            </div>
           }
         />
       )}

@@ -46,7 +46,7 @@ export default async function SportsPage() {
             ONE SIDE / MARKET
           </span>
         }
-        description="One Atlas decision per market (no both-sides). Scan results stay until the next successful scan — Rescore is free when cache is warm; Fetch live odds spends API credits."
+        description="One Atlas decision per market. Use Scan / Fetch live / Rescore for Odds API lines, or OpenAI web picks for analyst consensus (0 Odds credits)."
       />
       <SportsSignalsView initialItems={items} initialCategories={categories} />
     </>

@@ -146,12 +146,16 @@ class SportsRefreshService:
         replace: bool = True,
         limit: int = MAX_SIGNALS,
         force_refresh: bool = False,
+        cache_only: bool = False,
     ) -> dict[str, Any]:
         from app.config import reload_settings
 
         reload_settings()
         try:
-            events, fetch_stats = await fetch_all_sports_odds(force_refresh=force_refresh)
+            events, fetch_stats = await fetch_all_sports_odds(
+                force_refresh=force_refresh,
+                cache_only=cache_only,
+            )
             raw_count = len(events)
             events = filter_upcoming_events(events)
             events = [
@@ -197,6 +201,18 @@ class SportsRefreshService:
                 "stats": fetch_stats,
                 "top_opportunity": None,
                 "message": fetch_stats.get("error") or "ODDS_API_KEY is not configured",
+            }
+
+        if cache_only and fetch_stats.get("error") and not events:
+            return {
+                "signals_created": 0,
+                "events_scanned": 0,
+                "stats": fetch_stats,
+                "credits_used": 0,
+                "cache_used": False,
+                "top_opportunity": None,
+                "message": fetch_stats.get("error")
+                or "No cached odds — tap Fetch live odds first (Rescore uses 0 credits after that).",
             }
 
         # All keys exhausted AND no cached odds to fall back on.
@@ -347,10 +363,23 @@ class SportsRefreshService:
             }
 
         if replace and setups:
-            await self.db.delete(
+            # Keep OpenAI web-desk picks — Odds scans only replace Odds-derived rows.
+            active = await self.db.select(
                 "sports_signals",
-                {"user_id": f"eq.{self.user_id}", "status": "eq.active"},
+                filters={"user_id": f"eq.{self.user_id}", "status": "eq.active"},
+                limit=300,
             )
+            for row in active:
+                snap = row.get("scoring_snapshot") or {}
+                if str(snap.get("source") or "") == "openai_web":
+                    continue
+                sid = row.get("id")
+                if not sid:
+                    continue
+                try:
+                    await self.db.delete("sports_signals", {"id": f"eq.{sid}"})
+                except Exception as exc:
+                    logger.warning("Failed to clear odds sports pick %s: %s", sid, exc)
             # Sports IDs change on rescan — invalidate parlays that reference old legs.
             try:
                 await self.db.update(
