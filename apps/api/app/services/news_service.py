@@ -126,6 +126,21 @@ class NewsService:
             "high_impact": sum(1 for r in rows if float(r["impact_score"]) >= 60),
         }
 
+    async def maybe_refresh_if_stale(self, *, max_age_minutes: float = 20) -> dict | None:
+        """Re-ingest market news when the freshest stored headline is too old."""
+        rows = await self.db.select(
+            "news_items",
+            filters={"user_id": f"eq.{self.user_id}"},
+            order="published_at.desc",
+            limit=8,
+        )
+        if rows:
+            for row in rows:
+                age = age_hours(row.get("published_at"))
+                if age is not None and age * 60.0 <= max_age_minutes:
+                    return None
+        return await self.refresh_news(replace=True, limit=40)
+
     async def list_news(
         self,
         *,

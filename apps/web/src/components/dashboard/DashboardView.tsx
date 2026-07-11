@@ -9,7 +9,7 @@ import { DataProvidersPanel } from "@/components/settings/DataProvidersPanel";
 import { PlaceholderCard } from "@/components/dashboard/PlaceholderCard";
 import type { SignalSummary } from "@/components/dashboard/OpportunityList";
 import { ApiError, apiFetch } from "@/lib/api";
-import { usesBffProxy } from "@/lib/api-url";
+import { apiRequestHeaders, getApiUrl, usesBffProxy } from "@/lib/api-url";
 import { createClient } from "@/lib/supabase/client";
 import type { Parlay } from "@/components/parlays/ParlayCard";
 import { ParlayCard } from "@/components/parlays/ParlayCard";
@@ -183,16 +183,30 @@ export function DashboardView() {
       const supabase = createClient();
       const { data } = await supabase.auth.getSession();
       const token = data.session?.access_token;
+      const apiUrl = getApiUrl();
+      // Pull fresh headlines first, then rebuild the briefing off that slate.
+      try {
+        await fetch(`${apiUrl}/engine/refresh-news`, {
+          method: "POST",
+          headers: apiRequestHeaders(token),
+          credentials: usesBffProxy() ? "include" : "same-origin",
+          signal: AbortSignal.timeout(60_000),
+        });
+      } catch {
+        // Still rebuild briefing from whatever is in the DB.
+      }
       const briefing = await apiFetch<AtlasBriefing>("/ai/briefing?refresh=true", token, {
-        timeoutMs: 30_000,
+        timeoutMs: 45_000,
       });
       setAtlasBriefing(briefing);
+      // Keep the breaking strip in sync with the same refresh.
+      void loadDashboard({ background: true });
     } catch {
       // keep existing briefing on failure
     } finally {
       setBriefingRefreshing(false);
     }
-  }, []);
+  }, [loadDashboard]);
 
   useEffect(() => {
     void loadDashboard();

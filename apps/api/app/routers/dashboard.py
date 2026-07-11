@@ -57,6 +57,22 @@ async def _build_dashboard(user_id: str, token: str, limit: int) -> dict:
     alert_service = AlertService(db, user_id)
     performance_service = PerformanceService(db, user_id)
 
+    news_refreshed = False
+    try:
+        refreshed = await asyncio.wait_for(
+            news_service.maybe_refresh_if_stale(max_age_minutes=20),
+            timeout=30.0,
+        )
+        news_refreshed = refreshed is not None
+        if news_refreshed:
+            warnings.append("news: auto-refreshed stale headlines for briefing")
+    except TimeoutError:
+        warnings.append("news_auto_refresh: timed out (using cached headlines)")
+    except Exception as exc:
+        msg = str(exc).strip() or exc.__class__.__name__
+        logger.warning("Dashboard news auto-refresh failed: %s", msg)
+        warnings.append(f"news_auto_refresh: {msg}")
+
     try:
         expired_counts = await asyncio.wait_for(
             StaleSignalService(db, user_id).expire_all(),
@@ -189,7 +205,11 @@ async def _build_dashboard(user_id: str, token: str, limit: int) -> dict:
     atlas_briefing: dict[str, Any] = {}
     try:
         atlas_briefing = await asyncio.wait_for(
-            ai_narrative_service.daily_briefing(user_id=user_id, ctx=briefing_ctx),
+            ai_narrative_service.daily_briefing(
+                user_id=user_id,
+                ctx=briefing_ctx,
+                refresh=news_refreshed,
+            ),
             timeout=12.0,
         )
     except TimeoutError:

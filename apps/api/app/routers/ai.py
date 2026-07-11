@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 
@@ -52,6 +53,18 @@ async def get_briefing(
     token: str = Depends(get_access_token),
 ) -> dict:
     from app.routers.dashboard import _build_dashboard
+    from app.services.news_service import NewsService
+
+    if refresh:
+        try:
+            await asyncio.wait_for(
+                NewsService(SupabaseClient(token), user_id).refresh_news(replace=True, limit=40),
+                timeout=45.0,
+            )
+        except TimeoutError:
+            logger.warning("Briefing news refresh timed out")
+        except Exception as exc:
+            logger.warning("Briefing news refresh failed: %s", exc)
 
     dashboard = await _build_dashboard(user_id, token, limit=8)
     ctx = {
@@ -71,7 +84,7 @@ async def get_briefing(
     briefing = await ai_narrative_service.daily_briefing(
         user_id=user_id,
         ctx=ctx,
-        refresh=refresh,
+        refresh=True if refresh else False,
     )
     return briefing
 

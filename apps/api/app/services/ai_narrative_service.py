@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 # (expires_at_epoch, fingerprint, payload)
 _BRIEFING_CACHE: dict[str, tuple[float, str, dict[str, Any]]] = {}
 _COACH_CACHE: dict[str, tuple[str, dict[str, Any]]] = {}
-_BRIEFING_TTL_SEC = 15 * 60
+_BRIEFING_TTL_SEC = 5 * 60
 
 _BRIEFING_SYSTEM = """You are Atlas, a personal decision-intelligence coach for retail traders and bettors.
 Write concise, actionable briefings. Never invent prices, odds, Greeks, or scores — only use facts from the user payload.
@@ -46,7 +46,8 @@ def _pick_titles(items: list[dict[str, Any]], *, limit: int = 3) -> list[str]:
 
 
 def _ctx_fingerprint(ctx: dict[str, Any]) -> str:
-    news = ctx.get("breaking_news") or ctx.get("briefing_news") or []
+    # Prefer briefing_news (recency-ranked) — never let stale high-impact breaking_news hide updates.
+    news = ctx.get("briefing_news") or ctx.get("breaking_news") or []
     news_bits = [
         str(n.get("headline") or n.get("title") or "")[:80]
         for n in news[:5]
