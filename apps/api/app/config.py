@@ -36,8 +36,8 @@ class Settings(BaseSettings):
     odds_cache_ttl_minutes: int = 90
 
     # Max sportsbooks leagues fetched per live scan (1 credit each).
-    # Default 12 keeps free-tier quotas usable; 0 = no cap (expensive).
-    odds_max_sports_per_scan: int = 12
+    # Default 4 = MLB/WNBA-first US core (FanDuel/DraftKings); 0 = no cap (expensive).
+    odds_max_sports_per_scan: int = 4
 
     # priority = in-season majors only (credit-safe); full = every active game sport.
     odds_scan_scope: str = "priority"
@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     odds_include_futures_on_live: bool = False
 
     # Refuse a live pull when remaining credits are below this + estimated scan cost.
-    odds_min_credits_reserve: int = 15
+    odds_min_credits_reserve: int = 5
 
     environment: str = "development"
     default_user_id: str = ""

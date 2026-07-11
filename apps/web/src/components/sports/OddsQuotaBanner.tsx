@@ -53,7 +53,7 @@ export function OddsQuotaBanner({ status }: { status: OddsApiStatus | null }) {
   const remaining = resolveOddsTotalCredits(status);
   const keyCount = status.key_count ?? status.keys?.length ?? 1;
   const capacity = status.monthly_capacity ?? keyCount * 500;
-  const estimate = status.estimated_live_scan_credits ?? 12;
+  const estimate = status.estimated_live_scan_credits ?? 4;
 
   return (
     <div
@@ -76,12 +76,13 @@ export function OddsQuotaBanner({ status }: { status: OddsApiStatus | null }) {
         {status.cache_rescore_free ? (
           <>
             Cached odds are warm — <strong className="text-emerald-400">{rescoreButtonLabel(status)}</strong>{" "}
-            costs 0 credits. Prefer that over Fetch. OpenAI explains picks from cache; it does not invent odds.
+            costs 0 Odds credits. Prefer that over Fetch. OpenAI ranks FanDuel/DraftKings picks from cache.
           </>
         ) : (
           <>
             Cache is cold — <strong className="text-amber-300">Fetch live odds</strong> uses ~
-            {estimate} credits (in-season leagues only). OpenAI fills insight gaps after lines are cached.
+            {estimate} credits for US-core leagues (MLB/WNBA first on FanDuel/DraftKings). OpenAI
+            ranks the slate after lines are cached.
           </>
         )}
       </p>

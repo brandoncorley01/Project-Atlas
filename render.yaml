@@ -34,13 +34,13 @@ services:
       - key: ODDS_SCAN_SCOPE
         value: priority
       - key: ODDS_MAX_SPORTS_PER_SCAN
-        value: "12"
+        value: "4"
       - key: ODDS_CACHE_TTL_MINUTES
         value: "90"
       - key: ODDS_INCLUDE_FUTURES_ON_LIVE
         value: "false"
       - key: ODDS_MIN_CREDITS_RESERVE
-        value: "15"
+        value: "5"
       - key: ATLAS_EXPERT_INTELLIGENCE_ENABLED
         value: "true"
       - key: OPENAI_API_KEY
@@ -77,13 +77,13 @@ services:
       - key: ODDS_SCAN_SCOPE
         value: priority
       - key: ODDS_MAX_SPORTS_PER_SCAN
-        value: "12"
+        value: "4"
       - key: ODDS_CACHE_TTL_MINUTES
         value: "90"
       - key: ODDS_INCLUDE_FUTURES_ON_LIVE
         value: "false"
       - key: ODDS_MIN_CREDITS_RESERVE
-        value: "15"
+        value: "5"
       - key: ATLAS_EXPERT_INTELLIGENCE_ENABLED
         value: "true"
       - key: OPENAI_API_KEY

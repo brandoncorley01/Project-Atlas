@@ -26,9 +26,10 @@ from app.services.sports_ranking import (
 logger = logging.getLogger(__name__)
 
 MAX_SIGNALS = 120
-MIN_OPPORTUNITY = 32.0
+MIN_OPPORTUNITY = 28.0
+MIN_BOARD_PICKS = 8
 MIN_PER_SPORT = 1
-MAX_PER_SPORT = 8
+MAX_PER_SPORT = 10
 
 
 def _source_note(stats: dict[str, Any]) -> str:
@@ -237,16 +238,44 @@ class SportsRefreshService:
         calibration = await CalibrationService(self.db, self.user_id).get_adjustments()
         min_opp = float(calibration.get("sports_min_opportunity", MIN_OPPORTUNITY))
 
-        for event in events:
-            try:
-                match_stats = lookup_match_stats(event, stats_index)
-                for setup in analyze_event(event, match_stats=match_stats, calibration=calibration):
-                    if setup.opportunity_score >= min_opp:
-                        setups.append(setup_to_row(self.user_id, setup))
-            except Exception as exc:
-                logger.info("Sports analyze skip event: %s", exc)
+        def _score_events(cal: dict[str, Any], floor: float) -> list[dict[str, Any]]:
+            scored: list[dict[str, Any]] = []
+            for event in events:
+                try:
+                    match_stats = lookup_match_stats(event, stats_index)
+                    for setup in analyze_event(event, match_stats=match_stats, calibration=cal):
+                        if setup.opportunity_score >= floor:
+                            scored.append(setup_to_row(self.user_id, setup))
+                except Exception as exc:
+                    logger.info("Sports analyze skip event: %s", exc)
+            return scored
+
+        setups = _score_events(calibration, min_opp)
+
+        # If strict filters wipe today's MLB/WNBA slate, reopen with slate mode
+        # so OpenAI can rank real FanDuel/DraftKings lines instead of returning empty.
+        openai_meta: dict[str, Any] = {"openai_slate": False}
+        if len(setups) < MIN_BOARD_PICKS and events:
+            slate_cal = dict(calibration)
+            slate_cal["slate_mode"] = True
+            slate_cal["sports_min_edge_pct"] = min(0.35, float(slate_cal.get("sports_min_edge_pct") or 0.6))
+            slate_cal["sports_min_opportunity"] = min(20.0, float(slate_cal.get("sports_min_opportunity") or 28.0))
+            soft = _score_events(slate_cal, float(slate_cal["sports_min_opportunity"]))
+            if len(soft) > len(setups):
+                setups = soft
+                fetch_stats["slate_mode"] = True
 
         setups.sort(key=composite_score, reverse=True)
+
+        if setups and config.settings.openai_api_key:
+            try:
+                from app.services.sports_slate_ai import rank_slate_with_openai
+
+                setups, openai_meta = await rank_slate_with_openai(setups, limit=min(limit, 24))
+                fetch_stats.update(openai_meta)
+            except Exception as exc:
+                logger.warning("OpenAI slate ranking skipped: %s", exc)
+
         setups = _select_diverse_setups(setups, limit=limit)
 
         tag_pool_categories(setups)
@@ -399,23 +428,29 @@ class SportsRefreshService:
         if stats.get("credit_guard") or stats.get("credits_blocked"):
             scan_note = (
                 stats.get("message")
-                or "Odds credits low — rescored from cache (0 credits). OpenAI still explains picks."
+                or "Odds credits low — rescored from cache (0 Odds credits). OpenAI still ranks FanDuel/DraftKings picks."
             )
         elif stats.get("cached"):
             scan_note = f"Rescored from cache · {len(near_leagues)} leagues with games this week ({near_label})"
             if stats.get("cache_needs_live_refresh"):
                 scan_note += (
                     " · cache is missing in-season leagues (e.g. MLB/WNBA) — "
-                    "use Fetch live odds (~12 credits), not Rescore"
+                    "use Fetch live odds (~4 credits), not Rescore"
                 )
+            if stats.get("openai_slate"):
+                scan_note += f" · OpenAI ranked {stats.get('openai_ranked', '?')} picks"
         else:
             scanned = int(stats.get("sports_scanned") or 0)
             scan_note = (
-                f"Live scan: {scanned} leagues{credit_note} · "
+                f"Live US-book scan: {scanned} leagues{credit_note} · "
                 f"{len(near_leagues)} had games in the next 7 days ({near_label})"
             )
             if stats.get("cache_merged"):
                 scan_note += " · merged into existing cache"
+            if stats.get("openai_slate"):
+                scan_note += f" · OpenAI ranked {stats.get('openai_ranked', '?')} picks"
+            if stats.get("slate_mode"):
+                scan_note += " · slate mode (board fill)"
             if dropped > 0:
                 scan_note += f" · ignored {dropped} far-future lines"
             if skipped:

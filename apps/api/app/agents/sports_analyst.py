@@ -14,6 +14,8 @@ from app.services.sports_ranking import NEAR_TERM_HOURS, timing_boost
 # Primary sportsbook for displayed/playable lines (FanDuel).
 PREFERRED_BOOK_KEY = "fanduel"
 PREFERRED_BOOK_TITLE = "FanDuel"
+# American retail books guaranteed for MLB / WNBA / NFL / NBA boards.
+US_PREFERRED_BOOK_KEYS = frozenset({"fanduel", "draftkings"})
 
 # Order for multi-book display in the UI.
 DISPLAY_BOOK_ORDER = (
@@ -363,11 +365,32 @@ def _collect_book_odds(
 
 
 def _select_primary_odds(book_odds: list[dict[str, Any]], all_prices: list[int]) -> int | None:
-    """FanDuel line when posted; otherwise best price across the market."""
+    """Best FanDuel/DraftKings price when posted; otherwise best market price.
+
+    Using the better of the two US retail books (not FanDuel-only) so MLB/WNBA
+    edges aren't wiped when DraftKings is the playable number.
+    """
+    us_rows = [r for r in book_odds if r.get("key") in US_PREFERRED_BOOK_KEYS]
+    if us_rows:
+        best = max(us_rows, key=lambda r: american_to_decimal(int(r["american"])))
+        return int(best["american"])
     for row in book_odds:
         if row.get("key") == PREFERRED_BOOK_KEY:
             return int(row["american"])
     return _best_price(all_prices)
+
+
+def _primary_book_label(book_odds: list[dict[str, Any]], primary_american: int) -> tuple[str, str]:
+    """Book key/title that matches the playable American price (FD preferred on ties)."""
+    us_rows = [r for r in book_odds if r.get("key") in US_PREFERRED_BOOK_KEYS]
+    matches = [r for r in us_rows if int(r["american"]) == primary_american]
+    if matches:
+        matches.sort(key=lambda r: 0 if r.get("key") == PREFERRED_BOOK_KEY else 1)
+        row = matches[0]
+        return str(row["key"]), str(row.get("title") or row["key"])
+    if any(r.get("key") == PREFERRED_BOOK_KEY for r in book_odds):
+        return PREFERRED_BOOK_KEY, PREFERRED_BOOK_TITLE
+    return "market", "market best"
 
 
 def primary_odds_from_signal(signal: dict[str, Any]) -> tuple[int, float]:
@@ -402,9 +425,11 @@ def analyze_event(
         return analyze_outright(event, calibration=calibration)
 
     cal = calibration or {}
-    min_edge = float(cal.get("sports_min_edge_pct", 1.0))
-    min_opportunity = float(cal.get("sports_min_opportunity", 32.0))
+    slate_mode = bool(cal.get("slate_mode"))
+    min_edge = float(cal.get("sports_min_edge_pct", 0.4 if slate_mode else 0.6))
+    min_opportunity = float(cal.get("sports_min_opportunity", 22.0 if slate_mode else 28.0))
     confidence_dampen = float(cal.get("sports_confidence_dampen", 0.0))
+    strength_floor = 8.0 if slate_mode else 12.0
     sport_key = str(event.get("_sport_key") or "")
     home = str(event.get("home_team") or "")
     away = str(event.get("away_team") or "")
@@ -522,14 +547,16 @@ def analyze_event(
     setups: list[SportsBetSetup] = []
     for cand in candidates:
         edge = float(cand["edge"])
-        has_fanduel = any(b.get("key") == PREFERRED_BOOK_KEY for b in cand.get("book_odds") or [])
-        # Prefer multi-book confirmation; FanDuel-only still needs a real edge.
-        min_books = 1 if has_fanduel else 2
+        book_odds = cand.get("book_odds") or []
+        has_us_book = any(b.get("key") in US_PREFERRED_BOOK_KEYS for b in book_odds)
+        # Prefer multi-book confirmation; FanDuel/DK alone is enough for US boards.
+        min_books = 1 if has_us_book else 2
         if edge < min_edge or cand["book_count"] < min_books:
             continue
 
         bet_type = cand["bet_type"]
         odds = int(cand["odds_american"])
+        book_key, book_label = _primary_book_label(book_odds, odds)
         selection_label = _format_selection(bet_type, cand["selection"], cand["point"])
         implied = american_to_implied_prob(odds)
         ev = round(edge * 0.85, 2)
@@ -538,7 +565,9 @@ def analyze_event(
         timing_boost_val = timing_boost(hours)
 
         setup_strength = min(55, edge * 8 + liquidity_boost + timing_boost_val)
-        if setup_strength < 18:
+        if has_us_book:
+            setup_strength += 4.0
+        if setup_strength < strength_floor:
             continue
 
         risk = round(min(88, max(20, 38 + implied * 40 - edge * 3)), 1)
@@ -548,9 +577,9 @@ def analyze_event(
         # Longer-dated games need a bit more edge, but stay visible for early value.
         if hours is not None and hours > NEAR_TERM_HOURS:
             opportunity -= min(8.0, (hours - NEAR_TERM_HOURS) * 0.03)
-        # Single-book FanDuel lines get a small haircut — not a free pass to the board.
-        if has_fanduel and cand["book_count"] < 2:
-            opportunity -= 4.0
+        # Single-book US lines get a small haircut — not a free pass to the board.
+        if has_us_book and cand["book_count"] < 2:
+            opportunity -= 2.0
         if opportunity < min_opportunity:
             continue
 
@@ -558,7 +587,6 @@ def analyze_event(
         type_label = _bet_type_label(bet_type)
 
         kickoff = _format_kickoff(event_start)
-        book_label = PREFERRED_BOOK_TITLE if has_fanduel else "market best"
         recommendation = f"{type_label} — {selection_label} · {kickoff} ({sport})"
         explanation = (
             f"Bet {selection_label} ({type_label.lower()}) on {event_name}, starting {kickoff}. "
@@ -574,8 +602,10 @@ def analyze_event(
             f"not yet in the odds, would weaken this {edge:.1f}% edge."
         )
         invalidation = "Closing line moves 1+ point against this side or odds shorten materially."
-        suggested_action = f"Play {odds:+d} on FanDuel for {selection_label}" if has_fanduel else (
-            f"Target {odds:+d} or better on {selection_label}"
+        suggested_action = (
+            f"Play {odds:+d} on {book_label} for {selection_label}"
+            if has_us_book
+            else f"Target {odds:+d} or better on {selection_label}"
         )
 
         market_key = _market_key_for_bet_type(bet_type)
@@ -583,9 +613,9 @@ def analyze_event(
             "opening_odds": odds,
             "consensus_books": cand["book_count"],
             "edge_pct": edge,
-            "preferred_book": PREFERRED_BOOK_KEY,
-            "preferred_book_title": PREFERRED_BOOK_TITLE,
-            "book_odds": cand.get("book_odds") or [],
+            "preferred_book": book_key,
+            "preferred_book_title": book_label,
+            "book_odds": book_odds,
             "market_median_implied": round(
                 statistics.median(
                     american_to_implied_prob(p)
@@ -627,14 +657,15 @@ def analyze_event(
                     "edge_pct": edge,
                     "implied_prob": round(implied * 100, 2),
                     "book_count": book_count,
-                    "book_odds": cand.get("book_odds") or [],
-                    "preferred_book": PREFERRED_BOOK_KEY,
-                    "preferred_book_title": PREFERRED_BOOK_TITLE,
+                    "book_odds": book_odds,
+                    "preferred_book": book_key,
+                    "preferred_book_title": book_label,
                     "hours_to_start": round(hours, 1) if hours is not None else None,
                     "sport_key": sport_key,
                     "event_id": event.get("id"),
                     "home_team": home,
                     "away_team": away,
+                    "slate_mode": slate_mode,
                     "pick": {
                         "bet_type": bet_type,
                         "team_or_side": cand["selection"],
@@ -703,7 +734,7 @@ def _select_best_per_market(setups: list[SportsBetSetup]) -> list[SportsBetSetup
             snap = best.scoring_snapshot
             edge = float(snap.get("edge_pct") or 0)
             support = float(snap.get("stats_support") or 0)
-            if margin < 1.5 and edge < 2.0 and support < 10:
+            if margin < 1.0 and edge < 1.25 and support < 8:
                 continue
             rejected = runner.selection
             snap["rejected_side"] = rejected

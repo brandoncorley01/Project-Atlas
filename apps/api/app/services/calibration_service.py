@@ -77,8 +77,8 @@ class CalibrationService:
     def _defaults(*, sample_count: int = 0) -> dict[str, Any]:
         return {
             "sample_count": sample_count,
-            "sports_min_edge_pct": 1.0,
-            "sports_min_opportunity": 38.0,
+            "sports_min_edge_pct": 0.6,
+            "sports_min_opportunity": 28.0,
             "sports_confidence_dampen": 0.0,
             "options_min_profit_probability": 52.0,
             "options_min_opportunity": 45.0,
@@ -89,8 +89,8 @@ class CalibrationService:
         }
 
     def _sports_adjustments(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
-        min_edge = 1.0
-        min_opp = 38.0
+        min_edge = 0.6
+        min_opp = 28.0
         dampen = 0.0
         note: str | None = None
 
@@ -106,8 +106,8 @@ class CalibrationService:
         if len(low_edge) >= 5:
             wr = self._win_rate(low_edge)
             if wr is not None and wr < 48.0:
-                min_edge = 1.5
-                min_opp = 40.0
+                min_edge = 1.0
+                min_opp = 32.0
                 note = f"Sports: low-edge picks won {wr:.0f}% — raised edge bar to {min_edge}%"
 
         mid_conf = [r for r in rows if self._confidence(r) is not None and 70 <= self._confidence(r) < 85]
