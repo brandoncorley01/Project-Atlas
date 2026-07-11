@@ -59,6 +59,7 @@ export interface SportsSignal {
     user_entry?: boolean;
     pick_origin?: string;
     is_player_prop?: boolean;
+    fanduel_verified?: boolean;
     [key: string]: unknown;
   } | null;
   team_stats?: {
@@ -185,10 +186,19 @@ export function SportsSignalCard({
           </p>
           {isOpenAiPick && (
             <span
-              title="Atlas Insight — analyst/popular-bettor consensus from the web. Not Odds API +EV math. Verify the live FanDuel/DraftKings number."
+              title="Atlas Insight — ranked from FanDuel-verified open markets only. Confirm the number is still posted before betting."
               className="rounded-full border border-sky-400/50 bg-sky-500/20 px-2 py-0.5 text-xs font-bold tracking-wide text-sky-200"
             >
               Atlas Insight
+            </span>
+          )}
+          {(row.scoring_snapshot?.fanduel_verified
+            || (row.line_movement as { fanduel_verified?: boolean } | undefined)?.fanduel_verified) && (
+            <span
+              title="Matched to an open FanDuel market from The Odds API — not an invented line."
+              className="rounded-full border border-emerald-400/50 bg-emerald-500/15 px-2 py-0.5 text-xs font-bold tracking-wide text-emerald-200"
+            >
+              FanDuel verified
             </span>
           )}
           {(row.bet_type === "player_prop" || row.scoring_snapshot?.is_player_prop) && (

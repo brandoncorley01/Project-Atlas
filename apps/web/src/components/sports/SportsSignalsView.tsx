@@ -322,7 +322,7 @@ export function SportsSignalsView({
         <div className="text-sm text-muted">
           <p>
             <strong className="text-foreground">Odds API:</strong> Scan / Fetch / Rescore ·{" "}
-            <strong className="text-foreground">Atlas Insight:</strong> web analyst consensus (0 Odds credits) ·{" "}
+            <strong className="text-foreground">Atlas Insight:</strong> FanDuel-verified props & lines ·{" "}
             Tap <strong className="text-foreground">+</strong> for parlays ·{" "}
             <Link href="/parlays" className="font-semibold text-orange-400 hover:underline">
               Build parlays
@@ -361,10 +361,10 @@ export function SportsSignalsView({
             type="button"
             onClick={() => refreshOpenAiPicks()}
             disabled={busy}
-            title="Atlas Insight browses the web for analyst consensus — prioritizes player props, plus strong ML/spread/totals. 0 Odds API credits."
+            title="Atlas Insight ranks FanDuel-verified open markets only (props + game lines). Invented bets are dropped. Small Odds credit cost only when pulling props."
             className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-4 py-2 text-sm font-medium text-sky-200 hover:bg-sky-500/20 disabled:opacity-50"
           >
-            {loading === "openai" ? "Atlas Insight searching…" : "Atlas Insight"}
+            {loading === "openai" ? "Atlas Insight verifying…" : "Atlas Insight"}
           </button>
         </div>
       </div>

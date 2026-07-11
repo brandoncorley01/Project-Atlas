@@ -41,6 +41,10 @@ services:
         value: "false"
       - key: ODDS_MIN_CREDITS_RESERVE
         value: "5"
+      - key: ODDS_INSIGHT_PROP_EVENTS
+        value: "2"
+      - key: ODDS_INSIGHT_MIN_CREDITS_RESERVE
+        value: "5"
       - key: ATLAS_EXPERT_INTELLIGENCE_ENABLED
         value: "true"
       - key: OPENAI_API_KEY
@@ -83,6 +87,10 @@ services:
       - key: ODDS_INCLUDE_FUTURES_ON_LIVE
         value: "false"
       - key: ODDS_MIN_CREDITS_RESERVE
+        value: "5"
+      - key: ODDS_INSIGHT_PROP_EVENTS
+        value: "2"
+      - key: ODDS_INSIGHT_MIN_CREDITS_RESERVE
         value: "5"
       - key: ATLAS_EXPERT_INTELLIGENCE_ENABLED
         value: "true"

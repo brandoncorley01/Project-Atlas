@@ -48,6 +48,12 @@ class Settings(BaseSettings):
     # Refuse a live pull when remaining credits are below this + estimated scan cost.
     odds_min_credits_reserve: int = 5
 
+    # Atlas Insight: max soon games to pull FanDuel player props for (each uses ~3 credits).
+    odds_insight_prop_events: int = 2
+
+    # Keep a small reserve so Insight prop pulls don't zero the free-tier quota.
+    odds_insight_min_credits_reserve: int = 5
+
     environment: str = "development"
     default_user_id: str = ""
 

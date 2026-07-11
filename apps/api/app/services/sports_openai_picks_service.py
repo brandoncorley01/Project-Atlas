@@ -1,4 +1,4 @@
-"""OpenAI web-search sports picks — analyst / popular-bettor consensus, no Odds API credits."""
+"""Atlas Insight sports picks — ranks only FanDuel-verified catalog bets."""
 
 from __future__ import annotations
 
@@ -9,56 +9,42 @@ from typing import Any
 from app.agents.sports_analyst import american_to_decimal
 from app.db.supabase_client import SupabaseClient
 from app.providers.sports.sports_news import fetch_sports_news
+from app.services.fanduel_catalog import build_fanduel_catalog
 from app.services.llm_service import llm_service
 
 logger = logging.getLogger(__name__)
 
 SOURCE = "openai_web"
 
-_SYSTEM = """You are Atlas Insight, the Project Atlas sports desk. Search the public internet for today's
-most-talked-about sports bets from betting analysts, touts, and popular sports bettors
-(MLB, WNBA, NFL, NBA, NHL, MLS, UFC when in season). Prefer FanDuel/DraftKings boards.
+_SYSTEM = """You are Atlas Insight for Project Atlas.
+You receive a FanDuel-verified catalog of real open bets (game lines and player props).
+Your job is to rank the best ones using public web consensus from analysts and popular bettors.
 
-PRIMARY FOCUS — Player props (majority of the slate, about 60–75%):
-- MLB: batter hits / home runs / total bases / RBIs / runs, pitcher strikeouts / outs / earned runs
-- NBA/WNBA: points, rebounds, assists, threes, PRA, steals/blocks
-- NFL (in season): pass yards/TDs, rush yards, receptions, anytime TD
-- NHL: shots, points, goals; UFC: method / rounds when relevant
-Write prop selections like "Aaron Judge Over 1.5 Hits" or "A'ja Wilson Over 22.5 Points".
+HARD RULES:
+- You may ONLY choose picks by returning catalog ids that already exist in the catalog.
+- NEVER invent a player, line, market, team, or odds that is not in the catalog.
+- Prefer player props when they are present in the catalog (~60% of picks), still include strong moneylines/spreads/totals.
+- Prefer MLB and WNBA when those events appear.
+- Use web search to decide which catalog bets analysts currently like — not to create new bets.
 
-SECONDARY — Still include strong moneyline / spread / total consensus plays (about 25–40%).
-Do not return props-only if the slate has clear game-line steam.
-
-Rules:
-- Use live web results. Cite sources in each pick's sources array (site names or URLs).
-- Do NOT invent final scores. Odds may be approximate consensus if cited; otherwise use null.
-- Focus on games happening today or in the next 48 hours (US Eastern).
-- Return JSON only:
+Return JSON only:
 {
   "picks": [
     {
-      "sport": "MLB",
-      "event_name": "Away @ Home",
-      "event_start": "2026-07-11T23:10:00Z or null",
-      "bet_type": "player_prop|moneyline|spread|total",
-      "selection": "Player Over/Under line OR team/side",
-      "prop_market": "batter_hits|player_points|pitcher_strikeouts|null",
-      "player_name": "Aaron Judge or null",
-      "odds_american": -110 or null,
+      "id": "fd12",
+      "rank": 1,
       "confidence": 55-85,
       "opportunity": 45-80,
       "risk": 35-70,
-      "thesis": "why analysts/bettors like it",
+      "thesis": "why this catalog bet, citing analyst consensus",
       "bull_case": "short",
       "bear_case": "short",
-      "sources": ["Action Network", "Covers", "..."],
-      "suggested_action": "Play on FanDuel/DraftKings ..."
+      "sources": ["site names"]
     }
   ],
-  "summary": "one sentence noting prop vs game-line mix"
+  "summary": "one sentence"
 }
-Return 8-16 picks max. Prefer MLB and WNBA when those slates are active.
-At least half should be player_prop when those markets are being discussed online today."""
+Return 8-16 picks max. Every id MUST appear in the catalog."""
 
 
 def _is_openai_source(row: dict[str, Any]) -> bool:
@@ -66,112 +52,46 @@ def _is_openai_source(row: dict[str, Any]) -> bool:
     return str(snap.get("source") or "") == SOURCE
 
 
-def _normalize_bet_type(raw: str | None, selection: str) -> str:
-    bet_type = str(raw or "").strip().lower().replace(" ", "_").replace("-", "_")
-    aliases = {
-        "prop": "player_prop",
-        "props": "player_prop",
-        "player": "player_prop",
-        "playerprops": "player_prop",
-        "player_props": "player_prop",
-        "outright": "futures",
-        "ml": "moneyline",
-        "h2h": "moneyline",
-        "over_under": "total",
-        "ou": "total",
-    }
-    if bet_type:
-        bet_type = aliases.get(bet_type, bet_type)
-    if bet_type.startswith(("batter_", "pitcher_", "player_")) and bet_type != "player_prop":
-        return "player_prop"
-    if bet_type == "player_prop":
-        return "player_prop"
-
-    sel = f" {(selection or '').lower()} "
-    looks_like_prop = (" over " in sel or " under " in sel) and any(
-        token in sel
-        for token in (
-            " hit",
-            " hits",
-            " home run",
-            " hr ",
-            " strikeout",
-            " k's",
-            " point",
-            " rebound",
-            " assist",
-            " three",
-            " 3pt",
-            " yard",
-            " reception",
-            " goal",
-            " shot",
-            " rbi",
-            " base",
-            " pra",
-            " fantasy",
-        )
-    )
-    if looks_like_prop:
-        return "player_prop"
-    if bet_type in {"moneyline", "spread", "total", "futures"}:
-        return bet_type
-    return "moneyline"
-
-
-def _pick_to_row(user_id: str, pick: dict[str, Any]) -> dict[str, Any] | None:
-    sport = str(pick.get("sport") or "").strip() or "Sports"
-    event_name = str(pick.get("event_name") or "").strip()
-    selection = str(pick.get("selection") or "").strip()
-    bet_type = _normalize_bet_type(pick.get("bet_type"), selection)
-    if not event_name or not selection:
-        return None
-
-    odds_raw = pick.get("odds_american")
-    try:
-        odds_american = int(odds_raw) if odds_raw is not None else -110
-    except (TypeError, ValueError):
-        odds_american = -110
-
-    confidence = max(40.0, min(90.0, float(pick.get("confidence") or 62)))
-    opportunity = max(35.0, min(90.0, float(pick.get("opportunity") or 55)))
-    risk = max(25.0, min(85.0, float(pick.get("risk") or 48)))
-    # Slight board boost for props so they aren't buried under game lines.
-    if bet_type == "player_prop":
-        opportunity = min(90.0, opportunity + 2.0)
-    sources = [str(s) for s in (pick.get("sources") or []) if s][:6]
-    thesis = str(pick.get("thesis") or pick.get("explanation") or "").strip()
-    if not thesis:
-        thesis = "Atlas Insight consensus from public analyst / bettor coverage."
-    bull = str(pick.get("bull_case") or thesis)[:400]
-    bear = str(pick.get("bear_case") or "Public consensus can be late; lines may already be steamed.")[:400]
-    action = str(pick.get("suggested_action") or f"Check FanDuel/DraftKings for {selection}")[:240]
-    now = datetime.now(UTC).isoformat()
-    event_start = pick.get("event_start")
-    if event_start is not None:
-        event_start = str(event_start).strip() or None
-    player_name = str(pick.get("player_name") or "").strip() or None
-    prop_market = str(pick.get("prop_market") or "").strip() or None
+def _catalog_to_row(
+    user_id: str,
+    item: dict[str, Any],
+    *,
+    confidence: float,
+    opportunity: float,
+    risk: float,
+    thesis: str,
+    bull: str,
+    bear: str,
+    sources: list[str],
+) -> dict[str, Any]:
+    bet_type = str(item.get("bet_type") or "moneyline")
+    selection = str(item.get("selection") or "")
+    odds_american = int(item.get("odds_american") or -110)
+    event_name = str(item.get("event_name") or "")
     type_label = "Player prop" if bet_type == "player_prop" else bet_type.replace("_", " ").title()
-
+    book_title = str(item.get("book_title") or "FanDuel")
+    now = datetime.now(UTC).isoformat()
+    thesis = (thesis or f"Atlas Insight selected this open {book_title} market from analyst consensus.").strip()
     return {
         "user_id": user_id,
-        "sport": sport[:40],
+        "sport": str(item.get("sport") or "Sports")[:40],
         "event_name": event_name[:160],
-        "event_start": event_start,
+        "event_start": item.get("event_start"),
         "bet_type": bet_type,
         "selection": selection[:140],
         "odds_american": odds_american,
         "odds_decimal": american_to_decimal(odds_american),
         "expected_value": None,
         "line_movement": {
-            "preferred_book": "fanduel",
-            "preferred_book_title": "FanDuel",
+            "preferred_book": item.get("book_key") or "fanduel",
+            "preferred_book_title": book_title,
             "source": SOURCE,
             "sources": sources,
-            "odds_approximate": odds_raw is None,
-            "prop_market": prop_market,
-            "player_name": player_name,
+            "odds_approximate": False,
+            "fanduel_verified": True,
+            "prop_market": item.get("prop_market"),
+            "player_name": item.get("player_name"),
+            "event_id": item.get("event_id"),
         },
         "injury_impact": None,
         "weather_impact": None,
@@ -183,24 +103,36 @@ def _pick_to_row(user_id: str, pick: dict[str, Any]) -> dict[str, Any] | None:
         "opportunity_score": opportunity,
         "recommendation": f"Atlas Insight · {type_label} — {selection} · {event_name}",
         "explanation": thesis[:800],
-        "bull_case": bull,
-        "bear_case": bear,
-        "invalidation": "Consensus flips, lineup scratch, or key injury news after this scan.",
-        "suggested_action": action,
+        "bull_case": (bull or thesis)[:400],
+        "bear_case": (bear or "Lineup scratch or late news can void a prop; recheck FanDuel before betting.")[:400],
+        "invalidation": "FanDuel pulls the market, lineup scratches, or the line moves materially.",
+        "suggested_action": f"Play {odds_american:+d} on {book_title} for {selection}",
         "risk_warning": (
-            "Atlas Insight picks are analyst/public consensus, not Odds API +EV math. "
-            "Verify the live FanDuel/DraftKings number before betting."
+            "Atlas Insight only surfaces FanDuel-verified open markets. "
+            "Confirm the number is still posted before betting."
         ),
         "scoring_snapshot": {
             "source": SOURCE,
             "openai_web": True,
             "web_search": True,
+            "fanduel_verified": True,
             "is_player_prop": bet_type == "player_prop",
-            "prop_market": prop_market,
-            "player_name": player_name,
+            "prop_market": item.get("prop_market"),
+            "player_name": item.get("player_name"),
             "sources": sources,
-            "odds_approximate": odds_raw is None,
-            "pick": {"bet_type": bet_type, "team_or_side": selection, "player_name": player_name},
+            "odds_approximate": False,
+            "event_id": item.get("event_id"),
+            "sport_key": item.get("sport_key"),
+            "home_team": item.get("home_team"),
+            "away_team": item.get("away_team"),
+            "catalog_id": item.get("id"),
+            "preferred_book": item.get("book_key") or "fanduel",
+            "preferred_book_title": book_title,
+            "pick": {
+                "bet_type": bet_type,
+                "team_or_side": selection,
+                "player_name": item.get("player_name"),
+            },
         },
         "status": "active",
         "data_as_of": now,
@@ -233,7 +165,7 @@ class SportsOpenAiPicksService:
                 )
                 expired += 1
             except Exception as exc:
-                logger.warning("Failed to expire OpenAI sports pick %s: %s", sid, exc)
+                logger.warning("Failed to expire Atlas Insight pick %s: %s", sid, exc)
         return expired
 
     async def refresh_openai_picks(self, *, limit: int = 16) -> dict[str, Any]:
@@ -243,36 +175,59 @@ class SportsOpenAiPicksService:
                 "credits_used": 0,
                 "cache_used": True,
                 "openai_web": False,
+                "fanduel_verified": False,
                 "message": "OPENAI_API_KEY is not configured on the API — add it on Render/.env.",
+            }
+
+        catalog_meta = await build_fanduel_catalog(include_props=True)
+        catalog = list(catalog_meta.get("items") or [])
+        credits_used = int(catalog_meta.get("credits_used") or 0)
+        if not catalog:
+            return {
+                "signals_created": 0,
+                "credits_used": credits_used,
+                "cache_used": True,
+                "openai_web": True,
+                "fanduel_verified": True,
+                "message": catalog_meta.get("message")
+                or "No FanDuel-verified markets available. Tap Fetch live odds, then Atlas Insight.",
             }
 
         news: list[dict[str, Any]] = []
         try:
-            news = await fetch_sports_news(limit_per_feed=8)
+            news = await fetch_sports_news(limit_per_feed=6)
         except Exception as exc:
-            logger.warning("Atlas Insight picks news prefetch skipped: %s", exc)
+            logger.warning("Atlas Insight news prefetch skipped: %s", exc)
 
         headlines = [
+            {"title": n.get("title"), "source": n.get("source"), "url": n.get("url")}
+            for n in news[:18]
+        ]
+        # Compact catalog for the model — ids + essentials only.
+        slim = [
             {
-                "title": n.get("title"),
-                "source": n.get("source"),
-                "url": n.get("url"),
-                "published_at": n.get("published_at"),
+                "id": c["id"],
+                "sport": c.get("sport"),
+                "event": c.get("event_name"),
+                "start": c.get("event_start"),
+                "bet_type": c.get("bet_type"),
+                "selection": c.get("selection"),
+                "odds": c.get("odds_american"),
+                "book": c.get("book_title"),
+                "prop_market": c.get("prop_market"),
+                "player": c.get("player_name"),
             }
-            for n in news[:24]
+            for c in catalog
         ]
         today = datetime.now(UTC).strftime("%Y-%m-%d")
-        # Anchor undated picks to "today" so list/window filters keep them visible.
-        today_iso = datetime.now(UTC).replace(hour=23, minute=0, second=0, microsecond=0).isoformat()
         user = (
-            f"Today's UTC date: {today}. Search the web for today's FanDuel/DraftKings "
-            "consensus bets from analysts and popular sports bettors. "
-            "PRIMARY: player props (hits, HRs, Ks, points, rebounds, assists, threes, PRA, etc.). "
-            "SECONDARY: strong moneylines, spreads, and totals. "
-            "Prioritize MLB and WNBA if those games are on the slate. "
-            "Return a mixed slate — mostly props, not props-only. "
-            "Always include event_start as an ISO UTC timestamp when the game time is known.\n\n"
-            f"Recent headlines (extra context, may be incomplete):\n{headlines}"
+            f"Today UTC: {today}. Rank FanDuel-verified open bets from this catalog only. "
+            f"Catalog has {catalog_meta.get('player_props', 0)} player props and "
+            f"{catalog_meta.get('game_lines', 0)} game lines. "
+            "Prefer props when available, still include strong game lines. "
+            "Do not invent bets.\n\n"
+            f"Catalog:\n{slim}\n\n"
+            f"Recent headlines (context only):\n{headlines}"
         )
 
         result = await llm_service.complete_json_with_web_search(
@@ -283,24 +238,71 @@ class SportsOpenAiPicksService:
         if not result or not isinstance(result.get("picks"), list):
             return {
                 "signals_created": 0,
-                "credits_used": 0,
+                "credits_used": credits_used,
                 "cache_used": True,
                 "openai_web": True,
-                "web_search": False,
-                "message": "OpenAI returned no web picks — try again in a minute.",
+                "fanduel_verified": True,
+                "message": "Atlas Insight returned no ranked FanDuel picks — try again in a minute.",
             }
 
+        by_id = {str(c.get("id")): c for c in catalog}
         rows: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        dropped_invented = 0
         for pick in result["picks"]:
             if not isinstance(pick, dict):
                 continue
-            if not str(pick.get("event_start") or "").strip():
-                pick = {**pick, "event_start": today_iso}
-            row = _pick_to_row(self.user_id, pick)
-            if row:
-                rows.append(row)
+            cid = str(pick.get("id") or "").strip()
+            item = by_id.get(cid)
+            if not item or cid in seen:
+                if cid and cid not in by_id:
+                    dropped_invented += 1
+                continue
+            seen.add(cid)
+            try:
+                confidence = max(40.0, min(90.0, float(pick.get("confidence") or 62)))
+                opportunity = max(35.0, min(90.0, float(pick.get("opportunity") or 55)))
+                risk = max(25.0, min(85.0, float(pick.get("risk") or 48)))
+            except (TypeError, ValueError):
+                confidence, opportunity, risk = 62.0, 55.0, 48.0
+            if item.get("bet_type") == "player_prop":
+                opportunity = min(90.0, opportunity + 2.0)
+            sources = [str(s) for s in (pick.get("sources") or []) if s][:6]
+            rows.append(
+                _catalog_to_row(
+                    self.user_id,
+                    item,
+                    confidence=confidence,
+                    opportunity=opportunity,
+                    risk=risk,
+                    thesis=str(pick.get("thesis") or ""),
+                    bull=str(pick.get("bull_case") or ""),
+                    bear=str(pick.get("bear_case") or ""),
+                    sources=sources,
+                )
+            )
             if len(rows) >= limit:
                 break
+
+        # If the model returned nothing valid, surface top FanDuel props/game lines deterministically.
+        if not rows:
+            seed = [c for c in catalog if c.get("bet_type") == "player_prop"][:8]
+            if len(seed) < 6:
+                seed = seed + [c for c in catalog if c.get("bet_type") != "player_prop"][: 8 - len(seed)]
+            for item in seed[:limit]:
+                rows.append(
+                    _catalog_to_row(
+                        self.user_id,
+                        item,
+                        confidence=58.0,
+                        opportunity=52.0 if item.get("bet_type") != "player_prop" else 56.0,
+                        risk=50.0,
+                        thesis="FanDuel-verified open market — ranked as a fallback when Insight ranking was empty.",
+                        bull="Posted on FanDuel right now.",
+                        bear="Public number may move quickly.",
+                        sources=["FanDuel"],
+                    )
+                )
 
         expired = await self._expire_openai_picks()
         saved = await self.db.insert("sports_signals", rows) if rows else []
@@ -313,15 +315,17 @@ class SportsOpenAiPicksService:
             except Exception as exc:
                 logger.warning("Atlas Insight sports registry skipped: %s", exc)
 
-        used_web = bool(result.get("_web_search"))
+        used_web = bool(result.get("_web_search")) if result else False
         prop_count = sum(1 for r in (saved or rows) if str(r.get("bet_type")) == "player_prop")
-        summary = str(result.get("summary") or "").strip()
+        summary = str((result or {}).get("summary") or "").strip()
         msg = (
-            f"Atlas Insight found {len(saved)} picks"
-            f" ({prop_count} player props)"
-            f"{' via live web search' if used_web else ' from model + headlines'} "
-            f"(0 Odds API credits"
-            f"{f'; replaced {expired} prior Atlas Insight picks' if expired else ''})."
+            f"Atlas Insight posted {len(saved)} FanDuel-verified picks"
+            f" ({prop_count} player props"
+            f", catalog {catalog_meta.get('player_props', 0)} props / {catalog_meta.get('game_lines', 0)} game lines"
+            f"{f', ~{credits_used} Odds credits for props' if credits_used else ', 0 Odds credits for game lines'})"
+            f"{' via web ranking' if used_web else ''}"
+            f"{f'; dropped {dropped_invented} invented ids' if dropped_invented else ''}"
+            f"{f'; replaced {expired} prior Insight picks' if expired else ''})."
         )
         if summary:
             msg = f"{msg} {summary}"
@@ -331,10 +335,14 @@ class SportsOpenAiPicksService:
             "signals_expired": expired,
             "events_scanned": len(rows),
             "player_props": prop_count,
-            "credits_used": 0,
-            "cache_used": True,
+            "credits_used": credits_used,
+            "cache_used": credits_used == 0,
             "openai_web": True,
+            "fanduel_verified": True,
             "web_search": used_web,
+            "dropped_invented": dropped_invented,
+            "catalog_props": catalog_meta.get("player_props"),
+            "catalog_game_lines": catalog_meta.get("game_lines"),
             "top_opportunity": float(saved[0]["opportunity_score"]) if saved else None,
             "message": msg,
         }
