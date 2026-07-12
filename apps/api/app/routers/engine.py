@@ -96,18 +96,20 @@ async def refresh_sports_openai(
     user_id: str = Depends(get_current_user_id),
     token: str = Depends(get_access_token),
     limit: int = 16,
+    fast: bool = True,
 ) -> dict:
     """Atlas Insight — FanDuel-verified edge ranking + optional OpenAI polish.
 
     Merges onto the board without wiping Odds-derived picks.
     Uses service-role writes when configured so RLS cannot block a signed-in scan.
+    fast=true (default) skips OpenAI polish / grading so the BFF does not 503.
     """
     from app.db.service_client import get_write_db
     from app.services.sports_openai_picks_service import SportsOpenAiPicksService
 
     try:
         service = SportsOpenAiPicksService(get_write_db(token), user_id)
-        result = await service.refresh_openai_picks(limit=limit)
+        result = await service.refresh_openai_picks(limit=limit, fast=fast)
         set_last_job("refresh_sports_openai")
         status = "error" if result.get("ok") is False else "ok"
         return {"status": status, "module": "sports_openai", **result}

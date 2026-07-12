@@ -211,7 +211,7 @@ export function SportsSignalsView({
         method: "POST",
         headers: apiRequestHeaders(token),
         credentials: usesBffProxy() ? "include" : "same-origin",
-        signal: AbortSignal.timeout(300000),
+        signal: AbortSignal.timeout(180000),
       });
       const body = await res.json();
       if (!res.ok) {
@@ -219,7 +219,9 @@ export function SportsSignalsView({
         setMessage(
           res.status === 404
             ? "Sports scan endpoint not found — restart API with .\\scripts\\start-dev.ps1"
-            : detail,
+            : res.status === 503
+              ? detail || "API timed out — try Rescore or restart the API."
+              : detail,
         );
         setLoading(null);
         return;
@@ -229,12 +231,7 @@ export function SportsSignalsView({
       const kept = body.signals_kept as boolean | undefined;
       const creditsUsed = body.credits_used as number | undefined;
       const cacheUsed = body.cache_used as boolean | undefined;
-      const liveOddsPulled = body.live_odds_pulled as boolean | undefined;
-      const insightCreated = Number(
-        (body.atlas_insight as { signals_created?: number } | undefined)?.signals_created
-          ?? body.insight_created
-          ?? 0,
-      );
+      const liveOddsPulled = Boolean(body.live_odds_pulled || body.insight_pending);
       const apiMessage = body.message as string | undefined;
       setMessage(
         apiMessage ??
@@ -242,61 +239,38 @@ export function SportsSignalsView({
             ? "No new edges found — kept your current picks on the board"
             : created > 0
               ? `Found ${created} plays · ${cacheUsed ? "0 Odds credits (cached)" : `~${creditsUsed ?? "?"} Odds credits`}`
-              : liveOddsPulled && insightCreated > 0
-                ? `Fetched live odds · Atlas Insight posted ${insightCreated} picks`
-                : "No edges met the threshold — try Fetch live odds or Atlas Insight"),
+              : "No edges met the threshold — try Fetch live odds or Atlas Insight"),
       );
 
-      if (liveOddsPulled && insightCreated > 0) {
-        setWindow("all");
-        setFilter("openai");
-        setSort("openai");
-        setActiveSport(null);
-        setActiveCategory("atlas_insight");
-        await Promise.all([
-          loadCategories(token),
-          (async () => {
-            const params = new URLSearchParams({
-              limit: "200",
-              window: "all",
-              category: "atlas_insight",
-            });
-            const listRes = await fetch(`${apiUrl}/signals/sports?${params}`, {
-              headers: apiRequestHeaders(token),
-              cache: "no-store",
-              credentials: usesBffProxy() ? "include" : "same-origin",
-            });
-            if (listRes.ok) {
-              const data = await listRes.json();
-              setItems(dedupeOneSidePerMarket(data.items ?? []));
-            }
-          })(),
-          refreshOddsStatus(),
-        ]);
-      } else {
-        // Leave Atlas Insight / openai filters so Odds Scan results aren't hidden.
-        setFilter("all");
-        setSort("opportunity");
-        setActiveCategory(null);
-        setActiveSport(null);
+      // Leave Insight filters so Odds Scan results aren't hidden before Insight runs.
+      setFilter("all");
+      setSort("opportunity");
+      setActiveCategory(null);
+      setActiveSport(null);
 
-        await Promise.all([
-          loadCategories(token),
-          loadItems(token, null, null),
-          refreshOddsStatus(),
-        ]);
-      }
+      await Promise.all([
+        loadCategories(token),
+        loadItems(token, null, null),
+        refreshOddsStatus(),
+      ]);
       router.refresh();
       globalThis.dispatchEvent(new Event("atlas:dashboard-refresh"));
+
+      // Separate request after live odds — avoids one long Fetch+Insight call that 503s the BFF.
+      if (liveOddsPulled) {
+        setLoading(null);
+        await refreshOpenAiPicks({ quietPrefix: apiMessage });
+        return;
+      }
     } catch {
       setMessage("Backend not responding — run .\\scripts\\start-dev.ps1");
     }
     setLoading(null);
   }
 
-  async function refreshOpenAiPicks() {
+  async function refreshOpenAiPicks(opts?: { quietPrefix?: string | null }) {
     setLoading("openai");
-    setMessage(null);
+    if (!opts?.quietPrefix) setMessage(null);
 
     const token = await getToken();
     if (!usesBffProxy() && !token) {
@@ -307,11 +281,11 @@ export function SportsSignalsView({
 
     const apiUrl = getApiUrl();
     try {
-      const res = await fetch(`${apiUrl}/engine/refresh-sports-openai`, {
+      const res = await fetch(`${apiUrl}/engine/refresh-sports-openai?fast=true&limit=12`, {
         method: "POST",
         headers: apiRequestHeaders(token),
         credentials: usesBffProxy() ? "include" : "same-origin",
-        signal: AbortSignal.timeout(300000),
+        signal: AbortSignal.timeout(120000),
       });
       let body: Record<string, unknown> = {};
       try {
@@ -324,7 +298,7 @@ export function SportsSignalsView({
           typeof body.detail === "string"
             ? body.detail
             : res.status === 503
-              ? "Atlas Insight timed out reaching the API — try again in a moment."
+              ? "Atlas Insight timed out — the API is slow or unreachable. Tap Restart, then try again."
               : "Atlas Insight scan failed";
         setMessage(
           res.status === 404
@@ -338,8 +312,12 @@ export function SportsSignalsView({
       const failed = body.status === "error" || body.ok === false;
       const apiMessage =
         typeof body.message === "string" ? body.message : undefined;
+      const combined =
+        opts?.quietPrefix && apiMessage
+          ? `${opts.quietPrefix} · ${apiMessage}`
+          : apiMessage;
       setMessage(
-        apiMessage ??
+        combined ??
           (failed
             ? "Atlas Insight failed — try again"
             : `Atlas Insight added ${created} picks`),
@@ -359,12 +337,12 @@ export function SportsSignalsView({
       await Promise.all([
         loadCategories(token),
         (async () => {
-          const params = new URLSearchParams({
+          const listParams = new URLSearchParams({
             limit: "200",
             window: "all",
             category: "atlas_insight",
           });
-          const listRes = await fetch(`${apiUrl}/signals/sports?${params}`, {
+          const listRes = await fetch(`${apiUrl}/signals/sports?${listParams}`, {
             headers: apiRequestHeaders(token),
             cache: "no-store",
             credentials: usesBffProxy() ? "include" : "same-origin",
@@ -382,7 +360,7 @@ export function SportsSignalsView({
       const msg = err instanceof Error ? err.message : "";
       setMessage(
         msg.includes("timeout") || msg.includes("Timeout") || msg.includes("aborted")
-          ? "Atlas Insight timed out — the API is still warming up or OpenAI is slow. Try again."
+          ? "Atlas Insight timed out — restart the API, then try again."
           : "Backend not responding — run .\\scripts\\start-dev.ps1",
       );
     }
@@ -466,7 +444,7 @@ export function SportsSignalsView({
             }
             className="rounded-lg border border-violet-500/40 bg-violet-500/10 px-4 py-2 text-sm font-medium text-violet-200 hover:bg-violet-500/20 disabled:opacity-50"
           >
-            {loading === "live" ? "Fetching + Insight…" : "Fetch live odds"}
+            {loading === "live" ? "Fetching…" : "Fetch live odds"}
           </button>
           <button
             type="button"

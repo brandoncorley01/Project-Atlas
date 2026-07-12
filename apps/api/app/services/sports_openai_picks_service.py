@@ -710,9 +710,14 @@ class SportsOpenAiPicksService:
                 logger.warning("Failed to expire Atlas Insight pick %s: %s", sid, exc)
         return expired
 
-    async def refresh_openai_picks(self, *, limit: int = 16) -> dict[str, Any]:
+    async def refresh_openai_picks(
+        self,
+        *,
+        limit: int = 16,
+        fast: bool = True,
+    ) -> dict[str, Any]:
         try:
-            return await self._refresh_openai_picks_inner(limit=limit)
+            return await self._refresh_openai_picks_inner(limit=limit, fast=fast)
         except Exception as exc:
             logger.exception("Atlas Insight scan failed: %s", exc)
             detail = str(exc)
@@ -734,21 +739,27 @@ class SportsOpenAiPicksService:
                 "message": detail,
             }
 
-    async def _refresh_openai_picks_inner(self, *, limit: int = 16) -> dict[str, Any]:
-        # Close the learning loop first: grade finished Atlas board + user sports picks.
+    async def _refresh_openai_picks_inner(
+        self,
+        *,
+        limit: int = 16,
+        fast: bool = True,
+    ) -> dict[str, Any]:
+        # Close the learning loop first — skip on fast path so the BFF never 503s.
         graded_prior = 0
-        try:
-            from app.services.outcome_resolver import OutcomeResolverService
+        if not fast:
+            try:
+                from app.services.outcome_resolver import OutcomeResolverService
 
-            resolve = await OutcomeResolverService(self.db, self.user_id).resolve_pending(
-                limit=50,
-                module="sports",
-            )
-            graded_prior = int((resolve or {}).get("resolved") or 0)
-            if graded_prior:
-                logger.info("Atlas Insight graded %s finished sports picks before ranking", graded_prior)
-        except Exception as exc:
-            logger.warning("Atlas Insight pre-grade skipped: %s", exc)
+                resolve = await OutcomeResolverService(self.db, self.user_id).resolve_pending(
+                    limit=50,
+                    module="sports",
+                )
+                graded_prior = int((resolve or {}).get("resolved") or 0)
+                if graded_prior:
+                    logger.info("Atlas Insight graded %s finished sports picks before ranking", graded_prior)
+            except Exception as exc:
+                logger.warning("Atlas Insight pre-grade skipped: %s", exc)
 
         # Prefer cache (0 credits). If cold (e.g. Render disk reset), seed like Fetch —
         # the user explicitly tapped Atlas Insight.
@@ -756,7 +767,7 @@ class SportsOpenAiPicksService:
         catalog = list(catalog_meta.get("items") or [])
         credits_used = int(catalog_meta.get("credits_used") or 0)
         seeded_live = False
-        if not catalog:
+        if not catalog and not fast:
             try:
                 from app.providers.sports.odds_api import fetch_all_sports_odds
 
@@ -782,18 +793,26 @@ class SportsOpenAiPicksService:
                 or "No FanDuel-verified markets available. Tap Fetch live odds once, then Atlas Insight.",
             }
 
-        calibration = await CalibrationService(self.db, self.user_id).get_adjustments(lookback=200)
+        try:
+            calibration = await asyncio.wait_for(
+                CalibrationService(self.db, self.user_id).get_adjustments(lookback=80 if fast else 200),
+                timeout=6.0 if fast else 15.0,
+            )
+        except Exception as exc:
+            logger.warning("Atlas Insight calibration skipped: %s", exc)
+            calibration = {}
         learning = calibration.get("sports_learning") or {}
         min_edge = float(calibration.get("sports_min_edge_pct") or 0.6)
         min_opp = float(calibration.get("sports_min_opportunity") or 28.0)
         dampen = float(calibration.get("sports_confidence_dampen") or 0.0)
 
-        ranking_catalog = catalog[:64]
+        ranking_catalog = catalog[:40 if fast else 64]
         news_pool: list[dict[str, Any]] = []
-        try:
-            news_pool = await asyncio.wait_for(fetch_sports_news(limit_per_feed=5), timeout=8.0)
-        except Exception as exc:
-            logger.warning("Atlas Insight news prefetch skipped: %s", exc)
+        if not fast:
+            try:
+                news_pool = await asyncio.wait_for(fetch_sports_news(limit_per_feed=5), timeout=8.0)
+            except Exception as exc:
+                logger.warning("Atlas Insight news prefetch skipped: %s", exc)
 
         enriched = await _enrich_catalog(
             ranking_catalog,
@@ -835,7 +854,8 @@ class SportsOpenAiPicksService:
         if not selected:
             selected = enriched[:limit]
 
-        polished = await _polish_explanations(selected[:limit])
+        # Skip OpenAI polish on the default fast path — quota/timeouts were causing BFF 503s.
+        polished = {} if fast else await _polish_explanations(selected[:limit])
         used_web = any(bool(v.get("_web_search")) for v in polished.values())
         rows: list[dict[str, Any]] = []
         news_backed = 0
@@ -945,7 +965,8 @@ class SportsOpenAiPicksService:
             msg = f"{msg} Seeded live odds for a cold cache first."
         if llm_service.is_configured() and not polished:
             msg = (
-                f"{msg} OpenAI polish skipped (billing/quota) — "
+                f"{msg} OpenAI polish skipped"
+                f"{' (fast path)' if fast else ' (billing/quota)'} — "
                 "FanDuel edge-ranked picks still posted."
             )
         if learn_notes:
