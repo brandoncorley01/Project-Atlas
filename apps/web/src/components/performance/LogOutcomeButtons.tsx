@@ -107,7 +107,13 @@ export function LogOutcomeButtons({
   return (
     <div className={className}>
       <p className="mb-1.5 text-xs text-muted">
-        {compact ? "Result?" : "How did this pick turn out? Atlas learns from your results."}
+        {compact
+          ? module === "options" || module === "stock"
+            ? "Close position?"
+            : "Result?"
+          : module === "options" || module === "stock"
+            ? "Closed this position? Log win/loss so Atlas can learn."
+            : "How did this pick turn out? Atlas learns from your results."}
       </p>
       <div className="flex flex-wrap gap-2">
         <button

@@ -72,7 +72,7 @@ function itemHref(item: WatchlistItem): string | null {
     case "stock_signal":
       return typeof meta.signal_id === "string" ? `/stocks/${meta.signal_id}` : null;
     case "option_signal":
-      return typeof meta.signal_id === "string" ? `/options` : null;
+      return typeof meta.signal_id === "string" ? `/options/${meta.signal_id}` : null;
     case "sport_bet":
       return typeof meta.signal_id === "string" ? `/sports/${meta.signal_id}` : null;
     case "parlay":
@@ -326,6 +326,11 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
                       </Link>
                     ) : (
                       <span className="font-medium">{itemTitle(item)}</span>
+                    )}
+                    {href && (
+                      <Link href={href} className="text-xs text-accent hover:underline">
+                        View details
+                      </Link>
                     )}
                   </div>
                   <p className="mt-0.5 truncate text-sm text-muted">{itemSubtitle(item)}</p>

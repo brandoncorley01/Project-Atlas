@@ -1139,6 +1139,22 @@ function fmtPct(v: number | null | undefined) {
   return `${sign}${v}%`;
 }
 
+function performanceDetailHref(sector: SectorId, signalId: string): string | null {
+  if (!signalId) return null;
+  switch (sector) {
+    case "sports":
+      return `/sports/${signalId}`;
+    case "stock":
+      return `/stocks/${signalId}`;
+    case "options":
+      return `/options/${signalId}`;
+    case "parlay":
+      return `/parlays/${signalId}`;
+    default:
+      return null;
+  }
+}
+
 function OutcomeRow({
   row,
   onUpdated,
@@ -1164,6 +1180,8 @@ function OutcomeRow({
     (String(row.resolution_source ?? "").startsWith("auto_") &&
       row.resolution_source !== "auto_scan");
   const cellPad = compact ? "px-3 py-2" : "px-4 py-2";
+  const detailHref = performanceDetailHref(sector, row.signal_id);
+  const label = row.signal_label ?? row.signal_id.slice(0, 8);
 
   useEffect(() => {
     setOutcome(row.outcome);
@@ -1195,7 +1213,13 @@ function OutcomeRow({
   return (
     <tr className="border-b border-border/50 align-top">
       <td className={cellPad}>
-        <p className="text-foreground">{row.signal_label ?? row.signal_id.slice(0, 8)}</p>
+        {detailHref ? (
+          <Link href={detailHref} className="font-medium text-foreground hover:text-accent">
+            {label}
+          </Link>
+        ) : (
+          <p className="text-foreground">{label}</p>
+        )}
         {origin === "both" && (
           <p className="mt-0.5 text-[10px] text-violet-300/90">Also in Atlas scan</p>
         )}

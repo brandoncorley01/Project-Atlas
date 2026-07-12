@@ -240,6 +240,14 @@ export function OptionSignalCard({ row, rank }: { row: OptionSignal; rank: numbe
           label="Save to watchlist"
           variant="compact"
         />
+        {rank !== 1 && (
+          <Link
+            href={`/options/${row.id}`}
+            className="text-sm font-medium text-accent hover:underline"
+          >
+            Full detail page →
+          </Link>
+        )}
         <Link
           href={`/stocks?ticker=${encodeURIComponent(row.underlying)}`}
           className="text-xs font-medium text-muted hover:text-accent"

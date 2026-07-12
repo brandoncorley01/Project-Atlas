@@ -175,17 +175,13 @@ class SignalService:
         return budget_rows[:limit]
 
     async def get_options(self, signal_id: str) -> dict | None:
+        """Return an options signal for detail views, including stale/expired rows."""
         rows = await self.db.select(
             "options_signals",
             filters={"id": f"eq.{signal_id}", "user_id": f"eq.{self.user_id}"},
             limit=1,
         )
-        if not rows:
-            return None
-        row = rows[0]
-        if str(row.get("status")) == "active" and not is_options_fresh(row):
-            return None
-        return row
+        return rows[0] if rows else None
 
     @staticmethod
     def _is_budget_row(row: dict) -> bool:
@@ -329,17 +325,13 @@ class SignalService:
         return rows[offset : offset + limit]
 
     async def get_sports(self, signal_id: str) -> dict | None:
+        """Return a sports signal for detail views, including started/expired rows."""
         rows = await self.db.select(
             "sports_signals",
             filters={"id": f"eq.{signal_id}", "user_id": f"eq.{self.user_id}"},
             limit=1,
         )
-        if not rows:
-            return None
-        row = rows[0]
-        if str(row.get("status")) == "active" and not is_sports_listable(row):
-            return None
-        return row
+        return rows[0] if rows else None
 
     async def list_all_sports(self, *, status: str = "active", limit: int = 200) -> list[dict]:
         rows = await self.db.select(

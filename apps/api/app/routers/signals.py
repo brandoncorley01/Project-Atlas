@@ -41,10 +41,11 @@ async def get_options_signal(
     user_id: str = Depends(get_current_user_id),
     token: str = Depends(get_access_token),
 ) -> dict:
-    row = await _service(user_id, token).get_options(signal_id)
+    service = _service(user_id, token)
+    row = await service.get_options(signal_id)
     if not row:
         raise HTTPException(status_code=404, detail="Signal not found")
-    return row
+    return service.format_options_item(row)
 
 
 @router.get("/stocks")
