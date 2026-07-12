@@ -15,6 +15,10 @@ CONFIDENCE_BUCKETS = (
     (90, 101, "90+"),
 )
 
+# Keep options capital-light until Atlas has enough graded wins to trust larger contracts.
+OPTIONS_PROVEN_MIN_DECIDED = 15
+OPTIONS_PROVEN_MIN_WIN_RATE = 55.0
+
 SIGNAL_TABLES: dict[str, str] = {
     "options": "options_signals",
     "stock": "stock_signals",
@@ -63,6 +67,12 @@ class CalibrationService:
             defaults = self._defaults(sample_count=len(rows))
             defaults["sports_learning"] = sports_learning
             defaults["market_learning"] = market_learning
+            defaults["options_min_profit_probability"] = options["min_profit_probability"]
+            defaults["options_min_opportunity"] = options["min_opportunity"]
+            defaults["options_budget_first"] = options["budget_first"]
+            defaults["options_proven"] = options["proven"]
+            defaults["options_decided"] = options["decided"]
+            defaults["options_win_rate"] = options["win_rate"]
             defaults["learning_notes"] = list(sports_learning.get("notes") or []) + [
                 n for n in (sports.get("note"), options.get("note"), stock.get("note"), parlay_note) if n
             ]
@@ -87,6 +97,10 @@ class CalibrationService:
             "sports_confidence_dampen": sports["confidence_dampen"],
             "options_min_profit_probability": options["min_profit_probability"],
             "options_min_opportunity": options["min_opportunity"],
+            "options_budget_first": options["budget_first"],
+            "options_proven": options["proven"],
+            "options_decided": options["decided"],
+            "options_win_rate": options["win_rate"],
             "stock_min_opportunity": stock["min_opportunity"],
             "confidence_accuracy": confidence_accuracy,
             "sports_learning": sports_learning,
@@ -104,6 +118,10 @@ class CalibrationService:
             "sports_confidence_dampen": 0.0,
             "options_min_profit_probability": 52.0,
             "options_min_opportunity": 45.0,
+            "options_budget_first": True,
+            "options_proven": False,
+            "options_decided": 0,
+            "options_win_rate": None,
             "stock_min_opportunity": 35.0,
             "confidence_accuracy": {},
             "sports_learning": {
@@ -270,7 +288,11 @@ class CalibrationService:
                     else "Options scans use default probability floor until grades accumulate"
                 ),
                 "feeds_next_picks": True,
-                "details": [],
+                "details": (
+                    ["Under-$100 contracts prioritized until Atlas proves options win rate"]
+                    if options_adj.get("budget_first")
+                    else []
+                ),
             }
         )
 
@@ -590,7 +612,7 @@ class CalibrationService:
     def _options_adjustments(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
         min_prob = 52.0
         min_opp = 45.0
-        note: str | None = None
+        notes: list[str] = []
 
         mid_prob = []
         for row in rows:
@@ -600,16 +622,49 @@ class CalibrationService:
                 mid_prob.append(row)
 
         if len(mid_prob) >= 5:
-            wr = self._win_rate(mid_prob)
-            if wr is not None and wr < 45.0:
+            wr_mid = self._win_rate(mid_prob)
+            if wr_mid is not None and wr_mid < 45.0:
                 min_prob = 58.0
                 min_opp = 48.0
-                note = f"Options: 52–62% prob picks won {wr:.0f}% — raised minimum to {min_prob:.0f}%"
+                notes.append(
+                    f"Options: 52–62% prob picks won {wr_mid:.0f}% — raised minimum to {min_prob:.0f}%"
+                )
+
+        decided = [r for r in rows if r.get("outcome") in ("win", "loss")]
+        decided_n = len(decided)
+        win_rate = self._win_rate(decided)
+        proven = (
+            decided_n >= OPTIONS_PROVEN_MIN_DECIDED
+            and win_rate is not None
+            and win_rate >= OPTIONS_PROVEN_MIN_WIN_RATE
+        )
+        budget_first = not proven
+        if budget_first:
+            if decided_n == 0:
+                notes.append(
+                    "Options: under-$100 contracts prioritized until Atlas proves a win rate"
+                )
+            else:
+                wr_label = f"{win_rate:.0f}%" if win_rate is not None else "n/a"
+                notes.append(
+                    f"Options: {decided_n} graded · {wr_label} win rate — "
+                    f"under-$100 priority until {OPTIONS_PROVEN_MIN_DECIDED}+ graded "
+                    f"at ≥{OPTIONS_PROVEN_MIN_WIN_RATE:.0f}%"
+                )
+        else:
+            notes.append(
+                f"Options: proven on {decided_n} graded picks ({win_rate:.0f}% win rate) — "
+                "higher-cost contracts allowed when edge is strong"
+            )
 
         return {
             "min_profit_probability": min_prob,
             "min_opportunity": min_opp,
-            "note": note,
+            "budget_first": budget_first,
+            "proven": proven,
+            "decided": decided_n,
+            "win_rate": win_rate,
+            "note": " · ".join(notes) if notes else None,
         }
 
     def _stock_adjustments(self, rows: list[dict[str, Any]]) -> dict[str, Any]:

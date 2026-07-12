@@ -11,7 +11,7 @@ from app.providers.market.universe import (
     discover_market_symbols,
     pre_score_symbol,
 )
-from app.agents.scout import is_budget_contract
+from app.agents.scout import contract_cost, is_budget_contract
 from app.providers.options.yahoo import fetch_options_candidates
 from app.providers.stocks.finnhub import FinnhubClient, FinnhubError
 
@@ -198,6 +198,7 @@ class OptionsRefreshService:
         calibration = await CalibrationService(self.db, self.user_id).get_adjustments()
         min_prob = float(calibration.get("options_min_profit_probability", 52.0))
         min_opp = float(calibration.get("options_min_opportunity", 45.0))
+        budget_first = bool(calibration.get("options_budget_first", True))
 
         candidates, stats = await self.gather_live_candidates()
         explained = run_options_pipeline(candidates)
@@ -226,12 +227,38 @@ class OptionsRefreshService:
             premium = signal.planned.scored.candidate.premium or 0
             snap["contract_cost"] = round(premium * 100, 2)
             snap["is_budget"] = is_budget_contract(signal.planned.scored.candidate)
+            snap["budget_first_mode"] = budget_first
             signal.planned.scored.scoring_snapshot = snap
 
+        # Capital preservation: under-$100 first until options win rate is proven.
+        def _rank_key(signal: object) -> tuple[float, float, float]:
+            scored = signal.planned.scored  # type: ignore[attr-defined]
+            snap = scored.scoring_snapshot or {}
+            prob = float(snap.get("profit_probability") or 0)
+            budget = 1.0 if is_budget_contract(scored.candidate) else 0.0
+            if budget_first:
+                return (budget, prob, float(scored.opportunity_score or 0))
+            return (prob, budget, float(scored.opportunity_score or 0))
+
+        explained.sort(key=_rank_key, reverse=True)
+
+        budget_pool = [s for s in explained if is_budget_contract(s.planned.scored.candidate)]
+        if budget_first:
+            if budget_pool:
+                explained = budget_pool
+            else:
+                # No sub-$100 liquid contracts — surface the cheapest few only.
+                explained = sorted(
+                    explained,
+                    key=lambda s: contract_cost(s.planned.scored.candidate),
+                )[: max(limit, 8)]
+                for signal in explained:
+                    snap = signal.planned.scored.scoring_snapshot or {}
+                    snap["budget_fallback"] = True
+                    signal.planned.scored.scoring_snapshot = snap
+
         standard = explained[:limit]
-        budget = [
-            s for s in explained if is_budget_contract(s.planned.scored.candidate)
-        ][:MAX_BUDGET_SIGNALS]
+        budget = budget_pool[:MAX_BUDGET_SIGNALS]
 
         to_save: list = []
         seen: set[str] = set()
@@ -243,10 +270,12 @@ class OptionsRefreshService:
             seen.add(key)
             to_save.append(signal)
 
-        stats["budget_candidates"] = len(
-            [s for s in explained if is_budget_contract(s.planned.scored.candidate)]
+        stats["budget_candidates"] = len(budget_pool)
+        stats["budget_saved"] = len(
+            [s for s in to_save if is_budget_contract(s.planned.scored.candidate)]
         )
-        stats["budget_saved"] = min(len(budget), MAX_BUDGET_SIGNALS)
+        stats["budget_first_mode"] = budget_first
+        stats["options_proven"] = bool(calibration.get("options_proven"))
 
         if replace:
             await self.db.delete(
@@ -273,6 +302,17 @@ class OptionsRefreshService:
             snap = standard[0].planned.scored.scoring_snapshot or {}
             top_prob = snap.get("profit_probability")
 
+        mode_note = None
+        if budget_first:
+            decided = int(calibration.get("options_decided") or 0)
+            wr = calibration.get("options_win_rate")
+            wr_label = f"{float(wr):.0f}%" if wr is not None else "n/a"
+            mode_note = (
+                f"Capital-first mode: showing under-$100 contracts "
+                f"({decided} graded · {wr_label} win rate). "
+                f"Higher-cost plays unlock after {15}+ graded at ≥55%."
+            )
+
         return {
             "signals_created": len(saved),
             "standard_signals": len(standard),
@@ -282,4 +322,6 @@ class OptionsRefreshService:
             "used_mock_fallback": False,
             "top_profit_probability": top_prob,
             "calibration": calibration,
+            "budget_first": budget_first,
+            "message": mode_note,
         }

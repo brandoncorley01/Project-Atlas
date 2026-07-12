@@ -138,9 +138,13 @@ def score_candidate(candidate: CandidateOpportunity) -> ScoredOpportunity:
 
 
 def rank_scored(scored: list[ScoredOpportunity]) -> list[ScoredOpportunity]:
-    def sort_key(item: ScoredOpportunity) -> tuple[float, float, float]:
+    """Rank by profit probability, with under-$100 contracts as a soft tie-break."""
+    from app.agents.scout import is_budget_contract
+
+    def sort_key(item: ScoredOpportunity) -> tuple[float, float, float, float]:
         snap = item.scoring_snapshot or {}
         prob = float(snap.get("profit_probability") or 0)
-        return (prob, item.opportunity_score, item.confidence_score)
+        budget = 1.0 if is_budget_contract(item.candidate) else 0.0
+        return (prob, budget, item.opportunity_score, item.confidence_score)
 
     return sorted(scored, key=sort_key, reverse=True)

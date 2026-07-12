@@ -155,11 +155,17 @@ export function OptionsSignalsView({
 
       const created = body.signals_created as number | undefined;
       const scanned = body.symbols_scanned as number | undefined;
-      setMessage(
-        created != null && created > 0
-          ? `Found ${created} options setups · scanned ${scanned ?? "?"} symbols`
-          : (body.message as string) ?? "No setups met the score threshold",
-      );
+      const modeNote =
+        typeof body.message === "string" && body.message.trim() ? body.message.trim() : null;
+      if (created != null && created > 0) {
+        setMessage(
+          modeNote
+            ? `Found ${created} options setups · scanned ${scanned ?? "?"} symbols. ${modeNote}`
+            : `Found ${created} options setups · scanned ${scanned ?? "?"} symbols`,
+        );
+      } else {
+        setMessage(modeNote ?? "No setups met the score threshold");
+      }
 
       await loadOptions();
       router.refresh();
@@ -257,31 +263,19 @@ export function OptionsSignalsView({
         </p>
       )}
 
-      <section>
-        <h2 className="mb-1 text-lg font-semibold">Top Picks</h2>
-        <p className="mb-2 text-sm text-muted">Highest profit probability from the full market scan.</p>
-        <SignalsToolbar
-          sort={topSort}
-          filter={topFilter}
-          onSortChange={setTopSort}
-          onFilterChange={setTopFilter}
-          resultCount={topOrdered.length}
-        />
-        {topOrdered.length > 0 ? (
-          <div className="space-y-6">
-            {topOrdered.map((row, index) => (
-              <OptionSignalCard key={row.id} row={row} rank={index + 1} />
-            ))}
-          </div>
-        ) : (
-          <p className="text-sm text-muted">No picks match your filters.</p>
-        )}
-      </section>
+      <div className="rounded-xl border border-emerald-500/35 bg-emerald-500/10 px-4 py-3">
+        <p className="text-sm font-semibold text-emerald-200">Capital-first options</p>
+        <p className="mt-1 text-xs leading-relaxed text-muted">
+          Atlas prioritizes contracts under <strong className="text-foreground">$100</strong> until
+          it has proven a real options win rate (15+ graded picks at ≥55%). The goal is to keep
+          money in your pocket while the model learns — not to push expensive contracts early.
+        </p>
+      </div>
 
       <section>
         <h2 className="mb-1 text-lg font-semibold">Under $100 Per Contract</h2>
         <p className="mb-2 text-sm text-muted">
-          Same scoring criteria — options that cost $100 or less to open one contract.
+          Primary board — one contract costs $100 or less. Ranked by profit probability.
         </p>
         <SignalsToolbar
           sort={budgetSort}
@@ -298,8 +292,32 @@ export function OptionsSignalsView({
           </div>
         ) : (
           <div className="rounded-xl border border-dashed border-border bg-surface/50 p-6 text-center text-sm text-muted">
-            No budget picks match your filters.
+            No budget picks match your filters — run a deep scan during market hours.
           </div>
+        )}
+      </section>
+
+      <section>
+        <h2 className="mb-1 text-lg font-semibold">All scanned picks</h2>
+        <p className="mb-2 text-sm text-muted">
+          Full scan results. While Atlas is still proving itself, deep scan saves under-$100
+          contracts first.
+        </p>
+        <SignalsToolbar
+          sort={topSort}
+          filter={topFilter}
+          onSortChange={setTopSort}
+          onFilterChange={setTopFilter}
+          resultCount={topOrdered.length}
+        />
+        {topOrdered.length > 0 ? (
+          <div className="space-y-6">
+            {topOrdered.map((row, index) => (
+              <OptionSignalCard key={row.id} row={row} rank={index + 1} />
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-muted">No picks match your filters.</p>
         )}
       </section>
     </div>

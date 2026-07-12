@@ -165,6 +165,15 @@ class SignalService:
         )
         if not budget_only:
             rows = [r for r in rows if is_options_fresh(r)]
+            # Prefer under-$100 contracts first so the board protects capital by default.
+            rows.sort(
+                key=lambda r: (
+                    1 if self._is_budget_row(r) else 0,
+                    float((r.get("scoring_snapshot") or {}).get("profit_probability") or 0),
+                    float(r.get("opportunity_score") or 0),
+                ),
+                reverse=True,
+            )
             return rows[:limit]
 
         budget_rows = [row for row in rows if self._is_budget_row(row) and is_options_fresh(row)]
