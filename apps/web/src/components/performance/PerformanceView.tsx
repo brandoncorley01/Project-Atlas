@@ -115,6 +115,7 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
   const [dataSource, setDataSource] = useState<"api" | "direct" | null>(null);
   const [atlasExpanded, setAtlasExpanded] = useState(false);
   const [showMyGraded, setShowMyGraded] = useState(false);
+  const [showAtlasGraded, setShowAtlasGraded] = useState(false);
   const didBootstrap = useRef(false);
   const syncInFlight = useRef(false);
 
@@ -354,7 +355,10 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
 
   const userPendingBySector = useMemo(() => groupBySector(userPending), [userPending]);
   const userGradedBySector = useMemo(() => groupBySector(userGraded), [userGraded]);
-  const atlasBySector = useMemo(() => groupBySector(atlasPicks), [atlasPicks]);
+  const atlasPending = useMemo(() => pendingOnly(atlasPicks), [atlasPicks]);
+  const atlasGraded = useMemo(() => gradedOnly(atlasPicks), [atlasPicks]);
+  const atlasPendingBySector = useMemo(() => groupBySector(atlasPending), [atlasPending]);
+  const atlasGradedBySector = useMemo(() => groupBySector(atlasGraded), [atlasGraded]);
 
   const laneStats = useMemo(() => {
     function stats(rows: PerformanceEntry[]) {
@@ -391,8 +395,12 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
       if (res.ok) {
         const resolved = body.resolved ?? 0;
         setMessage(
-          resolved > 0
-            ? `Auto-graded ${resolved} settled pick(s) across all sectors`
+          resolved > 0 || (body.scratched_stale ?? 0) > 0
+            ? `Auto-graded ${resolved} settled pick(s)`
+              + ((body.scratched_stale ?? 0) > 0
+                ? `; cleared ${body.scratched_stale} stale open pick(s)`
+                : "")
+              + " across all sectors"
             : "No new grades ready — games/expirations still open",
         );
         await refreshSummary();
@@ -596,26 +604,29 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
         >
           <p className="text-xs font-semibold uppercase tracking-wide text-sky-300">Atlas scan picks</p>
           <p className="mt-1 text-sm text-muted">
-            Auto-tracked for learning — not shown in your waiting list
+            Open count shrinks as games finish and grade — lifetime history stays for learning
           </p>
           <div className="mt-3 flex flex-wrap gap-4 text-sm">
             <span>
-              <strong className="text-2xl text-foreground">{laneStats.atlas.total}</strong>
-              <span className="ml-1 text-muted">tracked</span>
+              <strong className="text-2xl text-sky-200">{laneStats.atlas.pending}</strong>
+              <span className="ml-1 text-muted">open</span>
             </span>
             {laneStats.atlas.winRate != null && (
               <span className="text-muted">
                 Win rate <strong className="text-foreground">{laneStats.atlas.winRate}%</strong>
               </span>
             )}
-            {laneStats.atlas.pending > 0 && (
-              <span className="text-muted">
-                <strong className="text-sky-300">{laneStats.atlas.pending}</strong> open
-              </span>
-            )}
+            <span className="text-muted">
+              <strong className="text-foreground">{laneStats.atlas.graded}</strong> graded
+            </span>
+            <span className="text-muted text-xs self-end">
+              {laneStats.atlas.total} lifetime
+            </span>
           </div>
           <p className="mt-3 text-xs font-medium text-sky-300">
-            {atlasExpanded ? "Hide Atlas scan history ↑" : `Show all ${laneStats.atlas.total} Atlas scan picks ↓`}
+            {atlasExpanded
+              ? "Hide Atlas open picks ↑"
+              : `Show ${laneStats.atlas.pending} open Atlas pick${laneStats.atlas.pending === 1 ? "" : "s"} ↓`}
           </p>
         </button>
       </section>
@@ -679,28 +690,66 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
       )}
 
       {atlasExpanded && (
-        <PickOriginLane
-          title="Atlas scan picks"
-          subtitle="Board picks Atlas presented — auto-graded for learning; not mixed into your waiting list"
-          accent="sky"
-          picksBySector={atlasBySector}
-          summary={summary}
-          coachInsight={coachInsight}
-          gradingSector={gradingSector}
-          onGrade={(id) => void runResolveSector(id)}
-          onUpdated={refreshSummary}
-          previewLimit={ATLAS_PREVIEW}
-          emptyHint="Run a market scan on Sports, Stocks, or Options — Atlas auto-tracks every ranked signal here."
-        />
+        <>
+          <PickOriginLane
+            title="Atlas open picks"
+            subtitle="Still awaiting a final grade — shrinks as events conclude"
+            accent="sky"
+            picksBySector={atlasPendingBySector}
+            summary={summary}
+            coachInsight={coachInsight}
+            gradingSector={gradingSector}
+            onGrade={(id) => void runResolveSector(id)}
+            onUpdated={refreshSummary}
+            previewLimit={ATLAS_PREVIEW}
+            emptyHint="No open Atlas picks — finished board picks have been graded or cleared."
+          />
+          {atlasGraded.length > 0 && (
+            <section className="rounded-xl border border-sky-500/25 bg-sky-500/5 p-4">
+              <button
+                type="button"
+                onClick={() => setShowAtlasGraded((v) => !v)}
+                className="flex w-full items-center justify-between text-left"
+              >
+                <div>
+                  <h2 className="text-base font-semibold">Atlas graded history</h2>
+                  <p className="mt-0.5 text-sm text-muted">
+                    {atlasGraded.length} settled board pick{atlasGraded.length === 1 ? "" : "s"} kept for learning
+                  </p>
+                </div>
+                <span className="text-xs font-medium text-sky-300">
+                  {showAtlasGraded ? "Hide ↑" : "Show ↓"}
+                </span>
+              </button>
+              {showAtlasGraded && (
+                <div className="mt-4">
+                  <PickOriginLane
+                    title="Atlas graded history"
+                    subtitle="Lifetime/loss/scratch outcomes that train future scans"
+                    accent="sky"
+                    picksBySector={atlasGradedBySector}
+                    summary={summary}
+                    coachInsight={coachInsight}
+                    gradingSector={gradingSector}
+                    onGrade={(id) => void runResolveSector(id)}
+                    onUpdated={refreshSummary}
+                    emptyHint="No graded Atlas picks yet."
+                    hideHeader
+                  />
+                </div>
+              )}
+            </section>
+          )}
+        </>
       )}
 
       <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Your picks" value={String(laneStats.user.total)} />
+        <StatCard label="Your open picks" value={String(laneStats.user.pending)} />
         <StatCard
           label="Your win rate"
           value={laneStats.user.winRate != null ? `${laneStats.user.winRate}%` : "—"}
         />
-        <StatCard label="Atlas scans tracked" value={String(laneStats.atlas.total)} />
+        <StatCard label="Atlas open picks" value={String(laneStats.atlas.pending)} />
         <StatCard
           label="Atlas win rate"
           value={laneStats.atlas.winRate != null ? `${laneStats.atlas.winRate}%` : "—"}

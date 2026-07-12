@@ -41,11 +41,13 @@ class OutcomeResolverService:
 
     async def resolve_pending(self, *, limit: int = 40, module: str | None = None) -> dict[str, Any]:
         """Grade expired signals that have no logged outcome yet."""
-        empty = {"resolved": 0, "skipped": 0, "pending": 0}
+        empty = {"resolved": 0, "skipped": 0, "pending": 0, "scratched_stale": 0}
         by_module: dict[str, dict[str, Any]] = {}
 
         if module in (None, "sports"):
             sports = await self._resolve_sports(limit=limit if module == "sports" else limit)
+            stale = await self._prune_stale_sports_pending(limit=max(60, limit))
+            sports = {**sports, "scratched_stale": stale}
             by_module["sports"] = sports
         else:
             sports = empty
@@ -74,14 +76,125 @@ class OutcomeResolverService:
         resolved = sports["resolved"] + stocks["resolved"] + options["resolved"] + parlays["resolved"]
         skipped = sports["skipped"] + stocks["skipped"] + options["skipped"] + parlays["skipped"]
         pending = sports["pending"] + stocks["pending"] + options["pending"] + parlays["pending"]
+        scratched = int(sports.get("scratched_stale") or 0)
 
         return {
             "resolved": resolved,
             "skipped": skipped,
-            "pending": pending,
+            "pending": max(0, pending - scratched),
+            "scratched_stale": scratched,
             "module": module,
             "by_module": by_module,
         }
+
+    async def _prune_stale_sports_pending(self, *, limit: int = 80) -> int:
+        """Clear open Atlas/user sports pending after the event is long over and ungradable.
+
+        Keeps the Performance 'open' count shrinking as games expire — scratches do not
+        count as wins/losses for learning win-rate.
+        """
+        rows = await self.db.select(
+            "signal_performance",
+            filters={
+                "user_id": f"eq.{self.user_id}",
+                "module": "eq.sports",
+                "outcome": "eq.pending",
+            },
+            order="logged_at.asc",
+            limit=limit,
+        )
+        if not rows:
+            return 0
+
+        now = datetime.now(UTC)
+        # After kickoff + this many hours with no gradeable final → scratch out of "open".
+        stale_after_h = 36.0
+        scratched = 0
+
+        for row in rows:
+            sid = str(row.get("signal_id") or "")
+            if not sid:
+                continue
+            snap = row.get("scoring_snapshot") if isinstance(row.get("scoring_snapshot"), dict) else {}
+            event_start = snap.get("event_start")
+            status = None
+            try:
+                sig_rows = await self.db.select(
+                    "sports_signals",
+                    filters={"id": f"eq.{sid}", "user_id": f"eq.{self.user_id}"},
+                    limit=1,
+                )
+                if sig_rows:
+                    event_start = event_start or sig_rows[0].get("event_start")
+                    status = str(sig_rows[0].get("status") or "")
+                    nested = sig_rows[0].get("scoring_snapshot")
+                    if isinstance(nested, dict) and not snap.get("event_start"):
+                        event_start = event_start or nested.get("event_start")
+            except Exception as exc:
+                logger.debug("Stale prune signal lookup %s: %s", sid[:8], exc)
+
+            hours_past: float | None = None
+            if event_start:
+                try:
+                    text = str(event_start).replace("Z", "+00:00")
+                    start = datetime.fromisoformat(text)
+                    if start.tzinfo is None:
+                        start = start.replace(tzinfo=UTC)
+                    hours_past = (now - start.astimezone(UTC)).total_seconds() / 3600
+                except (TypeError, ValueError):
+                    hours_past = None
+
+            # Undated Insight leftovers: if signal already expired/closed, clear after 3 days on books.
+            if hours_past is None:
+                logged = str(row.get("logged_at") or "")
+                age_h = None
+                if logged:
+                    try:
+                        text = logged.replace("Z", "+00:00")
+                        logged_dt = datetime.fromisoformat(text)
+                        if logged_dt.tzinfo is None:
+                            logged_dt = logged_dt.replace(tzinfo=UTC)
+                        age_h = (now - logged_dt.astimezone(UTC)).total_seconds() / 3600
+                    except (TypeError, ValueError):
+                        age_h = None
+                if status in {"expired", "closed"} and age_h is not None and age_h >= 72:
+                    hours_past = age_h
+                else:
+                    continue
+
+            if hours_past is None or hours_past < stale_after_h:
+                continue
+
+            try:
+                await self.performance.log_outcome(
+                    module="sports",
+                    signal_id=sid,
+                    outcome="scratch",
+                    return_pct=0.0,
+                    resolution_source="auto_sports_stale",
+                    signal_snapshot={
+                        **snap,
+                        "stale_cleared": True,
+                        "stale_hours_past": round(hours_past, 1),
+                        "graded_by": "auto_sports_stale",
+                    },
+                )
+                if status in {"active", "expired"}:
+                    try:
+                        await self.db.update(
+                            "sports_signals",
+                            {"id": f"eq.{sid}"},
+                            {"status": "closed"},
+                        )
+                    except Exception:
+                        pass
+                scratched += 1
+            except Exception as exc:
+                logger.warning("Stale sports prune %s: %s", sid[:8], exc)
+
+        if scratched:
+            logger.info("Pruned %s stale pending sports picks from open count", scratched)
+        return scratched
 
     async def _graded_ids(self, module: str | None = None) -> set[str]:
         filters: dict[str, str] = {"user_id": f"eq.{self.user_id}"}

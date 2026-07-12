@@ -458,6 +458,7 @@ def _catalog_to_row(
             "related_news": item.get("_related_news") or [],
             "odds_approximate": False,
             "event_id": item.get("event_id"),
+            "event_start": item.get("event_start"),
             "sport": str(item.get("sport") or "Sports")[:40],
             "bet_type": bet_type,
             "sport_key": item.get("sport_key"),
