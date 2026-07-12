@@ -45,104 +45,135 @@ DEFAULT_SPORT_KEYS = (
     "tennis_wta_wimbledon",
 )
 
-# Prefer fetching these first (ordering only when scope=full; allowlist when scope=priority).
+# Prefer fetching these first. US majors lead; international is secondary fill.
 PRIORITY_SPORT_KEYS = (
     "americanfootball_nfl",
     "americanfootball_nfl_preseason",
     "americanfootball_ncaaf",
-    "americanfootball_cfl",
+    "baseball_mlb",
+    "baseball_mlb_preseason",
     "basketball_nba",
     "basketball_wnba",
     "basketball_ncaab",
     "basketball_wncaab",
-    "baseball_mlb",
-    "baseball_mlb_preseason",
     "icehockey_nhl",
-    "soccer_fifa_world_cup",
+    "soccer_usa_mls",
+    "mma_mixed_martial_arts",
+    "boxing_boxing",
+    "americanfootball_cfl",
     "soccer_epl",
+    "soccer_fifa_world_cup",
+    "soccer_uefa_champs_league",
     "soccer_spain_la_liga",
     "soccer_germany_bundesliga",
     "soccer_italy_serie_a",
     "soccer_france_ligue_one",
-    "soccer_uefa_champs_league",
     "soccer_uefa_europa_league",
-    "soccer_usa_mls",
     "soccer_mexico_ligamx",
-    "soccer_brazil_campeonato",
-    "tennis_atp_wimbledon",
-    "tennis_wta_wimbledon",
     "tennis_atp_us_open",
     "tennis_wta_us_open",
-    "mma_mixed_martial_arts",
-    "boxing_boxing",
+    "tennis_atp_wimbledon",
+    "tennis_wta_wimbledon",
     "golf_pga_championship",
     "golf_the_open_championship",
-    "cricket_international_t20",
-    "rugbyleague_nrl",
-    "aussierules_afl",
 )
 
 ESSENTIAL_SUMMER_KEYS = frozenset(
-    {"baseball_mlb", "basketball_wnba", "soccer_usa_mls", "mma_mixed_martial_arts"}
+    {
+        "baseball_mlb",
+        "basketball_wnba",
+        "soccer_usa_mls",
+        "mma_mixed_martial_arts",
+        "americanfootball_nfl_preseason",
+    }
 )
 ESSENTIAL_WINTER_KEYS = frozenset(
-    {"basketball_nba", "icehockey_nhl", "americanfootball_nfl"}
+    {"basketball_nba", "icehockey_nhl", "americanfootball_nfl", "americanfootball_ncaaf"}
 )
 
 # Live Fetch always targets these US-book leagues first (FanDuel/DraftKings boards).
-# Order = credit priority; cap via ODDS_MAX_SPORTS_PER_SCAN (default 4).
+# Order = credit priority; cap via ODDS_MAX_SPORTS_PER_SCAN.
 CORE_US_LIVE_KEYS = (
     "baseball_mlb",
     "basketball_wnba",
     "basketball_nba",
     "americanfootball_nfl",
+    "americanfootball_nfl_preseason",
+    "americanfootball_ncaaf",
     "icehockey_nhl",
     "soccer_usa_mls",
     "mma_mixed_martial_arts",
-    "americanfootball_nfl_preseason",
+    "boxing_boxing",
 )
 
 # Only pull lines from American retail books — same credit cost, playable numbers.
 US_BOOKMAKER_KEYS = "fanduel,draftkings"
 
-# Sport *families* where tournaments rotate weekly (tennis, combat sports, golf)
-# or where many leagues run in parallel (soccer). The Odds API assigns a fresh
-# key per tournament/league, so an exact-key allowlist always misses most of the
-# book. Include every active key in these families and pin them so a per-scan
-# cap can't drop them.
-PRIORITY_SPORT_PREFIXES = frozenset(
-    {"tennis", "mma", "boxing", "golf", "soccer", "cricket"}
+# Sport families whose Odds API keys rotate (combat). Do NOT include soccer/tennis —
+# those prefixes pin every foreign league and crowd out MLB/WNBA/NFL on the board.
+PRIORITY_SPORT_PREFIXES = frozenset({"mma", "boxing"})
+
+# Exact keys treated as the American FanDuel/DK board for ranking / diversification.
+US_MARKET_SPORT_KEYS = frozenset(
+    {
+        "americanfootball_nfl",
+        "americanfootball_nfl_preseason",
+        "americanfootball_ncaaf",
+        "americanfootball_cfl",
+        "baseball_mlb",
+        "baseball_mlb_preseason",
+        "basketball_nba",
+        "basketball_wnba",
+        "basketball_ncaab",
+        "basketball_wncaab",
+        "icehockey_nhl",
+        "soccer_usa_mls",
+        "mma_mixed_martial_arts",
+        "boxing_boxing",
+    }
 )
+US_MARKET_SPORT_PREFIXES = (
+    "americanfootball_",
+    "baseball_mlb",
+    "basketball_nba",
+    "basketball_wnba",
+    "basketball_ncaab",
+    "basketball_wncaab",
+    "icehockey_nhl",
+    "soccer_usa_",
+    "mma_",
+    "boxing_",
+)
+
+
+def is_us_market_sport_key(sport_key: str | None) -> bool:
+    key = str(sport_key or "").lower()
+    if not key:
+        return False
+    if key in US_MARKET_SPORT_KEYS:
+        return True
+    return any(key.startswith(p) or key == p.rstrip("_") for p in US_MARKET_SPORT_PREFIXES)
+
 
 SUMMER_PRIORITY_KEYS = (
     "baseball_mlb",
     "basketball_wnba",
     "soccer_usa_mls",
-    "soccer_fifa_world_cup",
-    "soccer_epl",
-    "soccer_uefa_champs_league",
-    "soccer_spain_la_liga",
-    "soccer_germany_bundesliga",
-    "soccer_italy_serie_a",
-    "soccer_france_ligue_one",
-    "soccer_mexico_ligamx",
-    "soccer_brazil_campeonato",
-    "tennis_atp_wimbledon",
-    "tennis_wta_wimbledon",
-    "tennis_atp_us_open",
-    "tennis_wta_us_open",
     "mma_mixed_martial_arts",
     "boxing_boxing",
-    "golf_pga_championship",
-    "golf_the_open_championship",
     "americanfootball_nfl_preseason",
     "americanfootball_ncaaf",
     "americanfootball_cfl",
-    "cricket_international_t20",
+    "basketball_nba",
+    "icehockey_nhl",
+    "soccer_epl",
+    "soccer_fifa_world_cup",
+    "soccer_uefa_champs_league",
+    "tennis_atp_us_open",
+    "tennis_wta_us_open",
+    "golf_pga_championship",
     "basketball_ncaab",
     "basketball_wncaab",
-    "rugbyleague_nrl",
-    "aussierules_afl",
 )
 
 WINTER_PRIORITY_KEYS = (
@@ -576,24 +607,26 @@ def _seasonal_key_order(keys: tuple[str, ...]) -> tuple[str, ...]:
     month = datetime.now(UTC).month
     preferred = SUMMER_PRIORITY_KEYS if month in (4, 5, 6, 7, 8, 9) else WINTER_PRIORITY_KEYS
     rank = {k: i for i, k in enumerate(preferred)}
+    # US book majors first — foreign soccer/tennis used to outrank MLB/WNBA.
     family_boost = {
-        "tennis": 0,
-        "soccer": 1,
-        "mma": 2,
-        "boxing": 2,
-        "golf": 3,
-        "cricket": 4,
-        "baseball": 5,
-        "basketball": 6,
-        "americanfootball": 7,
-        "icehockey": 8,
+        "baseball": 0,
+        "basketball": 1,
+        "americanfootball": 2,
+        "icehockey": 3,
+        "mma": 4,
+        "boxing": 4,
+        "soccer": 5,
+        "golf": 6,
+        "tennis": 7,
+        "cricket": 8,
     }
 
-    def _sort_key(k: str) -> tuple[int, int, str]:
+    def _sort_key(k: str) -> tuple[int, int, int, str]:
+        us = 0 if is_us_market_sport_key(k) else 1
         if k in rank:
-            return (0, rank[k], k)
+            return (us, 0, rank[k], k)
         fam = _sport_family(k)
-        return (1, family_boost.get(fam, 50), k)
+        return (us, 1, family_boost.get(fam, 50), k)
 
     return tuple(sorted(keys, key=_sort_key))
 

@@ -125,7 +125,26 @@ def composite_score(row: dict[str, Any]) -> float:
     stats_support = float(snap.get("stats_support") or 0)
     today_boost = 4.0 if is_calendar_today(row) else 0.0
     insight_boost = 3.0 if insight else 0.0
-    return opp + boost + edge * 0.35 - soon_penalty + stats_support * 0.2 + today_boost + insight_boost
+    sport_key = str(snap.get("sport_key") or lm.get("sport_key") or "").lower()
+    us_boost = 0.0
+    if sport_key:
+        try:
+            from app.providers.sports.odds_api import is_us_market_sport_key
+
+            if is_us_market_sport_key(sport_key):
+                us_boost = 5.0
+        except Exception:
+            us_boost = 0.0
+    return (
+        opp
+        + boost
+        + edge * 0.35
+        - soon_penalty
+        + stats_support * 0.2
+        + today_boost
+        + insight_boost
+        + us_boost
+    )
 
 
 def sort_for_display(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
