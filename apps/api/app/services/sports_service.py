@@ -371,7 +371,16 @@ class SportsRefreshService:
             )
             for row in active:
                 snap = row.get("scoring_snapshot") or {}
-                if str(snap.get("source") or "") in {"openai_web", "user_entry"}:
+                lm = row.get("line_movement") or {}
+                source = str(snap.get("source") or lm.get("source") or "")
+                if (
+                    source in {"openai_web", "user_entry"}
+                    or bool(snap.get("openai_web"))
+                    or bool(lm.get("openai_web"))
+                    or bool(snap.get("user_entry"))
+                    or str(row.get("pick_source") or "") in {"openai_web", "user_entry"}
+                    or str(snap.get("pick_origin") or "") == "user"
+                ):
                     continue
                 sid = row.get("id")
                 if not sid:

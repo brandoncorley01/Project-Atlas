@@ -27,7 +27,6 @@ from app.services.sports_ranking import (
     filter_near_term,
     is_calendar_today,
     is_futures_row,
-    is_within_horizon,
     sort_for_display,
 )
 import re
@@ -38,8 +37,10 @@ def _is_openai_web_row(row: dict) -> bool:
     lm = row.get("line_movement") or {}
     return (
         bool(snap.get("openai_web"))
+        or bool(lm.get("openai_web"))
         or str(snap.get("source") or "") == "openai_web"
         or str(lm.get("source") or "") == "openai_web"
+        or str(row.get("pick_source") or "") == "openai_web"
     )
 
 
@@ -84,13 +85,8 @@ def _sports_window_match(row: dict, window: str) -> bool:
         )
     if window == "futures":
         return is_futures_row(row) or hours > WEEK_HOURS
-    # window == "all" (and anything else)
-    return (
-        is_within_horizon(row)
-        or is_futures_row(row)
-        or _is_openai_web_row(row)
-        or _is_user_entry_row(row)
-    )
+    # window == "all" — every listable row stays on the board
+    return True
 
 
 def _safe_float(value: object, default: float = 0.0) -> float:
@@ -263,6 +259,33 @@ class SignalService:
             rows = filter_by_category(rows, category)
         rows = dedupe_one_side_per_market(rows)
         rows = sort_for_display(rows)
+        # Never truncate away Atlas Insight / player props when applying the board limit.
+        if offset == 0 and limit > 0 and len(rows) > limit:
+            insight = [r for r in rows if _is_openai_web_row(r) or _is_user_entry_row(r)]
+            props = [
+                r
+                for r in rows
+                if (
+                    str(r.get("bet_type") or "").lower() == "player_prop"
+                    or bool((r.get("scoring_snapshot") or {}).get("is_player_prop"))
+                )
+                and not _is_openai_web_row(r)
+                and not _is_user_entry_row(r)
+            ]
+            reserved: list[dict] = []
+            seen_ids: set[str] = set()
+            for r in insight + props:
+                rid = str(r.get("id") or "")
+                if rid and rid in seen_ids:
+                    continue
+                if rid:
+                    seen_ids.add(rid)
+                reserved.append(r)
+                if len(reserved) >= max(40, limit // 2):
+                    break
+            rest = [r for r in rows if str(r.get("id") or "") not in seen_ids]
+            rows = (reserved + rest)[:limit]
+            return rows
         return rows[offset : offset + limit]
 
     async def get_sports(self, signal_id: str) -> dict | None:

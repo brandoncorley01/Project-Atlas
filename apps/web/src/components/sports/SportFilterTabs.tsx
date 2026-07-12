@@ -23,7 +23,7 @@ export function SportFilterTabs({
   return (
     <FilterTabs
       label="Filter by league"
-      hint="All leagues stay available — sorted by what's in season. Empty tabs mean no +EV play yet; Fetch live odds to refresh."
+      hint="All leagues stay available. Counts include Atlas Insight props after you run Insight."
       allLabel="All leagues"
       accent="violet"
       activeId={activeSport}

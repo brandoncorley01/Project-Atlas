@@ -7,7 +7,8 @@ export type SportsSortKey =
   | "ev"
   | "confidence"
   | "risk_low"
-  | "openai";
+  | "openai"
+  | "player_props";
 export type SportsFilterKey =
   | "all"
   | "moneyline"
@@ -124,21 +125,24 @@ function compositeRank(row: SportsSignal): number {
 
 export function filterByWindow(items: SportsSignal[], window: SportsWindowKey): SportsSignal[] {
   const started = items.filter((i) => (i.hours_until_start ?? 0) <= 0 && i.hours_until_start != null);
-  const undatedOpenAi = (i: SportsSignal) =>
-    (isOpenAiSportsPick(i) || isUserSportsPick(i)) && (i.hours_until_start == null || !i.event_start);
+  // Mirror API: Atlas Insight + user-logged picks stay visible across date windows
+  // (except futures-only), whether or not they have a kickoff time.
+  const insightOrUser = (i: SportsSignal) => isOpenAiSportsPick(i) || isUserSportsPick(i);
 
   if (window === "all") {
     return items;
   }
   if (window === "today") {
-    return items.filter((i) => isSportsCalendarToday(i) || undatedOpenAi(i));
+    return items.filter((i) => isSportsCalendarToday(i) || insightOrUser(i));
   }
   if (window === "futures") {
-    return items.filter((i) => isFutures(i) || (i.hours_until_start ?? 0) > WEEK_HOURS);
+    return items.filter(
+      (i) => isFutures(i) || (i.hours_until_start ?? 0) > WEEK_HOURS || (insightOrUser(i) && isFutures(i)),
+    );
   }
   if (window === "month") {
     const upcoming = items.filter((i) => {
-      if (undatedOpenAi(i)) return true;
+      if (insightOrUser(i) && !isFutures(i)) return true;
       const h = i.hours_until_start ?? 9999;
       return (h > 0 && h <= MONTH_HOURS) || isFutures(i);
     });
@@ -146,14 +150,15 @@ export function filterByWindow(items: SportsSignal[], window: SportsWindowKey): 
   }
   if (window === "week") {
     const upcoming = items.filter((i) => {
-      if (undatedOpenAi(i)) return true;
+      if (insightOrUser(i) && !isFutures(i)) return true;
       const h = i.hours_until_start ?? 9999;
       return h > 0 && h <= WEEK_HOURS;
     });
     return [...started, ...upcoming];
   }
+  // soon (48h)
   const upcoming = items.filter((i) => {
-    if (undatedOpenAi(i)) return true;
+    if (insightOrUser(i) && !isFutures(i)) return true;
     const h = i.hours_until_start ?? 9999;
     return h > 0 && h <= NEAR_TERM_HOURS && !isFutures(i);
   });
@@ -210,6 +215,11 @@ export function sortSports(items: SportsSignal[], sort: SportsSortKey): SportsSi
         const ao = isOpenAiSportsPick(a) ? 1 : 0;
         const bo = isOpenAiSportsPick(b) ? 1 : 0;
         return bo - ao || compositeRank(b) - compositeRank(a);
+      }
+      case "player_props": {
+        const ap = isPlayerPropPick(a) ? 1 : 0;
+        const bp = isPlayerPropPick(b) ? 1 : 0;
+        return bp - ap || compositeRank(b) - compositeRank(a);
       }
       default:
         return 0;

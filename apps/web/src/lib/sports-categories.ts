@@ -10,6 +10,8 @@ export interface SportsCategoryMeta {
 export const CATEGORY_SLUG_LABELS: Record<string, string> = {
   starting_soon: "Live Soon",
   top_picks: "Top Picks",
+  atlas_insight: "Insight",
+  player_props: "Props",
   best_edge: "Best Edge",
   highest_ev: "Highest EV",
   most_likely: "Most Likely",

@@ -73,10 +73,16 @@ export function SportsSignalsView({
   const displayedItems = useMemo(() => {
     let list = dedupeOneSidePerMarket(items);
     list = filterByWindow(list, window);
+    // League filter is applied server-side when activeSport is set; keep a client
+    // pass so counts stay consistent if the API payload is wider than the tab.
     list = filterBySport(list, activeSport);
-    list = filterSports(list, filter);
+    // Insight / Props categories already define membership — don't let a leftover
+    // bet-type filter wipe the board.
+    if (activeCategory !== "atlas_insight" && activeCategory !== "player_props") {
+      list = filterSports(list, filter);
+    }
     return sortSports(list, sort);
-  }, [items, activeSport, filter, sort, window]);
+  }, [items, activeCategory, activeSport, filter, sort, window]);
 
   const loadCategories = useCallback(async (token?: string) => {
     const apiUrl = getApiUrl();
@@ -90,10 +96,11 @@ export function SportsSignalsView({
   }, []);
 
   const loadItems = useCallback(
-    async (token?: string, category?: string | null) => {
+    async (token?: string, category?: string | null, sport?: string | null) => {
       const apiUrl = getApiUrl();
-      const params = new URLSearchParams({ limit: "100", window });
+      const params = new URLSearchParams({ limit: "200", window });
       if (category) params.set("category", category);
+      if (sport) params.set("sport", sport);
       const res = await fetch(`${apiUrl}/signals/sports?${params}`, {
         headers: apiRequestHeaders(token),
         cache: "no-store",
@@ -111,10 +118,13 @@ export function SportsSignalsView({
     setWindow(next);
     const token = await getToken();
     const apiUrl = getApiUrl();
-    const params = new URLSearchParams({ limit: "100", window: next });
+    const params = new URLSearchParams({ limit: "200", window: next });
     if (activeCategory) params.set("category", activeCategory);
+    if (activeSport) params.set("sport", activeSport);
     const res = await fetch(`${apiUrl}/signals/sports?${params}`, {
       headers: apiRequestHeaders(token),
+      cache: "no-store",
+      credentials: usesBffProxy() ? "include" : "same-origin",
     });
     if (res.ok) {
       const data = await res.json();
@@ -151,8 +161,25 @@ export function SportsSignalsView({
   async function handleCategoryChange(slug: string | null) {
     setActiveCategory(slug);
     setActiveSport(null);
+    // Keep bet-type filter aligned so Insight/Props category isn't double-filtered away.
+    if (slug === "atlas_insight") {
+      setFilter("openai");
+      setSort("openai");
+    } else if (slug === "player_props") {
+      setFilter("player_props");
+      setSort("player_props");
+    } else {
+      // Edge metrics should not hide Insight via a leftover bet-type filter.
+      setFilter("all");
+    }
     const token = await getToken();
-    await loadItems(token, slug);
+    await loadItems(token, slug, null);
+  }
+
+  async function handleSportChange(sport: string | null) {
+    setActiveSport(sport);
+    const token = await getToken();
+    await loadItems(token, activeCategory, sport);
   }
 
   async function refreshSports(mode: "scan" | "live" | "rescore") {
@@ -252,16 +279,20 @@ export function SportsSignalsView({
         (body.message as string | undefined) ??
           `Atlas Insight added ${created} picks (0 Odds credits)`,
       );
-      // Show Insight results immediately — widen window and focus the filter.
+      // Show Insight results immediately — widen window and focus Insight + Props.
       setWindow("all");
       setFilter("openai");
       setSort("openai");
       setActiveSport(null);
-      setActiveCategory(null);
+      setActiveCategory("atlas_insight");
       await Promise.all([
         loadCategories(token),
         (async () => {
-          const params = new URLSearchParams({ limit: "100", window: "all" });
+          const params = new URLSearchParams({
+            limit: "200",
+            window: "all",
+            category: "atlas_insight",
+          });
           const listRes = await fetch(`${apiUrl}/signals/sports?${params}`, {
             headers: apiRequestHeaders(token),
             cache: "no-store",
@@ -372,13 +403,13 @@ export function SportsSignalsView({
       <SportsCategoryTabs
         categories={categories}
         activeSlug={activeCategory}
-        onSelect={handleCategoryChange}
+        onSelect={(slug) => void handleCategoryChange(slug)}
       />
 
       <SportFilterTabs
         items={items}
         activeSport={activeSport}
-        onSelect={setActiveSport}
+        onSelect={(sport) => void handleSportChange(sport)}
         extraLeagues={oddsStatus?.league_catalog ?? oddsStatus?.near_term_leagues ?? []}
       />
 

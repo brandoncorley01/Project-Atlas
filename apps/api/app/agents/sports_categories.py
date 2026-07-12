@@ -114,11 +114,31 @@ CATEGORY_CATALOG: dict[str, dict[str, str]] = {
             "odds-only plays still require checking injury reports before you bet."
         ),
     },
+    "atlas_insight": {
+        "title": "Atlas Insight",
+        "short_label": "Insight",
+        "description": "OpenAI-ranked FanDuel/DraftKings markets — props and game lines Atlas verified.",
+        "guide": (
+            "Atlas Insight picks are ranked from real FanDuel/DraftKings open markets using web consensus. "
+            "They include player props and game lines. Confirm the number is still posted before betting."
+        ),
+    },
+    "player_props": {
+        "title": "Player Props",
+        "short_label": "Props",
+        "description": "Player prop markets — points, hits, yards, and more from verified books.",
+        "guide": (
+            "Player Props focus on individual athlete markets. Most props on the board come from Atlas Insight "
+            "pulling FanDuel/DraftKings event odds. Filter by league above to narrow to WNBA, MLB, and others."
+        ),
+    },
 }
 
 CATEGORY_ORDER = (
     "starting_soon",
     "top_picks",
+    "atlas_insight",
+    "player_props",
     "best_edge",
     "highest_ev",
     "most_likely",
@@ -127,6 +147,30 @@ CATEGORY_ORDER = (
     "value_plays",
     "safest_plays",
 )
+
+
+def _is_openai_web(row: dict[str, Any]) -> bool:
+    snap = row.get("scoring_snapshot") or {}
+    lm = row.get("line_movement") or {}
+    return (
+        bool(snap.get("openai_web"))
+        or bool(lm.get("openai_web"))
+        or str(snap.get("source") or "") == "openai_web"
+        or str(lm.get("source") or "") == "openai_web"
+        or str(row.get("pick_source") or "") == "openai_web"
+    )
+
+
+def _is_player_prop(row: dict[str, Any]) -> bool:
+    snap = row.get("scoring_snapshot") or {}
+    bet = str(row.get("bet_type") or "").lower()
+    return (
+        bet == "player_prop"
+        or bool(snap.get("is_player_prop"))
+        or bet.startswith("player_")
+        or bet.startswith("batter_")
+        or bet.startswith("pitcher_")
+    )
 
 
 def _edge(row: dict[str, Any]) -> float:
@@ -156,15 +200,29 @@ def _sort_key_for_category(slug: str) -> Callable[[dict[str, Any]], float]:
         return lambda r: float(r.get("odds_decimal") or 0)
     if slug == "safest_plays":
         return lambda r: -float(r.get("risk_score") or 100)
+    if slug in {"atlas_insight", "player_props"}:
+        return lambda r: float(r.get("opportunity_score") or 0)
     return lambda r: float(r.get("opportunity_score") or 0)
 
 
 def categories_for_row(row: dict[str, Any]) -> list[str]:
     snap = row.get("scoring_snapshot") or {}
     stored = snap.get("categories")
+    cats: list[str] = []
     if isinstance(stored, list) and stored:
-        return [str(c) for c in stored]
-    return ["top_picks"]
+        cats = [str(c) for c in stored]
+    else:
+        cats = ["top_picks"]
+    # Always derive Insight / props membership even for older rows missing tags.
+    if _is_openai_web(row) and "atlas_insight" not in cats:
+        cats.append("atlas_insight")
+    if _is_player_prop(row) and "player_props" not in cats:
+        cats.append("player_props")
+    if _is_openai_web(row) and "value_plays" not in cats:
+        cats.append("value_plays")
+    if "top_picks" not in cats:
+        cats.append("top_picks")
+    return cats
 
 
 def tag_pool_categories(pool: list[dict[str, Any]], *, top_n: int = 8) -> None:
@@ -197,8 +255,12 @@ def tag_pool_categories(pool: list[dict[str, Any]], *, top_n: int = 8) -> None:
         edge = _edge(row)
         if sharp == "steam" and "steam_moves" not in cats:
             cats.append("steam_moves")
-        if (sharp == "value" or edge >= 2.0) and "value_plays" not in cats:
+        if (sharp == "value" or edge >= 2.0 or _is_openai_web(row)) and "value_plays" not in cats:
             cats.append("value_plays")
+        if _is_openai_web(row) and "atlas_insight" not in cats:
+            cats.append("atlas_insight")
+        if _is_player_prop(row) and "player_props" not in cats:
+            cats.append("player_props")
         if not cats:
             cats.append("top_picks")
         snap["categories"] = cats
@@ -208,7 +270,11 @@ def filter_by_category(pool: list[dict[str, Any]], slug: str) -> list[dict[str, 
     if slug not in CATEGORY_CATALOG:
         return []
     if slug == "starting_soon":
-        filtered = [r for r in pool if is_near_term(r) or "starting_soon" in categories_for_row(r)]
+        filtered = [
+            r
+            for r in pool
+            if is_near_term(r) or "starting_soon" in categories_for_row(r) or _is_openai_web(r)
+        ]
     elif slug == "steam_moves":
         filtered = [r for r in pool if r.get("sharp_indicator") == "steam" or "steam_moves" in categories_for_row(r)]
     elif slug == "value_plays":
@@ -218,9 +284,27 @@ def filter_by_category(pool: list[dict[str, Any]], slug: str) -> list[dict[str, 
             if "value_plays" in categories_for_row(r)
             or r.get("sharp_indicator") == "value"
             or _edge(r) >= 2.0
+            or _is_openai_web(r)
         ]
+    elif slug == "atlas_insight":
+        filtered = [r for r in pool if _is_openai_web(r) or "atlas_insight" in categories_for_row(r)]
+    elif slug == "player_props":
+        filtered = [r for r in pool if _is_player_prop(r) or "player_props" in categories_for_row(r)]
+    elif slug == "top_picks":
+        filtered = [r for r in pool if "top_picks" in categories_for_row(r) or _is_openai_web(r)]
+        if not filtered:
+            filtered = list(pool)
     else:
+        # best_edge / highest_ev / etc. — include Insight so props don't vanish from edge boards
         filtered = [r for r in pool if slug in categories_for_row(r)]
+        if slug in {"best_edge", "highest_ev", "most_likely", "greatest_odds", "safest_plays"}:
+            filtered_ids = {str(r.get("id") or id(r)) for r in filtered}
+            insight = [
+                r
+                for r in pool
+                if _is_openai_web(r) and str(r.get("id") or id(r)) not in filtered_ids
+            ]
+            filtered = filtered + insight
 
     if not filtered and slug == "top_picks":
         filtered = list(pool)
@@ -241,6 +325,9 @@ def category_counts(pool: list[dict[str, Any]]) -> dict[str, int]:
                 counts[slug] += 1
     if pool and counts["top_picks"] == 0:
         counts["top_picks"] = len(pool)
+    # Derived counts always reflect live membership.
+    counts["atlas_insight"] = sum(1 for r in pool if _is_openai_web(r))
+    counts["player_props"] = sum(1 for r in pool if _is_player_prop(r))
     return counts
 
 

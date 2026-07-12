@@ -128,6 +128,11 @@ def _catalog_to_row(
             "catalog_id": item.get("id"),
             "preferred_book": item.get("book_key") or "fanduel",
             "preferred_book_title": book_title,
+            "categories": (
+                ["top_picks", "atlas_insight", "player_props", "value_plays"]
+                if bet_type == "player_prop"
+                else ["top_picks", "atlas_insight", "value_plays"]
+            ),
             "pick": {
                 "bet_type": bet_type,
                 "team_or_side": selection,
@@ -305,6 +310,9 @@ class SportsOpenAiPicksService:
                 )
 
         expired = await self._expire_openai_picks()
+        from app.agents.sports_categories import tag_pool_categories
+
+        tag_pool_categories(rows)
         saved = await self.db.insert("sports_signals", rows) if rows else []
 
         if saved:

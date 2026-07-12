@@ -15,7 +15,7 @@ export function SportsCategoryTabs({ categories, activeSlug, onSelect }: SportsC
   return (
     <FilterTabs
       label="Browse by edge metric"
-      hint="Each tab sorts plays differently — Best edge = highest advantage vs the sportsbook."
+      hint="Insight & Props keep Atlas player markets visible. Best edge ranks Odds-API edges."
       allLabel="All plays"
       accent="violet"
       activeId={activeSlug ?? null}

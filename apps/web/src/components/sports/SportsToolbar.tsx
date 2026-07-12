@@ -17,6 +17,7 @@ const SORT_OPTIONS: { value: SportsSortKey; label: string }[] = [
   { value: "soonest", label: "Starting soonest" },
   { value: "opportunity", label: "Best overall" },
   { value: "openai", label: "Atlas Insight first" },
+  { value: "player_props", label: "Player props first" },
   { value: "edge", label: "Highest edge" },
   { value: "ev", label: "Highest EV" },
   { value: "confidence", label: "Most confident" },

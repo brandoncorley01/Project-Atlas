@@ -66,7 +66,9 @@ def is_sports_listable(row: dict[str, Any]) -> bool:
     return (
         source in {"openai_web", "user_entry"}
         or bool(snap.get("openai_web"))
+        or bool(lm.get("openai_web"))
         or bool(snap.get("user_entry"))
+        or str(row.get("pick_source") or "") in {"openai_web", "user_entry"}
         or str(snap.get("pick_origin") or "") == "user"
     )
 
