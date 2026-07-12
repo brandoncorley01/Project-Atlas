@@ -340,8 +340,12 @@ export function SportsSignalsView({
   const cacheRescoreFree = oddsStatus?.cache_rescore_free ?? false;
   const cacheFresh = oddsStatus?.cache_fresh ?? false;
   const cacheNeedsLive = oddsStatus?.cache_needs_live_refresh ?? false;
-  const spendLocked = Boolean(
-    oddsStatus?.spend_locked || oddsStatus?.live_fetch_allowed === false || oddsStatus?.quota_exhausted,
+  // Auto-spend lock still allows intentional Fetch; only hard-stop when quota is gone.
+  const autoSpendLocked = Boolean(
+    oddsStatus?.spend_locked || oddsStatus?.auto_spend_allowed === false,
+  );
+  const fetchBlocked = Boolean(
+    oddsStatus?.quota_exhausted || oddsStatus?.live_fetch_allowed === false,
   );
   const busy = loading !== null;
 
@@ -399,15 +403,17 @@ export function SportsSignalsView({
           <button
             type="button"
             onClick={() => refreshSports("live")}
-            disabled={busy || spendLocked}
+            disabled={busy || fetchBlocked}
             title={
-              spendLocked
-                ? "Odds spend lock is on — Fetch is blocked to protect remaining credits. Use Rescore / Atlas Insight."
-                : "Fetch live FanDuel/DraftKings lines for US-core leagues (~2–4 Odds API credits)."
+              fetchBlocked
+                ? "Odds credits exhausted — add a new free Odds API key, then Fetch again."
+                : autoSpendLocked
+                  ? "Fetch live FanDuel/DraftKings lines (~2–4 credits). Auto-spend stays locked — Scan/Rescore remain free from cache."
+                  : "Fetch live FanDuel/DraftKings lines for US-core leagues (~2–4 Odds API credits)."
             }
             className="rounded-lg border border-violet-500/40 bg-violet-500/10 px-4 py-2 text-sm font-medium text-violet-200 hover:bg-violet-500/20 disabled:opacity-50"
           >
-            {loading === "live" ? "Fetching…" : spendLocked ? "Fetch locked" : "Fetch live odds"}
+            {loading === "live" ? "Fetching…" : "Fetch live odds"}
           </button>
           <button
             type="button"

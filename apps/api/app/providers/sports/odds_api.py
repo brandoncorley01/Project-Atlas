@@ -961,8 +961,11 @@ async def fetch_all_sports_odds(
 
     cache = _read_cache()
     spend_locked = not config.settings.odds_live_spending_allowed()
-    # Hard lock: never hit Odds live APIs — serve disk cache (even past TTL).
-    if spend_locked or cache_only:
+    # cache_only (Rescore) never spends. Spend-lock blocks automatic pulls, but
+    # explicit Fetch live odds (force_refresh) is still allowed so the board can
+    # be refreshed without unlocking global auto-spend.
+    block_live = cache_only or (spend_locked and not force_refresh)
+    if block_live:
         if not cache or not cache.get("events"):
             return [], {
                 "configured": True,
@@ -972,9 +975,14 @@ async def fetch_all_sports_odds(
                 "odds_spend_mode": config.settings.odds_spend_mode_normalized(),
                 "credits_used": 0,
                 "error": (
-                    "Odds spend lock is on (cache-only) and there is no odds cache yet. "
-                    "Set ODDS_SPEND_MODE=conservative after adding fresh keys, then Fetch once — "
-                    "or keep using Atlas Insight / Search from OpenAI."
+                    "No odds cache yet. Tap Fetch live odds once to seed FanDuel/DraftKings lines "
+                    "(uses a few Odds credits). Rescore / Scan stay free after that."
+                    if spend_locked and not force_refresh
+                    else (
+                        "Odds spend lock is on (cache-only) and there is no odds cache yet. "
+                        "Set ODDS_SPEND_MODE=conservative after adding fresh keys, then Fetch once — "
+                        "or keep using Atlas Insight / Search from OpenAI."
+                    )
                 ),
             }
         age = _cache_age_minutes(cache.get("fetched_at"))
@@ -1001,8 +1009,8 @@ async def fetch_all_sports_odds(
                 "scan_scope": "cache_only" if spend_locked else "rescore",
                 "max_sports_per_scan": config.settings.odds_max_sports_per_scan,
                 "message": (
-                    "Odds spend lock — served cached lines (0 credits). "
-                    "Use Rescore / Atlas Insight / Search."
+                    "Odds auto-spend is locked — served cached lines (0 credits). "
+                    "Tap Fetch live odds when you want a fresh slate."
                     if spend_locked
                     else None
                 ),

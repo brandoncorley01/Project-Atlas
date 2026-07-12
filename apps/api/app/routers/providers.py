@@ -144,12 +144,15 @@ async def providers_status(refresh: bool = False) -> dict:
             "spend_locked": bool(cache_status.get("spend_locked")),
             "odds_spend_mode": cache_status.get("odds_spend_mode")
             or active_settings.odds_spend_mode_normalized(),
-            "live_fetch_allowed": active_settings.odds_live_spending_allowed(),
+            # Explicit Fetch stays available even when auto-spend is cache-only.
+            "live_fetch_allowed": active_settings.odds_explicit_fetch_allowed(),
+            "auto_spend_allowed": active_settings.odds_live_spending_allowed(),
             "error": odds_error,
             "features": [
                 "multi-key failover",
                 "response cache",
-                "cache-only spend lock",
+                "cache-only auto-spend lock",
+                "explicit Fetch live odds",
                 "US-core live scan (when unlocked)",
                 "FanDuel / DraftKings lines",
                 "zero-credit rescore",

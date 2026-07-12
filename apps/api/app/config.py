@@ -128,8 +128,12 @@ class Settings(BaseSettings):
         return "normal"
 
     def odds_live_spending_allowed(self) -> bool:
-        """False when Atlas must not spend Odds API credits."""
+        """False when automatic/background Odds API calls must not spend credits."""
         return self.odds_spend_mode_normalized() != "cache_only"
+
+    def odds_explicit_fetch_allowed(self) -> bool:
+        """User-initiated Fetch live odds may spend even when auto mode is cache_only."""
+        return bool(self.odds_api_keys)
 
 
 settings = Settings()

@@ -54,8 +54,9 @@ export function OddsQuotaBanner({ status }: { status: OddsApiStatus | null }) {
   const keyCount = status.key_count ?? status.keys?.length ?? 1;
   const capacity = status.monthly_capacity ?? keyCount * 500;
   const estimate = status.estimated_live_scan_credits ?? 4;
-  const locked = Boolean(status.spend_locked || status.live_fetch_allowed === false);
+  const locked = Boolean(status.spend_locked || status.auto_spend_allowed === false);
   const exhausted = Boolean(status.quota_exhausted) || (remaining != null && remaining <= 0);
+  const fetchAllowed = status.live_fetch_allowed !== false && !exhausted;
 
   return (
     <div
@@ -68,7 +69,11 @@ export function OddsQuotaBanner({ status }: { status: OddsApiStatus | null }) {
       }`}
     >
       <p className="font-medium text-foreground">
-        {locked || exhausted ? "Zero-credit mode (Odds locked)" : "Credit conservation"}
+        {exhausted
+          ? "Odds credits exhausted"
+          : locked
+            ? "Auto-spend locked · Fetch still available"
+            : "Credit conservation"}
       </p>
       <p className="mt-1.5 text-xs leading-relaxed text-muted">
         {remaining != null ? (
@@ -80,12 +85,28 @@ export function OddsQuotaBanner({ status }: { status: OddsApiStatus | null }) {
         ) : (
           <>Checking Odds API quota… </>
         )}
-        {locked || exhausted ? (
+        {exhausted ? (
           <>
-            Live Fetch is blocked. Use <strong className="text-emerald-300">Rescore</strong> on
-            cached lines (0 credits), <strong className="text-sky-300">Atlas Insight</strong>{" "}
-            (OpenAI + cache), and Search — no Odds spend. Add new free keys later, then set{" "}
-            <code className="text-foreground">ODDS_SPEND_MODE=conservative</code> on Render.
+            Live Fetch is blocked until you add a new free Odds API key. Use{" "}
+            <strong className="text-emerald-300">Rescore</strong> on cached lines (0 credits) and{" "}
+            <strong className="text-sky-300">Atlas Insight</strong> meanwhile.
+          </>
+        ) : locked ? (
+          <>
+            Automatic Odds pulls stay off to protect credits.{" "}
+            {fetchAllowed ? (
+              <>
+                <strong className="text-amber-300">Fetch live odds</strong> still works when you want
+                a fresh slate (~{estimate} credits). Prefer{" "}
+                <strong className="text-emerald-300">Rescore</strong> /{" "}
+                <strong className="text-sky-300">Atlas Insight</strong> when the cache is warm.
+              </>
+            ) : (
+              <>
+                Use <strong className="text-emerald-300">Rescore</strong> and{" "}
+                <strong className="text-sky-300">Atlas Insight</strong> (0 Odds spend).
+              </>
+            )}
           </>
         ) : status.cache_rescore_free ? (
           <>

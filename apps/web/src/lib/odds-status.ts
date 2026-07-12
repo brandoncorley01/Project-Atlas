@@ -34,6 +34,7 @@ export interface OddsApiStatus {
   spend_locked?: boolean;
   odds_spend_mode?: string;
   live_fetch_allowed?: boolean;
+  auto_spend_allowed?: boolean;
   error?: string | null;
 }
 
