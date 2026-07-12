@@ -229,6 +229,12 @@ export function SportsSignalsView({
       const kept = body.signals_kept as boolean | undefined;
       const creditsUsed = body.credits_used as number | undefined;
       const cacheUsed = body.cache_used as boolean | undefined;
+      const liveOddsPulled = body.live_odds_pulled as boolean | undefined;
+      const insightCreated = Number(
+        (body.atlas_insight as { signals_created?: number } | undefined)?.signals_created
+          ?? body.insight_created
+          ?? 0,
+      );
       const apiMessage = body.message as string | undefined;
       setMessage(
         apiMessage ??
@@ -236,20 +242,50 @@ export function SportsSignalsView({
             ? "No new edges found — kept your current picks on the board"
             : created > 0
               ? `Found ${created} plays · ${cacheUsed ? "0 Odds credits (cached)" : `~${creditsUsed ?? "?"} Odds credits`}`
-              : "No edges met the threshold — try Fetch live odds or Atlas Insight"),
+              : liveOddsPulled && insightCreated > 0
+                ? `Fetched live odds · Atlas Insight posted ${insightCreated} picks`
+                : "No edges met the threshold — try Fetch live odds or Atlas Insight"),
       );
 
-      // Leave Atlas Insight / openai filters so Odds Scan results aren't hidden.
-      setFilter("all");
-      setSort("opportunity");
-      setActiveCategory(null);
-      setActiveSport(null);
+      if (liveOddsPulled && insightCreated > 0) {
+        setWindow("all");
+        setFilter("openai");
+        setSort("openai");
+        setActiveSport(null);
+        setActiveCategory("atlas_insight");
+        await Promise.all([
+          loadCategories(token),
+          (async () => {
+            const params = new URLSearchParams({
+              limit: "200",
+              window: "all",
+              category: "atlas_insight",
+            });
+            const listRes = await fetch(`${apiUrl}/signals/sports?${params}`, {
+              headers: apiRequestHeaders(token),
+              cache: "no-store",
+              credentials: usesBffProxy() ? "include" : "same-origin",
+            });
+            if (listRes.ok) {
+              const data = await listRes.json();
+              setItems(dedupeOneSidePerMarket(data.items ?? []));
+            }
+          })(),
+          refreshOddsStatus(),
+        ]);
+      } else {
+        // Leave Atlas Insight / openai filters so Odds Scan results aren't hidden.
+        setFilter("all");
+        setSort("opportunity");
+        setActiveCategory(null);
+        setActiveSport(null);
 
-      await Promise.all([
-        loadCategories(token),
-        loadItems(token, null, null),
-        refreshOddsStatus(),
-      ]);
+        await Promise.all([
+          loadCategories(token),
+          loadItems(token, null, null),
+          refreshOddsStatus(),
+        ]);
+      }
       router.refresh();
       globalThis.dispatchEvent(new Event("atlas:dashboard-refresh"));
     } catch {
@@ -412,7 +448,7 @@ export function SportsSignalsView({
             type="button"
             onClick={() => refreshSports("scan")}
             disabled={busy}
-            title="Scan sports odds — uses warm cache when available, otherwise a live pull."
+            title="Scan sports odds — uses warm cache when available; live pulls also run Atlas Insight."
             className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-md shadow-violet-600/25 disabled:opacity-50"
           >
             {loading === "scan" ? "Scanning…" : "Scan sports odds"}
@@ -425,12 +461,12 @@ export function SportsSignalsView({
               fetchBlocked
                 ? "Odds credits exhausted — add a new free Odds API key, then Fetch again."
                 : autoSpendLocked
-                  ? "Fetch live FanDuel/DraftKings lines (~2–4 credits). Auto-spend stays locked — Scan/Rescore remain free from cache."
-                  : "Fetch live FanDuel/DraftKings lines for US-core leagues (~2–4 Odds API credits)."
+                  ? "Fetch live FanDuel/DraftKings lines (~2–4 credits), then Atlas Insight auto-ranks. Scan/Rescore stay free from cache."
+                  : "Fetch live FanDuel/DraftKings lines (~2–4 credits), then Atlas Insight auto-ranks from the fresh board."
             }
             className="rounded-lg border border-violet-500/40 bg-violet-500/10 px-4 py-2 text-sm font-medium text-violet-200 hover:bg-violet-500/20 disabled:opacity-50"
           >
-            {loading === "live" ? "Fetching…" : "Fetch live odds"}
+            {loading === "live" ? "Fetching + Insight…" : "Fetch live odds"}
           </button>
           <button
             type="button"
@@ -445,7 +481,7 @@ export function SportsSignalsView({
             type="button"
             onClick={() => refreshOpenAiPicks()}
             disabled={busy}
-            title="Atlas Insight ranks FanDuel-verified open markets only (props + game lines). Invented bets are dropped. Small Odds credit cost only when pulling props."
+            title="Atlas Insight ranks FanDuel-verified open markets (also runs automatically after Fetch live odds)."
             className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-4 py-2 text-sm font-medium text-sky-200 hover:bg-sky-500/20 disabled:opacity-50"
           >
             {loading === "openai" ? "Atlas Insight verifying…" : "Atlas Insight"}

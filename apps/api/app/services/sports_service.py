@@ -145,6 +145,41 @@ class SportsRefreshService:
                 logger.warning("Failed to expire contradicting sports pick %s: %s", sid, exc)
         return purged
 
+    @staticmethod
+    def _live_odds_pulled(*, cache_only: bool, fetch_stats: dict[str, Any]) -> bool:
+        """True when this refresh spent Odds credits or wrote a fresh live pull to cache."""
+        return not cache_only and bool(fetch_stats.get("configured")) and not bool(
+            fetch_stats.get("cached")
+        )
+
+    async def _run_insight_after_live_odds(self, *, limit: int = 16) -> dict[str, Any] | None:
+        """Atlas Insight on the freshly cached FanDuel board after a live odds pull."""
+        try:
+            from app.services.sports_openai_picks_service import SportsOpenAiPicksService
+
+            return await SportsOpenAiPicksService(self.db, self.user_id).refresh_openai_picks(
+                limit=limit
+            )
+        except Exception as exc:
+            logger.warning("Post-odds Atlas Insight skipped: %s", exc)
+            return None
+
+    @staticmethod
+    def _attach_insight_result(
+        result: dict[str, Any],
+        insight: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if not insight:
+            return result
+        result["atlas_insight"] = insight
+        result["insight_created"] = int(insight.get("signals_created") or 0)
+        result["insight_ok"] = insight.get("ok", True) is not False
+        ins_msg = str(insight.get("message") or "").strip()
+        if ins_msg:
+            base = str(result.get("message") or "").strip()
+            result["message"] = f"{base} · {ins_msg}" if base else ins_msg
+        return result
+
     async def refresh_sports(
         self,
         *,
@@ -246,6 +281,8 @@ class SportsRefreshService:
                 or fetch_stats.get("message")
                 or "Odds credits too low for a live scan — use Rescore on cached lines.",
             }
+
+        live_odds_pulled = self._live_odds_pulled(cache_only=cache_only, fetch_stats=fetch_stats)
 
         setups: list[dict[str, Any]] = []
         try:
@@ -353,7 +390,7 @@ class SportsRefreshService:
                     "No new +EV edges in this scan — your current picks are unchanged. "
                     "Use Fetch live odds only when you want fresh lines from the API."
                 )
-            return {
+            result = {
                 "signals_created": 0,
                 "signals_kept": len(existing) > 0,
                 "contradictions_purged": purged,
@@ -362,10 +399,16 @@ class SportsRefreshService:
                 "top_opportunity": None,
                 "parlays_invalidated": False,
                 "calibration": calibration,
+                "live_odds_pulled": live_odds_pulled,
                 "message": kept_msg if existing or purged else self._result_message(
                     setups, fetch_stats, parlays_invalidated=False, calibration=calibration
                 ),
             }
+            if live_odds_pulled:
+                result = self._attach_insight_result(
+                    result, await self._run_insight_after_live_odds()
+                )
+            return result
 
         if replace and setups:
             # Keep OpenAI web-desk picks — Odds scans only replace Odds-derived rows.
@@ -447,7 +490,7 @@ class SportsRefreshService:
         except Exception as exc:
             logger.warning("Post-scan sports grade/expire skipped: %s", exc)
 
-        return {
+        result = {
             "signals_created": len(saved),
             "events_scanned": len(events),
             "stats": fetch_stats,
@@ -456,11 +499,15 @@ class SportsRefreshService:
             "top_opportunity": float(setups[0]["opportunity_score"]) if setups else None,
             "credits_used": int(fetch_stats.get("credits_used") or 0),
             "cache_used": bool(fetch_stats.get("cached")),
+            "live_odds_pulled": live_odds_pulled,
             "parlays_invalidated": replace,
             "graded_resolved": graded_resolved,
             "calibration": calibration,
             "message": self._result_message(setups, fetch_stats, parlays_invalidated=replace, calibration=calibration),
         }
+        if live_odds_pulled:
+            result = self._attach_insight_result(result, await self._run_insight_after_live_odds())
+        return result
 
     @staticmethod
     def _result_message(

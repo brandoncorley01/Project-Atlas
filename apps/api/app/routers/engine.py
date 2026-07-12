@@ -70,7 +70,7 @@ async def refresh_sports(
     """Fetch odds from The Odds API and rank +EV moneyline, spread, total, and futures plays.
 
     - Default / Scan: use warm cache when available, otherwise live pull.
-    - force_refresh=true (Fetch live odds): spend Odds credits for US-core books.
+    - force_refresh=true (Fetch live odds): spend Odds credits for US-core books, then Atlas Insight.
     - cache_only=true (Rescore): never spend Odds credits; requires existing cache.
     """
     from app.services.sports_service import SportsRefreshService
