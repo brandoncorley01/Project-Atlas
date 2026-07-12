@@ -103,12 +103,18 @@ async def search_sports_events(
     q: str = "",
     sport: str | None = None,
     limit: int = 40,
+    all_sports: bool = True,
 ) -> dict:
-    """Atlas Insight search — OpenAI web search for teams/players (0 Odds credits)."""
+    """Atlas Insight search — FanDuel/DK verified markets across the full board."""
     from app.services.sports_openai_search_service import search_markets_with_openai
 
     _ = user_id, token  # auth required
-    return await search_markets_with_openai(query=q, sport=sport, limit=limit)
+    return await search_markets_with_openai(
+        query=q,
+        sport=sport,
+        limit=limit,
+        all_sports=all_sports,
+    )
 
 
 @router.post("/sports/user-bets")

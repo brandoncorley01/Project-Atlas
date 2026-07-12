@@ -202,7 +202,10 @@ export function SportsEventSearch({
     try {
       const token = await getToken();
       const apiUrl = getApiUrl();
-      const params = new URLSearchParams({ limit: "36" });
+      const params = new URLSearchParams({
+        limit: isParlay ? "80" : "36",
+        all_sports: "true",
+      });
       if (q) params.set("q", q);
       const res = await fetch(`${apiUrl}/signals/sports/events?${params}`, {
         headers: apiRequestHeaders(token),
@@ -458,7 +461,7 @@ export function SportsEventSearch({
           </h2>
           <p className="mt-1 text-xs text-muted">
             {isParlay
-              ? "Search FanDuel markets and add a selection to this parlay."
+              ? "Search the full FanDuel board (all sports), then add a selection to this parlay."
               : "Atlas Insight resolves the player/team, pulls real FanDuel/DraftKings lines, then ranks which are most likely to hit and where the best odds are."}
           </p>
         </div>
@@ -481,7 +484,7 @@ export function SportsEventSearch({
           id="sports-event-search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Player or team — e.g. Carla Leite, Portland, Aces…"
+          placeholder="Any FanDuel team or player — NFL, NBA, MLB, soccer, MMA…"
           className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground outline-none focus:border-orange-400"
           enterKeyHint="search"
         />

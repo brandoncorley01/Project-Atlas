@@ -501,7 +501,7 @@ def _group_events(markets: list[dict[str, Any]], *, limit: int) -> list[dict[str
                 "is_most_likely": m.get("is_most_likely"),
             }
         )
-    return [by_event[k] for k in order[: max(1, min(limit, 40))]]
+    return [by_event[k] for k in order[: max(1, min(limit, 80))]]
 
 
 def _norm_event_key(m: dict[str, Any]) -> str:
@@ -890,9 +890,13 @@ async def search_markets_with_openai(
     query: str = "",
     sport: str | None = None,
     limit: int = 40,
+    all_sports: bool = True,
 ) -> dict[str, Any]:
-    """FanDuel-verified search first, then Atlas Insight rank (OpenAI)."""
-    from app.services.fanduel_catalog import fetch_verified_markets_for_search
+    """FanDuel-verified search first (full board), then Atlas Insight rank (OpenAI)."""
+    from app.services.fanduel_catalog import (
+        fetch_verified_markets_for_search,
+        search_verified_markets,
+    )
 
     q = (query or "").strip()
     if not q:
@@ -933,19 +937,80 @@ async def search_markets_with_openai(
         resolved_teams = ["Portland Fire", "Portland"]
         resolved_sport_key = resolved_sport_key or "basketball_wnba"
 
+    # Explicit sport query param can filter; default searches the entire FanDuel board.
+    explicit_sport = (sport or "").strip() or None
+    restrict_sport = bool(explicit_sport) and not all_sports
+    sport_filter = explicit_sport if restrict_sport else None
+    market_cap = max(1, min(limit, 80 if all_sports else 40))
+
+    # 1) Full cached FanDuel/DK catalog across every sport already fetched.
+    catalog_hit = search_verified_markets(
+        query=q,
+        sport=sport_filter,
+        limit=market_cap,
+    )
+    markets = [
+        _normalize_verified_row(row, index=i + 1)
+        for i, row in enumerate(catalog_hit.get("markets") or [])
+        if row.get("selection")
+    ]
+
+    # Soft-boost markets that match the resolved sport without dropping others.
+    if resolved_sport_key and markets and all_sports:
+        preferred = []
+        rest = []
+        for m in markets:
+            key = str(m.get("sport_key") or "")
+            label = _norm_text(str(m.get("sport") or ""))
+            if resolved_sport_key in key or (
+                resolved_sport_key.endswith("wnba") and "wnba" in label
+            ):
+                preferred.append(m)
+            else:
+                rest.append(m)
+        if preferred:
+            markets = preferred + rest
+
+    # 2) Enrich with targeted props / live seed — still board-wide unless restricted.
     verified = await fetch_verified_markets_for_search(
         query=q,
         player_name=resolved_player,
         team_names=resolved_teams,
-        sport_key=resolved_sport_key or sport,
+        sport_key=resolved_sport_key or explicit_sport,
+        max_events=8 if all_sports else None,
+        restrict_sport=restrict_sport,
     )
     credits_used = int(verified.get("credits_used") or 0)
     verified_rows = list(verified.get("markets") or [])
-    markets = [
-        _normalize_verified_row(row, index=i + 1)
-        for i, row in enumerate(verified_rows)
-        if row.get("selection")
-    ][: max(1, min(limit, 24))]
+
+    seen: set[str] = {
+        "|".join(
+            [
+                str(m.get("event_id") or ""),
+                str(m.get("bet_type") or ""),
+                str(m.get("selection") or ""),
+                str(m.get("odds_american") or ""),
+            ]
+        )
+        for m in markets
+    }
+    for row in verified_rows:
+        if not row.get("selection"):
+            continue
+        key = "|".join(
+            [
+                str(row.get("event_id") or ""),
+                str(row.get("bet_type") or ""),
+                str(row.get("selection") or ""),
+                str(row.get("odds_american") or ""),
+            ]
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        markets.append(_normalize_verified_row(row, index=len(markets) + 1))
+
+    markets = markets[:market_cap]
 
     payload: dict[str, Any] | None = {
         "summary": resolved.get("note"),
@@ -983,33 +1048,43 @@ async def search_markets_with_openai(
                 m["insight_rank"] = m.get("insight_rank") or 1
         markets, insight_meta = _finalize_insight_badges(markets, payload=payload)
 
-    items = _group_events(markets, limit=limit)
+    items = _group_events(markets, limit=market_cap)
     web = bool((payload or {}).get("_web_search")) or bool(insight_meta.get("web_search"))
     summary = str((payload or {}).get("summary") or "").strip()
     resolved_as = str((payload or {}).get("resolved_as") or "").strip()
     insight_summary = str(insight_meta.get("insight_summary") or "").strip()
     verified_n = sum(1 for m in markets if m.get("fanduel_verified"))
     prop_n = sum(1 for m in markets if m.get("bet_type") == "player_prop")
+    sports_found = sorted(
+        {
+            str(m.get("sport") or "").strip()
+            for m in markets
+            if str(m.get("sport") or "").strip()
+        }
+    )
 
     msg_parts: list[str] = []
     if resolved_as:
         msg_parts.append(resolved_as)
     if verified_n:
+        league_bit = f" across {', '.join(sports_found[:6])}" if sports_found else ""
         msg_parts.append(
-            f"{verified_n} FanDuel/DraftKings-verified markets"
+            f"{verified_n} FanDuel/DraftKings-verified markets{league_bit}"
             f" ({prop_n} props"
             f"{f', ~{credits_used} Odds credits' if credits_used else ', 0 new Odds credits'})."
         )
     elif verified.get("message"):
         msg_parts.append(str(verified["message"]))
+    elif catalog_hit.get("message") and not markets:
+        msg_parts.append(str(catalog_hit["message"]))
     if summary:
         msg_parts.append(summary)
     if insight_summary and insight_summary not in " ".join(msg_parts):
         msg_parts.append(f"Insight: {insight_summary}")
     if not markets:
         msg_parts = [
-            "No FanDuel/DraftKings markets found. Tap Fetch live odds (WNBA/MLB), then search again "
-            f"for {resolved_player or q}."
+            "No FanDuel/DraftKings markets found. Tap Fetch live odds to refresh the full board, "
+            f"then search again for {resolved_player or q}."
         ]
     elif not verified_n and not web:
         msg_parts.append("Web browse unavailable — results may be less current.")
@@ -1027,6 +1102,8 @@ async def search_markets_with_openai(
         "web_search": web,
         "query": q,
         "sport": sport,
+        "all_sports": all_sports,
+        "sports": sports_found,
         "person_query": person,
         "resolved_player": resolved_player,
         "resolved_teams": resolved_teams,

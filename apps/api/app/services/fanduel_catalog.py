@@ -881,8 +881,13 @@ async def fetch_verified_markets_for_search(
     team_names: list[str] | None = None,
     sport_key: str | None = None,
     max_events: int | None = None,
+    restrict_sport: bool = False,
 ) -> dict[str, Any]:
-    """Pull real FanDuel/DraftKings markets for a player/team search (credit-capped)."""
+    """Pull real FanDuel/DraftKings markets for a player/team search (credit-capped).
+
+    By default searches the full cached board. Pass restrict_sport=True only when the
+    caller explicitly wants a single-league filter.
+    """
     q_tokens = [t for t in _norm(query).split() if len(t) >= 2]
     player_needles = [t for t in _norm(player_name or "").split() if len(t) >= 2] or [
         t for t in q_tokens if t not in TEAM_ALIASES and t not in {"wnba", "nba", "mlb", "nfl", "nhl"}
@@ -905,7 +910,8 @@ async def fetch_verified_markets_for_search(
     cache = _read_cache()
     events = filter_upcoming_events(list(cache.get("events") or [])) if cache else []
     events = [e for e in events if not e.get("_is_outright")]
-    if sport_key:
+    # Only hard-filter by sport when explicitly requested — otherwise search all FanDuel sports.
+    if sport_key and restrict_sport:
         events = [
             e
             for e in events
@@ -929,22 +935,47 @@ async def fetch_verified_markets_for_search(
             )
         ]
 
-    # If the odds cache has no matching game (common for expansion teams),
-    # pull that sport's FanDuel/DK board once so Search can still find the slate.
+    # Soft prefer resolved sport when present, without dropping other leagues.
+    if sport_key and matched and not restrict_sport:
+        preferred = [
+            e
+            for e in matched
+            if sport_key in str(e.get("_sport_key") or e.get("sport_key") or "")
+        ]
+        if preferred:
+            rest = [e for e in matched if e not in preferred]
+            matched = preferred + rest
+
+    # If the odds cache has no matching game, pull that sport's FanDuel/DK board once.
     seed_credits = 0
     LIVE_SEED_SPORTS = set(PROP_MARKETS_BY_SPORT) | COMBAT_SPORT_KEYS
     if not matched and config.settings.odds_live_spending_allowed():
         sk = sport_key or ""
         if not sk and any("portland" in t or t == "fire" or "tempo" in t for t in team_needles):
             sk = "basketball_wnba"
-        if sk in LIVE_SEED_SPORTS:
+        seed_keys = [sk] if sk in LIVE_SEED_SPORTS or sk.startswith(("soccer_", "basketball_", "baseball_", "americanfootball_", "icehockey_", "mma_", "boxing_")) else []
+        # Broad search: try major FanDuel sports when no sport was resolved.
+        if not seed_keys and not restrict_sport:
+            seed_keys = [
+                "basketball_nba",
+                "basketball_wnba",
+                "baseball_mlb",
+                "americanfootball_nfl",
+                "icehockey_nhl",
+                "mma_mixed_martial_arts",
+                "soccer_epl",
+                "soccer_usa_mls",
+            ][:4]
+        for sk in seed_keys:
+            if matched:
+                break
             try:
                 client, _, info = await _select_active_client()
                 rem = info.get("total_remaining")
                 reserve = max(0, int(getattr(config.settings, "odds_search_min_credits_reserve", 4) or 0))
                 if client and (rem is None or rem >= 1 + reserve):
                     live = await client.fetch_odds(sk, bookmakers=US_SEARCH_BOOKS)
-                    seed_credits = 1
+                    seed_credits += 1
                     for ev in live or []:
                         if not isinstance(ev, dict):
                             continue
@@ -957,6 +988,8 @@ async def fetch_verified_markets_for_search(
                             "icehockey_nhl": "NHL",
                             "mma_mixed_martial_arts": "MMA",
                             "boxing_boxing": "Boxing",
+                            "soccer_epl": "EPL",
+                            "soccer_usa_mls": "MLS",
                         }.get(sk, sk)
                         events.append(ev)
                     matched = [e for e in events if _event_matches_teams(e, team_needles)]
@@ -977,7 +1010,7 @@ async def fetch_verified_markets_for_search(
                         len(matched),
                     )
             except Exception as exc:
-                logger.info("Search live seed skipped: %s", exc)
+                logger.info("Search live seed skipped (%s): %s", sk, exc)
 
     matched.sort(key=lambda e: hours_until_event(e.get("commence_time")) or 9999)
     cap = max_events
@@ -985,8 +1018,13 @@ async def fetch_verified_markets_for_search(
         cap = int(getattr(config.settings, "odds_search_prop_events", 0) or 0)
     if not config.settings.odds_live_spending_allowed():
         cap = 0
-    cap = max(0, min(cap, 3))
-    matched = matched[: max(cap, 1) if matched else 0] if cap > 0 else matched[:3]
+    # Broad board search keeps more matched games (game lines are free from cache).
+    board_cap = 16 if not restrict_sport else 3
+    if cap > 0:
+        cap = max(0, min(cap, 6 if not restrict_sport else 3))
+        matched = matched[: max(cap, 1) if matched else 0]
+    else:
+        matched = matched[:board_cap]
 
     credits_used = seed_credits
     props_events = 0
@@ -1004,7 +1042,7 @@ async def fetch_verified_markets_for_search(
             sk = str(event.get("_sport_key") or event.get("sport_key") or sport_key or "")
             markets = PROP_MARKETS_BY_SPORT.get(sk) or ()
             if not markets or not client:
-                break
+                continue
             cost = len(markets)
             if remaining_credits is not None and remaining_credits < cost + reserve:
                 logger.info(
@@ -1047,7 +1085,6 @@ async def fetch_verified_markets_for_search(
             return False
         if _player_match(str(m.get("player_name") or m.get("selection") or ""), player_needles):
             return True
-        # MMA/Boxing round totals have no player_name — keep them when the fight matched.
         return (
             bool(player_needles)
             and _is_combat_sport(str(m.get("sport_key") or ""))
@@ -1062,12 +1099,14 @@ async def fetch_verified_markets_for_search(
         if m.get("bet_type") == "player_prop" and m not in player_rows
     ]
 
+    game_limit = 40 if not restrict_sport else 12
+    prop_limit = 24 if not restrict_sport else 8
     if player_needles and player_rows:
-        markets = player_rows + game_rows[:8]
+        markets = player_rows + game_rows[: max(8, game_limit // 2)]
     elif matched:
-        markets = game_rows[:12] + (player_rows or other_props)[:8]
+        markets = game_rows[:game_limit] + (player_rows or other_props)[:prop_limit]
     else:
-        markets = player_rows or collapsed[:20]
+        markets = player_rows or collapsed[: max(20, game_limit)]
 
     for m in markets:
         m["fanduel_verified"] = True
@@ -1084,7 +1123,7 @@ async def fetch_verified_markets_for_search(
         "message": None
         if markets
         else (
-            "No FanDuel/DraftKings lines matched yet — tap Fetch live odds for WNBA/MLB/MMA, "
-            "then search again."
+            "No FanDuel/DraftKings lines matched yet — tap Fetch live odds once to refresh the "
+            "full board, then search again."
         ),
     }
