@@ -430,19 +430,20 @@ export function SportsSignalsView({
         </div>
       </div>
 
-      <SportsCategoryTabs
-        categories={categories}
-        activeSlug={activeCategory}
-        onSelect={(slug) => void handleCategoryChange(slug)}
-      />
+      <div className="mb-4 grid gap-3 sm:grid-cols-2">
+        <SportsCategoryTabs
+          categories={categories}
+          activeSlug={activeCategory}
+          onSelect={(slug) => void handleCategoryChange(slug)}
+        />
 
-      <SportFilterTabs
-        items={items}
-        activeSport={activeSport}
-        onSelect={(sport) => void handleSportChange(sport)}
-        extraLeagues={oddsStatus?.league_catalog ?? oddsStatus?.near_term_leagues ?? []}
-      />
-
+        <SportFilterTabs
+          items={items}
+          activeSport={activeSport}
+          onSelect={(sport) => void handleSportChange(sport)}
+          extraLeagues={oddsStatus?.league_catalog ?? oddsStatus?.near_term_leagues ?? []}
+        />
+      </div>
       <SportsToolbar
         sort={sort}
         filter={filter}

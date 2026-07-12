@@ -1,7 +1,7 @@
 "use client";
 
 import type { SportsCategoryMeta } from "@/lib/sports-categories";
-import { FilterTabs } from "@/components/ui/FilterTabs";
+import { FilterSelect } from "@/components/ui/FilterSelect";
 
 interface SportsCategoryTabsProps {
   categories: SportsCategoryMeta[];
@@ -13,16 +13,15 @@ export function SportsCategoryTabs({ categories, activeSlug, onSelect }: SportsC
   if (!categories.length) return null;
 
   return (
-    <FilterTabs
+    <FilterSelect
       label="Browse by edge metric"
       hint="Insight & Props keep Atlas player markets visible. Best edge ranks Odds-API edges."
       allLabel="All plays"
-      accent="violet"
       activeId={activeSlug ?? null}
       onSelect={onSelect ?? (() => {})}
       items={categories.map((cat) => ({
         id: cat.slug,
-        label: cat.short_label,
+        label: cat.short_label || cat.title,
         count: cat.count,
         description: cat.description,
       }))}
