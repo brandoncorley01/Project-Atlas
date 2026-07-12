@@ -77,14 +77,63 @@ class PerformanceService:
             nested = signal_snapshot.get("scoring_snapshot")
             snap = dict(nested) if isinstance(nested, dict) else dict(signal_snapshot)
 
+        # Persist market identity from the live signal so Atlas can learn by sport/bet type.
+        signal_row = signal_snapshot if isinstance(signal_snapshot, dict) else {}
+        label_row = label_source if isinstance(label_source, dict) else {}
+        for key in (
+            "sport",
+            "bet_type",
+            "selection",
+            "odds_american",
+            "event_name",
+            "event_start",
+            "expected_value",
+        ):
+            if snap.get(key) is None:
+                val = signal_row.get(key)
+                if val is None:
+                    val = label_row.get(key)
+                if val is not None:
+                    snap[key] = val
+        nested_pick = snap.get("pick") if isinstance(snap.get("pick"), dict) else {}
+        if not nested_pick.get("bet_type") or not nested_pick.get("team_or_side"):
+            snap["pick"] = {
+                **nested_pick,
+                "bet_type": nested_pick.get("bet_type")
+                or snap.get("bet_type")
+                or signal_row.get("bet_type")
+                or "moneyline",
+                "team_or_side": nested_pick.get("team_or_side")
+                or snap.get("selection")
+                or signal_row.get("selection"),
+                "player_name": nested_pick.get("player_name") or snap.get("player_name"),
+                "point": nested_pick.get("point") if nested_pick.get("point") is not None else snap.get("point"),
+            }
+
         incoming_origin = snap.get("pick_origin")
         if incoming_origin not in ("atlas", "user", "both"):
             incoming_origin = _origin_from_source(resolution_source)
         snap["pick_origin"] = incoming_origin
+        if snap.get("source") == "openai_web" or snap.get("atlas_presented"):
+            snap["atlas_presented"] = True
+            if incoming_origin == "user":
+                snap["pick_origin"] = "both"
+            else:
+                snap["pick_origin"] = "atlas"
+                incoming_origin = "atlas"
         if resolution_source in USER_ORIGINS:
             snap["user_tracked"] = True
         if resolution_source == "auto_scan" or str(resolution_source).startswith("auto_"):
             snap["atlas_tracked"] = True
+            if snap.get("atlas_presented") or snap.get("source") in {
+                "openai_web",
+                "odds_scan",
+                "sports_scan",
+            }:
+                snap["atlas_presented"] = True
+                if snap.get("pick_origin") not in ("user", "both"):
+                    snap["pick_origin"] = "atlas"
+                    incoming_origin = "atlas"
 
         row: dict[str, Any] = {
             "user_id": self.user_id,

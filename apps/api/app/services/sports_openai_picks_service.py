@@ -140,28 +140,50 @@ def _edge_vs_cache(item: dict[str, Any], event: dict[str, Any] | None) -> tuple[
 
 
 def _learning_boost(item: dict[str, Any], learning: dict[str, Any]) -> tuple[float, str | None]:
+    """Bias future Insight picks using Atlas board outcomes + user grades."""
     sport = str(item.get("sport") or "")
     bet_type = str(item.get("bet_type") or "moneyline")
     boost = 0.0
     note: str | None = None
+
+    # Ranking slices already blend Atlas (70%) + user (30%) when both exist.
     sport_meta = (learning.get("by_sport") or {}).get(sport) or {}
     bet_meta = (learning.get("by_bet_type") or {}).get(bet_type) or {}
+    atlas = learning.get("atlas") if isinstance(learning.get("atlas"), dict) else {}
+    user = learning.get("user") if isinstance(learning.get("user"), dict) else {}
+
     if sport_meta.get("boost"):
         boost += float(sport_meta["boost"])
-        note = f"{sport} graded {sport_meta.get('win_rate')}% over {sport_meta.get('count')} picks"
+        note = f"{sport} hits {sport_meta.get('win_rate')}% over {sport_meta.get('count')} graded outcomes"
     if bet_meta.get("boost"):
         boost += float(bet_meta["boost"])
         label = bet_type.replace("_", " ")
         note = (
-            f"{label} hits {bet_meta.get('win_rate')}% over {bet_meta.get('count')} graded picks"
+            f"Atlas {label} hits {bet_meta.get('win_rate')}% over {bet_meta.get('count')} graded outcomes"
             if not note
             else note
         )
+
+    atlas_wr = atlas.get("overall_win_rate")
+    atlas_n = int(atlas.get("decided") or 0)
+    user_wr = user.get("overall_win_rate")
+    user_n = int(user.get("decided") or 0)
+    if atlas_wr is not None and atlas_n >= 4:
+        boost += max(-5.0, min(5.0, (float(atlas_wr) - 50.0) * 0.22))
+        if note is None:
+            note = f"Atlas board track record: {atlas_wr:.0f}% over {atlas_n} real outcomes"
+    if user_wr is not None and user_n >= 4:
+        boost += max(-3.0, min(3.0, (float(user_wr) - 50.0) * 0.12))
+        if note is None:
+            note = f"Your logged picks: {user_wr:.0f}% over {user_n} graded"
+
     overall = learning.get("overall_win_rate")
     decided = int(learning.get("decided") or 0)
     if overall is not None and decided >= 5 and note is None:
-        note = f"Your sports track record: {overall:.0f}% over {decided} graded picks"
+        note = f"Combined sports track record: {overall:.0f}% over {decided} graded picks"
         boost += max(-4.0, min(4.0, (float(overall) - 50.0) * 0.2))
+    # Keep learning as a nudge, not the whole score.
+    boost = max(-10.0, min(10.0, boost))
     return round(boost, 2), note
 
 
@@ -350,7 +372,8 @@ def _catalog_to_row(
         "suggested_action": f"Play {odds_american:+d} on {book_title} for {selection}",
         "risk_warning": (
             "Atlas Insight ranks FanDuel-verified markets using price edge, form/H2H, "
-            "and your graded results. Confirm the number is still posted before betting."
+            "real outcomes of prior Atlas board picks, and your graded results. "
+            "Confirm the number is still posted before betting."
         ),
         "scoring_snapshot": {
             "source": SOURCE,
@@ -358,6 +381,9 @@ def _catalog_to_row(
             "web_search": False,
             "stats_engine": True,
             "fanduel_verified": True,
+            "pick_origin": "atlas",
+            "atlas_presented": True,
+            "atlas_tracked": True,
             "is_player_prop": bet_type == "player_prop",
             "is_fight_prop": bool(
                 item.get("is_fight_prop")
@@ -369,6 +395,7 @@ def _catalog_to_row(
             "odds_approximate": False,
             "event_id": item.get("event_id"),
             "sport": str(item.get("sport") or "Sports")[:40],
+            "bet_type": bet_type,
             "sport_key": item.get("sport_key"),
             "home_team": item.get("home_team"),
             "away_team": item.get("away_team"),
@@ -601,6 +628,21 @@ class SportsOpenAiPicksService:
             }
 
     async def _refresh_openai_picks_inner(self, *, limit: int = 16) -> dict[str, Any]:
+        # Close the learning loop first: grade finished Atlas board + user sports picks.
+        graded_prior = 0
+        try:
+            from app.services.outcome_resolver import OutcomeResolverService
+
+            resolve = await OutcomeResolverService(self.db, self.user_id).resolve_pending(
+                limit=50,
+                module="sports",
+            )
+            graded_prior = int((resolve or {}).get("resolved") or 0)
+            if graded_prior:
+                logger.info("Atlas Insight graded %s finished sports picks before ranking", graded_prior)
+        except Exception as exc:
+            logger.warning("Atlas Insight pre-grade skipped: %s", exc)
+
         # Skip live Odds prop pulls (slow + credits). Use odds cache + props cache.
         catalog_meta = await build_fanduel_catalog(include_props=True, max_prop_events=0)
         catalog = list(catalog_meta.get("items") or [])
@@ -612,11 +654,12 @@ class SportsOpenAiPicksService:
                 "cache_used": True,
                 "openai_web": True,
                 "fanduel_verified": True,
+                "graded_prior": graded_prior,
                 "message": catalog_meta.get("message")
                 or "No FanDuel-verified markets available. Unlock Odds or wait for cache, then Atlas Insight.",
             }
 
-        calibration = await CalibrationService(self.db, self.user_id).get_adjustments(lookback=150)
+        calibration = await CalibrationService(self.db, self.user_id).get_adjustments(lookback=200)
         learning = calibration.get("sports_learning") or {}
         min_edge = float(calibration.get("sports_min_edge_pct") or 0.6)
         min_opp = float(calibration.get("sports_min_opportunity") or 28.0)
@@ -688,7 +731,7 @@ class SportsOpenAiPicksService:
                     thesis=thesis,
                     bull=bull,
                     bear=bear,
-                    sources=["FanDuel", "Atlas stats", "Your graded results"],
+                    sources=["FanDuel", "Atlas board results", "Your graded picks", "Form/H2H"],
                 )
             )
 
@@ -718,16 +761,25 @@ class SportsOpenAiPicksService:
             if (r.get("scoring_snapshot") or {}).get("team_stats")
             or (r.get("scoring_snapshot") or {}).get("stats_support")
         )
-        learn_notes = "; ".join(str(n) for n in (calibration.get("learning_notes") or [])[:2])
+        atlas_learn = learning.get("atlas") if isinstance(learning.get("atlas"), dict) else {}
+        user_learn = learning.get("user") if isinstance(learning.get("user"), dict) else {}
+        learn_notes = "; ".join(str(n) for n in (calibration.get("learning_notes") or [])[:3])
         msg = (
             f"Atlas Insight posted {len(saved)} edge-ranked picks"
             f" ({prop_count} props, {edged} with multi-book edge, {with_stats} with form/H2H"
             f", catalog {catalog_meta.get('player_props', 0)} props / {catalog_meta.get('game_lines', 0)} lines"
             f", 0 Odds credits"
+            f"{f'; graded {graded_prior} finished board picks' if graded_prior else ''}"
             f"{f'; replaced {expired} prior Insight picks' if expired else ''})."
         )
         if learn_notes:
             msg = f"{msg} Learning: {learn_notes}."
+        elif atlas_learn.get("decided") or user_learn.get("decided"):
+            msg = (
+                f"{msg} Learning from "
+                f"{int(atlas_learn.get('decided') or 0)} Atlas board outcomes + "
+                f"{int(user_learn.get('decided') or 0)} of your logged picks."
+            )
 
         return {
             "signals_created": len(saved),
@@ -742,7 +794,10 @@ class SportsOpenAiPicksService:
             "stats_engine": True,
             "edged_picks": edged,
             "stats_backed": with_stats,
+            "graded_prior": graded_prior,
             "learning_active": bool(learning.get("decided")),
+            "atlas_outcomes": int(atlas_learn.get("decided") or 0),
+            "user_outcomes": int(user_learn.get("decided") or 0),
             "catalog_props": catalog_meta.get("player_props"),
             "catalog_game_lines": catalog_meta.get("game_lines"),
             "mma_props": catalog_meta.get("mma_props"),

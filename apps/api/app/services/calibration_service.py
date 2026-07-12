@@ -94,6 +94,8 @@ class CalibrationService:
                 "decided": 0,
                 "by_sport": {},
                 "by_bet_type": {},
+                "atlas": {"overall_win_rate": None, "decided": 0, "by_sport": {}, "by_bet_type": {}},
+                "user": {"overall_win_rate": None, "decided": 0, "by_sport": {}, "by_bet_type": {}},
                 "notes": [],
             },
             "learning_notes": [],
@@ -101,52 +103,152 @@ class CalibrationService:
         }
 
     def _sports_learning_slices(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
-        """Win-rate slices from graded sports picks — used to bias Atlas Insight ranking."""
+        """Win-rate slices from graded sports picks — Atlas board + user picks."""
         decided = [r for r in rows if r.get("outcome") in ("win", "loss")]
-        overall = self._win_rate(decided)
-        by_sport: dict[str, list[dict[str, Any]]] = {}
-        by_bet: dict[str, list[dict[str, Any]]] = {}
-        for row in decided:
-            snap = row.get("scoring_snapshot") if isinstance(row.get("scoring_snapshot"), dict) else {}
-            pick = snap.get("pick") if isinstance(snap.get("pick"), dict) else {}
-            sport = str(snap.get("sport") or row.get("label") or "Sports").split("·")[0].strip()[:40]
-            if not sport:
-                sport = "Sports"
-            bet_type = str(pick.get("bet_type") or snap.get("bet_type") or "moneyline")
-            by_sport.setdefault(sport, []).append(row)
-            by_bet.setdefault(bet_type, []).append(row)
+        atlas_rows = [r for r in decided if self._sports_origin(r) in ("atlas", "both")]
+        user_rows = [r for r in decided if self._sports_origin(r) in ("user", "both")]
 
-        def _slice(bucket: dict[str, list[dict[str, Any]]]) -> dict[str, dict[str, Any]]:
-            out: dict[str, dict[str, Any]] = {}
-            for key, bucket_rows in bucket.items():
-                wr = self._win_rate(bucket_rows)
-                if wr is None:
-                    continue
-                out[key] = {
-                    "count": len(bucket_rows),
-                    "win_rate": wr,
-                    "boost": round(max(-8.0, min(8.0, (wr - 50.0) * 0.35)), 2)
-                    if len(bucket_rows) >= 5
-                    else 0.0,
-                }
-            return out
+        def _bucket(bucket_rows: list[dict[str, Any]]) -> dict[str, Any]:
+            overall = self._win_rate(bucket_rows)
+            by_sport: dict[str, list[dict[str, Any]]] = {}
+            by_bet: dict[str, list[dict[str, Any]]] = {}
+            for row in bucket_rows:
+                snap = row.get("scoring_snapshot") if isinstance(row.get("scoring_snapshot"), dict) else {}
+                pick = snap.get("pick") if isinstance(snap.get("pick"), dict) else {}
+                sport = str(
+                    snap.get("sport") or row.get("signal_label") or row.get("label") or "Sports"
+                ).split("·")[0].strip()[:40]
+                if not sport:
+                    sport = "Sports"
+                bet_type = str(
+                    pick.get("bet_type") or snap.get("bet_type") or row.get("bet_type") or "moneyline"
+                )
+                by_sport.setdefault(sport, []).append(row)
+                by_bet.setdefault(bet_type, []).append(row)
+            return {
+                "overall_win_rate": overall,
+                "decided": len(bucket_rows),
+                "by_sport": self._slice_wr(by_sport),
+                "by_bet_type": self._slice_wr(by_bet),
+            }
 
-        sport_slices = _slice(by_sport)
-        bet_slices = _slice(by_bet)
+        combined = _bucket(decided)
+        atlas = _bucket(atlas_rows)
+        user = _bucket(user_rows)
+
+        # Ranking prior: prefer Atlas-presented outcomes, blend in user grades.
+        ranking_by_sport = self._blend_slices(
+            atlas.get("by_sport") or {},
+            user.get("by_sport") or {},
+            combined.get("by_sport") or {},
+        )
+        ranking_by_bet = self._blend_slices(
+            atlas.get("by_bet_type") or {},
+            user.get("by_bet_type") or {},
+            combined.get("by_bet_type") or {},
+        )
+
         notes: list[str] = []
-        if overall is not None and len(decided) >= MIN_SAMPLES:
-            notes.append(f"Your graded sports picks are {overall:.0f}% ({len(decided)} decided)")
-        for bet_type, meta in sorted(bet_slices.items(), key=lambda kv: kv[1]["count"], reverse=True)[:3]:
+        if atlas.get("overall_win_rate") is not None and atlas.get("decided", 0) >= 3:
+            notes.append(
+                f"Atlas board picks hit {atlas['overall_win_rate']:.0f}% "
+                f"({atlas['decided']} graded real outcomes)"
+            )
+        if user.get("overall_win_rate") is not None and user.get("decided", 0) >= 3:
+            notes.append(
+                f"Your logged picks hit {user['overall_win_rate']:.0f}% "
+                f"({user['decided']} graded)"
+            )
+        if not notes and combined.get("overall_win_rate") is not None and combined.get("decided", 0) >= 3:
+            notes.append(
+                f"Sports picks hit {combined['overall_win_rate']:.0f}% "
+                f"({combined['decided']} graded)"
+            )
+        for bet_type, meta in sorted(
+            ranking_by_bet.items(), key=lambda kv: kv[1]["count"], reverse=True
+        )[:3]:
             if meta["count"] >= 5:
-                notes.append(f"{bet_type.replace('_', ' ')} hits {meta['win_rate']:.0f}% over {meta['count']}")
+                notes.append(
+                    f"{bet_type.replace('_', ' ')} hits {meta['win_rate']:.0f}% over {meta['count']}"
+                )
 
         return {
-            "overall_win_rate": overall,
-            "decided": len(decided),
-            "by_sport": sport_slices,
-            "by_bet_type": bet_slices,
+            "overall_win_rate": combined.get("overall_win_rate"),
+            "decided": combined.get("decided") or 0,
+            "by_sport": ranking_by_sport,
+            "by_bet_type": ranking_by_bet,
+            "atlas": atlas,
+            "user": user,
             "notes": notes,
         }
+
+    def _slice_wr(self, bucket: dict[str, list[dict[str, Any]]]) -> dict[str, dict[str, Any]]:
+        out: dict[str, dict[str, Any]] = {}
+        for key, bucket_rows in bucket.items():
+            wr = self._win_rate(bucket_rows)
+            if wr is None:
+                continue
+            out[key] = {
+                "count": len(bucket_rows),
+                "win_rate": wr,
+                "boost": round(max(-8.0, min(8.0, (wr - 50.0) * 0.35)), 2)
+                if len(bucket_rows) >= 4
+                else 0.0,
+            }
+        return out
+
+    @staticmethod
+    def _blend_slices(
+        atlas: dict[str, dict[str, Any]],
+        user: dict[str, dict[str, Any]],
+        combined: dict[str, dict[str, Any]],
+    ) -> dict[str, dict[str, Any]]:
+        """70% Atlas board outcomes + 30% user grades when both have signal."""
+        keys = set(atlas) | set(user) | set(combined)
+        out: dict[str, dict[str, Any]] = {}
+        for key in keys:
+            a = atlas.get(key)
+            u = user.get(key)
+            c = combined.get(key) or {"count": 0, "win_rate": 50.0, "boost": 0.0}
+            if a and u and a["count"] >= 3 and u["count"] >= 3:
+                wr = round(0.7 * float(a["win_rate"]) + 0.3 * float(u["win_rate"]), 1)
+                count = int(a["count"]) + int(u["count"])
+                boost = round(0.7 * float(a.get("boost") or 0) + 0.3 * float(u.get("boost") or 0), 2)
+            elif a and a["count"] >= 3:
+                wr, count, boost = float(a["win_rate"]), int(a["count"]), float(a.get("boost") or 0)
+            elif u and u["count"] >= 3:
+                wr, count, boost = float(u["win_rate"]), int(u["count"]), float(u.get("boost") or 0)
+            else:
+                wr, count, boost = float(c["win_rate"]), int(c["count"]), float(c.get("boost") or 0)
+            out[key] = {
+                "count": count,
+                "win_rate": wr,
+                "boost": round(max(-8.0, min(8.0, boost if boost else (wr - 50.0) * 0.35)), 2)
+                if count >= 4
+                else 0.0,
+            }
+        return out
+
+    @staticmethod
+    def _sports_origin(row: dict[str, Any]) -> str:
+        snap = row.get("scoring_snapshot") if isinstance(row.get("scoring_snapshot"), dict) else {}
+        origin = snap.get("pick_origin")
+        if origin in ("atlas", "user", "both"):
+            return str(origin)
+        if snap.get("atlas_presented") or snap.get("source") in {
+            "openai_web",
+            "odds_scan",
+            "sports_scan",
+        }:
+            return "atlas"
+        if snap.get("user_entry") or snap.get("source") == "user_entry":
+            return "user"
+        src = str(row.get("resolution_source") or "")
+        if src in ("watchlist", "manual", "manual_edit"):
+            return "user"
+        if src.startswith("auto_") or src == "auto_scan":
+            return "atlas"
+        return "atlas"
 
     def _sports_adjustments(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
         min_edge = 0.6
