@@ -31,6 +31,9 @@ export interface OddsApiStatus {
   estimated_live_scan_credits?: number;
   monthly_capacity?: number;
   active_key_index?: number | null;
+  spend_locked?: boolean;
+  odds_spend_mode?: string;
+  live_fetch_allowed?: boolean;
   error?: string | null;
 }
 

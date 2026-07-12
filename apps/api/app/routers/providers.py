@@ -141,11 +141,16 @@ async def providers_status(refresh: bool = False) -> dict:
             "scan_scope": active_settings.odds_scan_scope,
             "max_sports_per_scan": active_settings.odds_max_sports_per_scan,
             "estimated_live_scan_credits": estimated_scan_credits,
+            "spend_locked": bool(cache_status.get("spend_locked")),
+            "odds_spend_mode": cache_status.get("odds_spend_mode")
+            or active_settings.odds_spend_mode_normalized(),
+            "live_fetch_allowed": active_settings.odds_live_spending_allowed(),
             "error": odds_error,
             "features": [
                 "multi-key failover",
                 "response cache",
-                "US-core live scan (~4 credits)",
+                "cache-only spend lock",
+                "US-core live scan (when unlocked)",
                 "FanDuel / DraftKings lines",
                 "zero-credit rescore",
                 "OpenAI slate ranking",

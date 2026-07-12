@@ -332,6 +332,9 @@ export function SportsSignalsView({
   const cacheRescoreFree = oddsStatus?.cache_rescore_free ?? false;
   const cacheFresh = oddsStatus?.cache_fresh ?? false;
   const cacheNeedsLive = oddsStatus?.cache_needs_live_refresh ?? false;
+  const spendLocked = Boolean(
+    oddsStatus?.spend_locked || oddsStatus?.live_fetch_allowed === false || oddsStatus?.quota_exhausted,
+  );
   const busy = loading !== null;
 
   return (
@@ -388,11 +391,15 @@ export function SportsSignalsView({
           <button
             type="button"
             onClick={() => refreshSports("live")}
-            disabled={busy}
-            title="Fetch live FanDuel/DraftKings lines for US-core leagues (~4 Odds API credits)."
+            disabled={busy || spendLocked}
+            title={
+              spendLocked
+                ? "Odds spend lock is on — Fetch is blocked to protect remaining credits. Use Rescore / Atlas Insight."
+                : "Fetch live FanDuel/DraftKings lines for US-core leagues (~2–4 Odds API credits)."
+            }
             className="rounded-lg border border-violet-500/40 bg-violet-500/10 px-4 py-2 text-sm font-medium text-violet-200 hover:bg-violet-500/20 disabled:opacity-50"
           >
-            {loading === "live" ? "Fetching…" : "Fetch live odds"}
+            {loading === "live" ? "Fetching…" : spendLocked ? "Fetch locked" : "Fetch live odds"}
           </button>
           <button
             type="button"

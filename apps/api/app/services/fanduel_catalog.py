@@ -514,7 +514,9 @@ async def build_fanduel_catalog(
     props_events = 0
     prop_cap = max_prop_events
     if prop_cap is None:
-        prop_cap = int(getattr(config.settings, "odds_insight_prop_events", 2) or 2)
+        prop_cap = int(getattr(config.settings, "odds_insight_prop_events", 0) or 0)
+    if not config.settings.odds_live_spending_allowed():
+        prop_cap = 0
     prop_cap = max(0, min(prop_cap, 4))
 
     remaining_credits: int | None = None
@@ -931,7 +933,7 @@ async def fetch_verified_markets_for_search(
     # pull that sport's FanDuel/DK board once so Search can still find the slate.
     seed_credits = 0
     LIVE_SEED_SPORTS = set(PROP_MARKETS_BY_SPORT) | COMBAT_SPORT_KEYS
-    if not matched:
+    if not matched and config.settings.odds_live_spending_allowed():
         sk = sport_key or ""
         if not sk and any("portland" in t or t == "fire" or "tempo" in t for t in team_needles):
             sk = "basketball_wnba"
@@ -980,9 +982,11 @@ async def fetch_verified_markets_for_search(
     matched.sort(key=lambda e: hours_until_event(e.get("commence_time")) or 9999)
     cap = max_events
     if cap is None:
-        cap = int(getattr(config.settings, "odds_search_prop_events", 2) or 2)
+        cap = int(getattr(config.settings, "odds_search_prop_events", 0) or 0)
+    if not config.settings.odds_live_spending_allowed():
+        cap = 0
     cap = max(0, min(cap, 3))
-    matched = matched[:cap]
+    matched = matched[: max(cap, 1) if matched else 0] if cap > 0 else matched[:3]
 
     credits_used = seed_credits
     props_events = 0
@@ -990,7 +994,7 @@ async def fetch_verified_markets_for_search(
         _append_game_lines(raw, event, all_preferred_books=True)
 
     remaining_credits: int | None = None
-    if matched and cap > 0:
+    if matched and cap > 0 and config.settings.odds_live_spending_allowed():
         client, _, info = await _select_active_client()
         remaining_credits = info.get("total_remaining")
         if remaining_credits is not None and seed_credits:

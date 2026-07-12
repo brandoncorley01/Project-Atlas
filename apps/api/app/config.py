@@ -33,11 +33,11 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o-mini"
 
     # Minutes to reuse cached odds before spending API credits on a fresh scan.
-    odds_cache_ttl_minutes: int = 90
+    odds_cache_ttl_minutes: int = 360
 
     # Max sportsbooks leagues fetched per live scan (1 credit each).
     # Default 4 = MLB/WNBA-first US core (FanDuel/DraftKings); 0 = no cap (expensive).
-    odds_max_sports_per_scan: int = 4
+    odds_max_sports_per_scan: int = 2
 
     # priority = in-season majors only (credit-safe); full = every active game sport.
     odds_scan_scope: str = "priority"
@@ -46,19 +46,26 @@ class Settings(BaseSettings):
     odds_include_futures_on_live: bool = False
 
     # Refuse a live pull when remaining credits are below this + estimated scan cost.
-    odds_min_credits_reserve: int = 5
+    odds_min_credits_reserve: int = 100
 
     # Atlas Insight: max soon games to pull FanDuel player props for (each uses ~3 credits).
-    odds_insight_prop_events: int = 2
+    # 0 = never spend Odds credits on Insight (use odds/props cache only).
+    odds_insight_prop_events: int = 0
 
-    # Keep a small reserve so Insight prop pulls don't zero the free-tier quota.
-    odds_insight_min_credits_reserve: int = 5
+    # Keep a reserve so Insight prop pulls don't zero the free-tier quota.
+    odds_insight_min_credits_reserve: int = 100
 
     # Search: max matching games to pull FanDuel/DK player props for (credit-capped).
-    odds_search_prop_events: int = 2
+    # 0 = Search uses cache + OpenAI only (0 Odds credits).
+    odds_search_prop_events: int = 0
 
     # Search prop pull reserve — leave credits for Fetch live.
-    odds_search_min_credits_reserve: int = 4
+    odds_search_min_credits_reserve: int = 100
+
+    # cache_only = never call Odds live APIs (Rescore / Insight / Search from cache).
+    # conservative = live only when remaining > reserve; no Insight/Search prop pulls.
+    # normal = previous behavior.
+    odds_spend_mode: str = "cache_only"
 
     environment: str = "development"
     default_user_id: str = ""
@@ -111,6 +118,18 @@ class Settings(BaseSettings):
             if key and key not in seen:
                 seen.append(key)
         return seen
+
+    def odds_spend_mode_normalized(self) -> str:
+        mode = (self.odds_spend_mode or "cache_only").strip().lower()
+        if mode in {"cache_only", "locked", "off", "zero"}:
+            return "cache_only"
+        if mode in {"conservative", "safe"}:
+            return "conservative"
+        return "normal"
+
+    def odds_live_spending_allowed(self) -> bool:
+        """False when Atlas must not spend Odds API credits."""
+        return self.odds_spend_mode_normalized() != "cache_only"
 
 
 settings = Settings()

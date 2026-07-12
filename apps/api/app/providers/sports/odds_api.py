@@ -422,9 +422,16 @@ def odds_cache_status() -> dict[str, Any]:
     needs_live = _cache_needs_live_refresh(near_keys) if near_term else bool(raw_events)
     has_data = bool(near_term)
     within_ttl = age is not None and age <= ttl
+    spend_locked = not config.settings.odds_live_spending_allowed()
+    # Spend lock: treat any cached upcoming events as rescoreable (0 credits forever).
+    if spend_locked and near_term:
+        within_ttl = True
     fresh = has_data and within_ttl and not needs_live
     # Matches fetch_all_sports_odds: zero-credit rescore while cache is within TTL.
     rescore_free = bool(cache) and within_ttl and bool(near_term)
+    if spend_locked and bool(near_term):
+        rescore_free = True
+        needs_live = False
     cache_stats = dict(cache.get("stats") or {}) if cache else {}
     league_catalog = list(cache_stats.get("league_catalog") or [])
     if not league_catalog:
@@ -437,11 +444,16 @@ def odds_cache_status() -> dict[str, Any]:
         "age_minutes": round(age, 1) if age is not None else None,
         "fresh": fresh,
         "cache_needs_live_refresh": needs_live,
+        "spend_locked": spend_locked,
+        "odds_spend_mode": config.settings.odds_spend_mode_normalized(),
         "near_term_event_count": len(near_term),
-        "near_term_leagues": near_meta.get("near_term_leagues") or [],
+        "near_term_leagues": list(near_meta.get("near_term_leagues") or []),
         "league_catalog": league_catalog,
+        "cache_ttl_minutes": ttl,
         "ttl_minutes": ttl,
-        "minutes_until_stale": round(max(0.0, ttl - age), 1) if age is not None and within_ttl else 0.0,
+        "minutes_until_stale": (
+            round(max(0.0, ttl - age), 1) if age is not None and within_ttl else 0.0
+        ),
         "event_count": len(raw_events),
         "fetched_at": cache.get("fetched_at") if cache else None,
         "stats": cache_stats,
@@ -948,16 +960,22 @@ async def fetch_all_sports_odds(
         return [], {"configured": False, "error": "ODDS_API_KEY is not configured"}
 
     cache = _read_cache()
-
-    # Explicit Rescore path — never spend Odds credits.
-    if cache_only:
+    spend_locked = not config.settings.odds_live_spending_allowed()
+    # Hard lock: never hit Odds live APIs — serve disk cache (even past TTL).
+    if spend_locked or cache_only:
         if not cache or not cache.get("events"):
             return [], {
                 "configured": True,
                 "cached": False,
                 "cache_only": True,
+                "spend_locked": spend_locked,
+                "odds_spend_mode": config.settings.odds_spend_mode_normalized(),
                 "credits_used": 0,
-                "error": "No cached odds yet — tap Fetch live odds once to seed the board.",
+                "error": (
+                    "Odds spend lock is on (cache-only) and there is no odds cache yet. "
+                    "Set ODDS_SPEND_MODE=conservative after adding fresh keys, then Fetch once — "
+                    "or keep using Atlas Insight / Search from OpenAI."
+                ),
             }
         age = _cache_age_minutes(cache.get("fetched_at"))
         raw_events = list(cache.get("events") or [])
@@ -970,16 +988,24 @@ async def fetch_all_sports_odds(
                 "configured": True,
                 "cached": True,
                 "cache_only": True,
-                "stale": False,
+                "spend_locked": spend_locked,
+                "odds_spend_mode": config.settings.odds_spend_mode_normalized(),
+                "stale": bool(age is not None and age > max(0, config.settings.odds_cache_ttl_minutes)),
                 "cache_age_minutes": round(age, 1) if age is not None else None,
                 "events": len(events),
                 "events_dropped_past": len(raw_events) - len(events),
                 "events_dropped_far_out": near_meta.get("dropped_far_out", 0),
                 "leagues_with_near_term_games": near_meta.get("near_term_leagues") or [],
-                "cache_needs_live_refresh": needs_live,
+                "cache_needs_live_refresh": False if spend_locked else needs_live,
                 "credits_used": 0,
-                "scan_scope": "rescore",
+                "scan_scope": "cache_only" if spend_locked else "rescore",
                 "max_sports_per_scan": config.settings.odds_max_sports_per_scan,
+                "message": (
+                    "Odds spend lock — served cached lines (0 credits). "
+                    "Use Rescore / Atlas Insight / Search."
+                    if spend_locked
+                    else None
+                ),
             }
         )
         return events, stats
