@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ParlayCard, type Parlay } from "@/components/parlays/ParlayCard";
-import { SportsEventSearch, type ParlayLegSignal } from "@/components/sports/SportsEventSearch";
 import { ScoreBadge } from "@/components/ui/ScoreBadge";
 import { apiFetch } from "@/lib/api";
 import { apiRequestHeaders, getApiUrl, usesBffProxy } from "@/lib/api-url";
@@ -156,44 +155,6 @@ export function ParlayEditor({ initialParlay }: ParlayEditorProps) {
     setMessage(null);
   }
 
-  function addFanDuelLeg(leg: ParlayLegSignal) {
-    setEditing(true);
-    setPool((prev) => {
-      if (prev.some((p) => p.id === leg.id)) return prev;
-      return [
-        {
-          id: leg.id,
-          sport: leg.sport,
-          event_name: leg.event_name,
-          selection: leg.selection,
-          bet_type: leg.bet_type,
-          odds_american: leg.odds_american,
-        },
-        ...prev,
-      ];
-    });
-    setSelectedIds((prev) => {
-      if (prev.includes(leg.id)) {
-        setMessage("That FanDuel leg is already on this parlay.");
-        return prev;
-      }
-      if (prev.length >= 6) {
-        setError("Parlays max out at 6 legs.");
-        return prev;
-      }
-      const existingEvents = new Set(
-        pool.filter((p) => prev.includes(p.id)).map((p) => p.event_name).filter(Boolean),
-      );
-      if (leg.event_name && existingEvents.has(leg.event_name)) {
-        setError("Only one FanDuel leg per event — pick a different game.");
-        return prev;
-      }
-      setError(null);
-      setMessage(`Added FanDuel leg: ${leg.selection}`);
-      return [...prev, leg.id];
-    });
-  }
-
   async function saveParlay() {
     if (selectedIds.length < 2) {
       setError("Select at least 2 legs from different events.");
@@ -229,15 +190,29 @@ export function ParlayEditor({ initialParlay }: ParlayEditorProps) {
 
   return (
     <div className="space-y-6">
-      <ParlayCard row={display} rank={1} />
+      <ParlayCard
+        row={{ ...display, id: parlay.id }}
+        rank={1}
+        onUpdated={(next) => {
+          setParlay(next);
+          setSelectedIds(
+            (next.legs ?? [])
+              .map((leg) => leg.sports_signal_id)
+              .filter((id): id is string => Boolean(id)),
+          );
+          setPreview(null);
+          setEditing(false);
+          setMessage("Parlay updated with new FanDuel leg.");
+        }}
+      />
 
       <section className="rounded-xl border border-border bg-surface p-4 sm:p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-sm font-semibold">Edit parlay legs</h2>
             <p className="mt-1 text-xs text-muted">
-              Search FanDuel markets or pick from Atlas sports plays (2–6 legs, one per event).
-              Odds and scores recalculate on save.
+              Use <span className="text-fanduel-text">Add a leg</span> on the ticket above for FanDuel
+              search, or modify from Atlas sports plays here (2–6 legs, one per event).
             </p>
           </div>
           <button
@@ -263,10 +238,6 @@ export function ParlayEditor({ initialParlay }: ParlayEditorProps) {
 
         {editing && (
           <>
-            <div className="mt-4">
-              <SportsEventSearch intent="parlay" onParlayLegAdded={addFanDuelLeg} />
-            </div>
-
             <p className="mt-3 text-xs text-muted">
               {selectedIds.length} leg{selectedIds.length !== 1 ? "s" : ""} selected
               {selectedIds.length < 2 && " — pick at least 2"}

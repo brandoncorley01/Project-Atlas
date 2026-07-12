@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ParlayCard, type Parlay } from "@/components/parlays/ParlayCard";
 import { ParlayCategoryTabs } from "@/components/parlays/ParlayCategoryTabs";
-import { ParlayFanDuelBuilder } from "@/components/parlays/ParlayFanDuelBuilder";
 import { ParlayStyleTabs } from "@/components/parlays/ParlayStyleTabs";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ListSkeleton } from "@/components/ui/Skeleton";
@@ -227,10 +226,8 @@ export function ParlaysView({
 
   return (
     <div>
-      <ParlayFanDuelBuilder />
-
       <div className="mb-4 rounded-xl border border-orange-500/30 bg-orange-500/8 px-4 py-3">
-        <p className="text-sm font-semibold text-orange-200">Or let Atlas build options</p>
+        <p className="text-sm font-semibold text-orange-200">Parlays in 2 steps</p>
         <ol className="mt-2 list-inside list-decimal space-y-1 text-sm text-muted">
           <li>Run <strong className="text-foreground">Scan sports odds</strong> on the Sports page first</li>
           <li>Come back here and click <strong className="text-foreground">Build parlay options</strong></li>
@@ -239,12 +236,8 @@ export function ParlaysView({
           Conservative = 2 legs (safest) · Balanced = 3 legs · Aggressive = 4 legs (biggest payout)
         </p>
         <p className="mt-2 text-xs text-muted">
-          ☆ <strong className="text-foreground">Save to watchlist</strong> on any ticket to track it.
-          View saved picks on{" "}
-          <Link href="/watchlist?tab=parlays" className="text-accent hover:underline">
-            Watchlist → Parlays
-          </Link>
-          .
+          On any ticket, use <strong className="text-fanduel-text">Add a leg</strong> to search FanDuel
+          and append a selection. ☆ Save to watchlist to track it.
         </p>
       </div>
 
@@ -301,7 +294,16 @@ export function ParlaysView({
                 <div className="space-y-4">
                   {section.items.map((item) => {
                     globalRank += 1;
-                    return <ParlayCard key={item.id} row={item} rank={globalRank} />;
+                    return (
+                      <ParlayCard
+                        key={item.id}
+                        row={item}
+                        rank={globalRank}
+                        onUpdated={(next) => {
+                          setItems((prev) => prev.map((p) => (p.id === next.id ? next : p)));
+                        }}
+                      />
+                    );
                   })}
                 </div>
               </section>
@@ -310,7 +312,14 @@ export function ParlaysView({
         ) : (
           <div className="space-y-4">
             {items.map((item, index) => (
-              <ParlayCard key={item.id} row={item} rank={index + 1} />
+              <ParlayCard
+                key={item.id}
+                row={item}
+                rank={index + 1}
+                onUpdated={(next) => {
+                  setItems((prev) => prev.map((p) => (p.id === next.id ? next : p)));
+                }}
+              />
             ))}
           </div>
         )

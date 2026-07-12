@@ -169,11 +169,14 @@ export function SportsEventSearch({
   onBetLogged,
   intent = "log",
   onParlayLegAdded,
+  embedded = false,
 }: {
   onBetLogged?: () => void | Promise<void>;
   /** `parlay` = FanDuel-only search that adds legs to a ticket builder. */
   intent?: "log" | "parlay";
   onParlayLegAdded?: (leg: ParlayLegSignal) => void | Promise<void>;
+  /** Tighter layout when nested inside a parlay card. */
+  embedded?: boolean;
 }) {
   const isParlay = intent === "parlay";
   const [query, setQuery] = useState("");
@@ -440,7 +443,9 @@ export function SportsEventSearch({
 
   return (
     <section
-      className={`mb-6 rounded-xl border p-4 ${
+      className={`rounded-xl border p-4 ${
+        embedded ? "mb-0" : "mb-6"
+      } ${
         isParlay
           ? "border-fanduel/40 bg-fanduel-muted/30"
           : "border-orange-500/25 bg-orange-500/5"
@@ -449,11 +454,11 @@ export function SportsEventSearch({
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h2 className="text-sm font-semibold text-foreground">
-            {isParlay ? "Search FanDuel bets" : "Search & log my bet"}
+            {isParlay ? "Add a leg" : "Search & log my bet"}
           </h2>
           <p className="mt-1 text-xs text-muted">
             {isParlay
-              ? "Find real FanDuel lines, then add each selection as a leg on your parlay."
+              ? "Search FanDuel markets and add a selection to this parlay."
               : "Atlas Insight resolves the player/team, pulls real FanDuel/DraftKings lines, then ranks which are most likely to hit and where the best odds are."}
           </p>
         </div>
@@ -755,7 +760,7 @@ export function SportsEventSearch({
                 ? "Adding…"
                 : "Saving…"
               : isParlay
-                ? "Add FanDuel leg to parlay"
+                ? "Add a leg"
                 : "Log bet for Atlas learning"}
           </button>
         </div>
