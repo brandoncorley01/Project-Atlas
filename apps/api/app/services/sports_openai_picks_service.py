@@ -25,7 +25,8 @@ HARD RULES:
 - You may ONLY choose picks by returning catalog ids that already exist in the catalog.
 - NEVER invent a player, line, market, team, or odds that is not in the catalog.
 - Prefer player props when they are present in the catalog (~60% of picks), still include strong moneylines/spreads/totals.
-- Prefer MLB and WNBA when those events appear.
+- When MMA/UFC/Boxing fight props are in the catalog (round totals / fight spreads), include several of tonight's fights — do not ignore combat sports.
+- Prefer MLB and WNBA among team sports when those events appear.
 - Use web search to decide which catalog bets analysts currently like — not to create new bets.
 
 Return JSON only:
@@ -303,6 +304,47 @@ class SportsOpenAiPicksService:
                 )
                 if len(rows) >= limit:
                     break
+
+        # Always reserve tonight's MMA/Boxing fight props so they cannot vanish behind MLB/WNBA ranks.
+        combat_items = [
+            c
+            for c in ranking_catalog
+            if c.get("bet_type") == "player_prop"
+            and (
+                str(c.get("prop_market") or "").startswith("fight_")
+                or str(c.get("sport_key") or "").startswith(("mma_", "boxing_"))
+                or str(c.get("sport") or "").upper() in {"MMA", "BOXING", "UFC"}
+            )
+        ]
+        seen_catalog_ids = {
+            str((r.get("scoring_snapshot") or {}).get("catalog_id") or "")
+            for r in rows
+        }
+        for item in combat_items:
+            cid = str(item.get("id") or "")
+            if not cid or cid in seen_catalog_ids:
+                continue
+            rows.append(
+                _catalog_to_row(
+                    self.user_id,
+                    item,
+                    confidence=60.0,
+                    opportunity=58.0,
+                    risk=48.0,
+                    thesis=(
+                        "Tonight's FanDuel/DraftKings fight prop — reserved so MMA/Boxing "
+                        "markets stay on the board with Atlas Insight."
+                    ),
+                    bull="Listed now on a US book for an upcoming fight.",
+                    bear="Live fight volatility — confirm the number before betting.",
+                    sources=["DraftKings", "FanDuel"],
+                )
+            )
+            seen_catalog_ids.add(cid)
+            if len(rows) >= max(limit, 12):
+                break
+        # Cap after combat reserve.
+        rows = rows[: max(limit, 12)]
 
         # Always surface a board when the catalog has markets.
         if not rows:

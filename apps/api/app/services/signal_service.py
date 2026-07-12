@@ -251,8 +251,23 @@ class SignalService:
             offset=offset if not category else 0,
         )
         if sport:
-            sport_upper = sport.upper()
-            rows = [r for r in rows if str(r.get("sport") or "").upper() == sport_upper]
+            sport_norm = str(sport).strip().lower().replace(" ", "_")
+            def _sport_match(row: dict) -> bool:
+                label = str(row.get("sport") or "").strip().lower().replace(" ", "_")
+                key = str((row.get("scoring_snapshot") or {}).get("sport_key") or "").lower()
+                if not sport_norm:
+                    return True
+                if label == sport_norm or key == sport_norm:
+                    return True
+                if sport_norm in {"mma", "ufc"} and (
+                    "mma" in label or "ufc" in label or key.startswith("mma_")
+                ):
+                    return True
+                if sport_norm == "boxing" and ("boxing" in label or key.startswith("boxing_")):
+                    return True
+                return sport_norm in label or label in sport_norm or sport_norm in key
+
+            rows = [r for r in rows if _sport_match(r)]
         rows = [r for r in rows if is_sports_listable(r)]
         rows = [r for r in rows if _sports_window_match(r, window)]
         if category:

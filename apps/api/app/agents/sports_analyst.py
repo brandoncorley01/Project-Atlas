@@ -81,11 +81,17 @@ def _format_selection(bet_type: str, name: str, point: float | None) -> str:
     return name
 
 
+def _is_combat_sport_key(sport_key: str | None) -> bool:
+    key = (sport_key or "").lower()
+    return key.startswith("mma_") or key.startswith("boxing_") or key in {"mma", "boxing", "ufc"}
+
+
 def _bet_type_label(bet_type: str) -> str:
     return {
         "moneyline": "Moneyline",
         "spread": "Spread",
         "total": "Total",
+        "player_prop": "Player prop",
         "futures": "Futures",
         "outright": "Futures",
     }.get(bet_type, bet_type.capitalize())
@@ -128,9 +134,41 @@ def _market_key_for_bet_type(bet_type: str) -> str:
         "moneyline": "h2h",
         "spread": "spreads",
         "total": "totals",
+        "player_prop": "totals",
         "futures": "outrights",
         "outright": "outrights",
     }.get(bet_type, "h2h")
+
+
+def _promote_combat_candidates(candidates: list[dict[str, Any]], *, sport_key: str) -> None:
+    """Tag MMA/Boxing round totals + fight handicaps as player props."""
+    if not _is_combat_sport_key(sport_key):
+        return
+    for cand in candidates:
+        if cand.get("bet_type") == "total":
+            cand["bet_type"] = "player_prop"
+            cand["prop_market"] = "fight_total_rounds"
+            cand["is_fight_prop"] = True
+            cand["is_player_prop"] = True
+        elif cand.get("bet_type") == "spread":
+            cand["bet_type"] = "player_prop"
+            cand["prop_market"] = "fight_spread"
+            cand["is_fight_prop"] = True
+            cand["is_player_prop"] = True
+            cand["player_name"] = cand.get("selection")
+
+
+def _combat_selection_label(cand: dict[str, Any]) -> str:
+    bet_type = str(cand.get("bet_type") or "")
+    point = cand.get("point")
+    name = str(cand.get("selection") or "")
+    if cand.get("prop_market") == "fight_total_rounds":
+        if point is not None:
+            return f"Fight {name} {float(point):g} Rounds"
+        return f"Fight {name} Rounds"
+    if cand.get("prop_market") == "fight_spread":
+        return _format_selection("spread", name, float(point) if point is not None else None)
+    return _format_selection(bet_type if bet_type != "player_prop" else "moneyline", name, point)
 
 
 def _is_outright_event(event: dict[str, Any]) -> bool:
@@ -544,6 +582,9 @@ def analyze_event(
             }
         )
 
+    _promote_combat_candidates(candidates, sport_key=sport_key)
+    combat = _is_combat_sport_key(sport_key)
+
     setups: list[SportsBetSetup] = []
     for cand in candidates:
         edge = float(cand["edge"])
@@ -551,13 +592,20 @@ def analyze_event(
         has_us_book = any(b.get("key") in US_PREFERRED_BOOK_KEYS for b in book_odds)
         # Prefer multi-book confirmation; FanDuel/DK alone is enough for US boards.
         min_books = 1 if has_us_book else 2
-        if edge < min_edge or cand["book_count"] < min_books:
+        # Single-book MMA totals/spreads have edge=0 vs themselves — still list as props.
+        is_fight_prop = bool(cand.get("is_fight_prop"))
+        effective_min_edge = 0.0 if (combat and is_fight_prop and has_us_book) else min_edge
+        if edge < effective_min_edge or cand["book_count"] < min_books:
             continue
 
-        bet_type = cand["bet_type"]
+        bet_type = str(cand["bet_type"])
         odds = int(cand["odds_american"])
         book_key, book_label = _primary_book_label(book_odds, odds)
-        selection_label = _format_selection(bet_type, cand["selection"], cand["point"])
+        selection_label = (
+            _combat_selection_label(cand)
+            if is_fight_prop
+            else _format_selection(bet_type, cand["selection"], cand["point"])
+        )
         implied = american_to_implied_prob(odds)
         ev = round(edge * 0.85, 2)
 
@@ -567,24 +615,38 @@ def analyze_event(
         setup_strength = min(55, edge * 8 + liquidity_boost + timing_boost_val)
         if has_us_book:
             setup_strength += 4.0
-        if setup_strength < strength_floor:
+        if is_fight_prop and has_us_book:
+            setup_strength += 6.0
+        if setup_strength < strength_floor and not (is_fight_prop and has_us_book):
             continue
 
         risk = round(min(88, max(20, 38 + implied * 40 - edge * 3)), 1)
         confidence = round(min(90, setup_strength + min(10, book_count) - confidence_dampen), 1)
-        opportunity = round(min(95, confidence * 0.5 + (100 - risk) * 0.3 + edge * 4 + timing_boost_val * 0.35), 1)
+        opportunity = round(
+            min(95, confidence * 0.5 + (100 - risk) * 0.3 + edge * 4 + timing_boost_val * 0.35),
+            1,
+        )
 
         # Longer-dated games need a bit more edge, but stay visible for early value.
         if hours is not None and hours > NEAR_TERM_HOURS:
             opportunity -= min(8.0, (hours - NEAR_TERM_HOURS) * 0.03)
         # Single-book US lines get a small haircut — not a free pass to the board.
-        if has_us_book and cand["book_count"] < 2:
+        if has_us_book and cand["book_count"] < 2 and not is_fight_prop:
             opportunity -= 2.0
-        if opportunity < min_opportunity:
+        # Tonight's MMA/Boxing props should clear the board even without multi-book edge.
+        if is_fight_prop and has_us_book:
+            opportunity = max(
+                opportunity,
+                34.0 if (hours is not None and hours <= 12) else 28.0,
+            )
+        effective_min_opportunity = (
+            min(min_opportunity, 18.0) if (is_fight_prop and has_us_book) else min_opportunity
+        )
+        if opportunity < effective_min_opportunity:
             continue
 
-        sharp = "steam" if edge >= 3.5 else ("value" if edge >= 2.0 else None)
-        type_label = _bet_type_label(bet_type)
+        sharp = "steam" if edge >= 3.5 else ("value" if edge >= 2.0 or is_fight_prop else None)
+        type_label = "Fight prop" if is_fight_prop else _bet_type_label(bet_type)
 
         kickoff = _format_kickoff(event_start)
         recommendation = f"{type_label} — {selection_label} · {kickoff} ({sport})"
@@ -608,7 +670,19 @@ def analyze_event(
             else f"Target {odds:+d} or better on {selection_label}"
         )
 
-        market_key = _market_key_for_bet_type(bet_type)
+        market_key = (
+            "totals"
+            if cand.get("prop_market") == "fight_total_rounds"
+            else "spreads"
+            if cand.get("prop_market") == "fight_spread"
+            else _market_key_for_bet_type(bet_type)
+        )
+        outcome_prices = _collect_outcome_odds(
+            event,
+            market_key,
+            cand["selection"],
+            cand["point"],
+        )
         line_movement = {
             "opening_odds": odds,
             "consensus_books": cand["book_count"],
@@ -616,21 +690,22 @@ def analyze_event(
             "preferred_book": book_key,
             "preferred_book_title": book_label,
             "book_odds": book_odds,
+            "prop_market": cand.get("prop_market"),
+            "player_name": cand.get("player_name"),
             "market_median_implied": round(
-                statistics.median(
-                    american_to_implied_prob(p)
-                    for p in _collect_outcome_odds(
-                        event,
-                        market_key,
-                        cand["selection"],
-                        cand["point"],
-                    )
-                )
-                * 100,
+                statistics.median(american_to_implied_prob(p) for p in outcome_prices) * 100,
                 2,
-            ),
+            )
+            if outcome_prices
+            else None,
             "event_id": event.get("id"),
         }
+
+        snap_categories = None
+        if is_fight_prop:
+            snap_categories = ["top_picks", "player_props", "value_plays"]
+            if hours is not None and hours <= 48:
+                snap_categories.insert(0, "starting_soon")
 
         setups.append(
             SportsBetSetup(
@@ -666,10 +741,16 @@ def analyze_event(
                     "home_team": home,
                     "away_team": away,
                     "slate_mode": slate_mode,
+                    "is_player_prop": bet_type == "player_prop" or is_fight_prop,
+                    "is_fight_prop": is_fight_prop,
+                    "prop_market": cand.get("prop_market"),
+                    "player_name": cand.get("player_name"),
+                    **({"categories": snap_categories} if snap_categories else {}),
                     "pick": {
                         "bet_type": bet_type,
                         "team_or_side": cand["selection"],
                         "point": cand.get("point"),
+                        "player_name": cand.get("player_name"),
                     },
                     "market_context": {
                         "expected_value": ev,
@@ -679,8 +760,15 @@ def analyze_event(
                 },
             )
         )
+        support_bet = (
+            "total"
+            if cand.get("prop_market") == "fight_total_rounds"
+            else "spread"
+            if cand.get("prop_market") == "fight_spread"
+            else bet_type
+        )
         support, stats_detail = compute_pick_support(
-            bet_type,
+            support_bet,
             cand["selection"],
             cand.get("point"),
             home,
@@ -690,7 +778,16 @@ def analyze_event(
         apply_stats_to_setup(setups[-1], support, stats_detail)
 
     # Drop plays that form demotion pushed below the opportunity floor.
-    setups = [s for s in setups if s.opportunity_score >= min_opportunity]
+    setups = [
+        s
+        for s in setups
+        if s.opportunity_score
+        >= (
+            min(min_opportunity, 18.0)
+            if bool((s.scoring_snapshot or {}).get("is_fight_prop"))
+            else min_opportunity
+        )
+    ]
     return _select_best_per_market(setups)
 
 
@@ -718,7 +815,12 @@ def _select_best_per_market(setups: list[SportsBetSetup]) -> list[SportsBetSetup
         snap = setup.scoring_snapshot or {}
         event_id = str(snap.get("event_id") or setup.event_name or "")
         family = str(setup.bet_type or "moneyline")
-        key = f"{event_id}|{family}"
+        # Player/fight props must not collapse every market on a card into one pick.
+        if family == "player_prop" or bool(snap.get("is_fight_prop")):
+            prop_market = str(snap.get("prop_market") or "player_prop")
+            key = f"{event_id}|{family}|{prop_market}"
+        else:
+            key = f"{event_id}|{family}"
         by_family.setdefault(key, []).append(setup)
 
     winners: list[SportsBetSetup] = []
