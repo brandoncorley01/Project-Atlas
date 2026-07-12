@@ -52,10 +52,27 @@ export interface PerformanceSummary {
   learning_active?: boolean;
   learning_notes?: string[];
   confidence_accuracy?: Record<string, { count: number; win_rate: number }>;
+  market_learning?: {
+    headline?: string;
+    active_markets?: number;
+    markets?: Array<{
+      id: string;
+      label: string;
+      decided: number;
+      win_rate: number | null;
+      maturity: string;
+      maturity_label: string;
+      adjustment: string;
+      feeds_next_picks?: boolean;
+      details?: string[];
+    }>;
+  };
+  sports_learning?: Record<string, unknown>;
   calibration?: {
     sample_count?: number;
     learning_notes?: string[];
     active?: boolean;
+    market_learning?: PerformanceSummary["market_learning"];
   };
   by_module?: Record<string, PerformanceSummary>;
 }
@@ -447,25 +464,29 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
 
   const learningNotes = summary.learning_notes ?? summary.calibration?.learning_notes ?? [];
   const confidenceBuckets = summary.confidence_accuracy ?? {};
+  const marketLearning =
+    summary.market_learning ?? summary.calibration?.market_learning ?? { markets: [], headline: "" };
 
   return (
     <div className="space-y-8">
+      <LearningLoopPanel marketLearning={marketLearning} learningActive={Boolean(summary.learning_active)} />
+
       <section className="rounded-xl border border-violet-500/30 bg-violet-500/5 p-4">
         <h2 className="text-sm font-semibold text-foreground">How Atlas learns</h2>
         <p className="mt-2 text-sm text-muted">
-          <strong className="text-foreground">Your picks</strong> are watchlist saves — shown first.
-          <strong className="ml-1 text-foreground">Atlas scan picks</strong> are every ranked signal from
-          scans; expand that section when you want the full history.
+          Every graded result — your picks and Atlas board picks — teaches the next scan across sports,
+          stocks, options, and parlays. Thresholds tighten where results are weak and lean into what is
+          hitting.
         </p>
-        {summary.learning_active && learningNotes.length > 0 ? (
+        {learningNotes.length > 0 ? (
           <ul className="mt-3 space-y-1 text-sm text-violet-200">
-            {learningNotes.map((note) => (
+            {learningNotes.slice(0, 6).map((note) => (
               <li key={note}>· {note}</li>
             ))}
           </ul>
         ) : (
           <p className="mt-3 text-xs text-muted">
-            Log at least 8 outcomes across stocks, options, and sports to activate personalized learning.
+            Grade settled picks (or open Sports so finished games auto-grade) to start the loop.
           </p>
         )}
         <div className="mt-4 flex flex-wrap gap-2">
@@ -697,6 +718,80 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
         </section>
       )}
     </div>
+  );
+}
+
+function LearningLoopPanel({
+  marketLearning,
+  learningActive,
+}: {
+  marketLearning: NonNullable<PerformanceSummary["market_learning"]>;
+  learningActive: boolean;
+}) {
+  const markets = marketLearning.markets ?? [];
+  const maturityTone = (m: string) => {
+    if (m === "active") return "border-emerald-500/40 bg-emerald-500/10 text-emerald-200";
+    if (m === "warming") return "border-sky-500/40 bg-sky-500/10 text-sky-200";
+    if (m === "seeding") return "border-amber-500/40 bg-amber-500/10 text-amber-100";
+    return "border-border bg-surface/60 text-muted";
+  };
+
+  return (
+    <section className="rounded-xl border border-emerald-500/25 bg-gradient-to-br from-emerald-500/10 via-transparent to-sky-500/5 p-4 sm:p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-emerald-300/90">
+            Atlas learning loop
+          </p>
+          <h2 className="mt-1 text-base font-semibold text-foreground">
+            {learningActive ? "Adapting from real market results" : "Building market memory"}
+          </h2>
+          <p className="mt-2 max-w-3xl text-sm text-muted">
+            {marketLearning.headline ||
+              "Each graded sports, stock, options, and parlay result feeds the next set of picks."}
+          </p>
+        </div>
+        {typeof marketLearning.active_markets === "number" && (
+          <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-center">
+            <p className="text-2xl font-semibold text-foreground">{marketLearning.active_markets}</p>
+            <p className="text-[11px] text-muted">markets calibrating</p>
+          </div>
+        )}
+      </div>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {markets.map((m) => (
+          <div
+            key={m.id}
+            className={`rounded-lg border p-3 ${maturityTone(m.maturity)}`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-foreground">{m.label}</p>
+              <span className="text-[10px] font-medium uppercase tracking-wide opacity-90">
+                {m.maturity_label}
+              </span>
+            </div>
+            <p className="mt-2 text-2xl font-semibold text-foreground">
+              {m.win_rate != null ? `${m.win_rate}%` : "—"}
+            </p>
+            <p className="text-xs opacity-80">{m.decided} graded outcome{m.decided === 1 ? "" : "s"}</p>
+            <p className="mt-2 text-xs leading-relaxed text-foreground/85">{m.adjustment}</p>
+            {m.details && m.details.length > 0 && (
+              <ul className="mt-2 space-y-0.5 text-[11px] opacity-90">
+                {m.details.map((d) => (
+                  <li key={d}>· {d}</li>
+                ))}
+              </ul>
+            )}
+            {m.feeds_next_picks && (
+              <p className="mt-2 text-[10px] font-medium uppercase tracking-wide opacity-70">
+                Feeds next {m.label.toLowerCase()} picks
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 

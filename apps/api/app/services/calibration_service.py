@@ -45,15 +45,29 @@ class CalibrationService:
             by_module.setdefault(mod, []).append(row)
 
         sports_learning = self._sports_learning_slices(by_module.get("sports") or [])
-        if len(rows) < MIN_SAMPLES:
-            defaults = self._defaults(sample_count=len(rows))
-            defaults["sports_learning"] = sports_learning
-            defaults["learning_notes"] = list(sports_learning.get("notes") or [])
-            return defaults
-
         sports = self._sports_adjustments(by_module.get("sports") or [])
         options = self._options_adjustments(by_module.get("options") or [])
         stock = self._stock_adjustments(by_module.get("stock") or [])
+        parlay_note = self._parlay_learning_note(by_module.get("parlay") or [])
+
+        market_learning = self._market_learning_pulse(
+            by_module,
+            sports_adj=sports,
+            options_adj=options,
+            stock_adj=stock,
+            sports_learning=sports_learning,
+            parlay_note=parlay_note,
+        )
+
+        if len(rows) < MIN_SAMPLES:
+            defaults = self._defaults(sample_count=len(rows))
+            defaults["sports_learning"] = sports_learning
+            defaults["market_learning"] = market_learning
+            defaults["learning_notes"] = list(sports_learning.get("notes") or []) + [
+                n for n in (sports.get("note"), options.get("note"), stock.get("note"), parlay_note) if n
+            ]
+            return defaults
+
         confidence_accuracy = self._confidence_accuracy(rows)
 
         notes: list[str] = []
@@ -63,6 +77,8 @@ class CalibrationService:
             notes.append(options["note"])
         if stock.get("note"):
             notes.append(stock["note"])
+        if parlay_note:
+            notes.append(parlay_note)
 
         return {
             "sample_count": len(rows),
@@ -74,6 +90,7 @@ class CalibrationService:
             "stock_min_opportunity": stock["min_opportunity"],
             "confidence_accuracy": confidence_accuracy,
             "sports_learning": sports_learning,
+            "market_learning": market_learning,
             "learning_notes": notes + list(sports_learning.get("notes") or []),
             "active": len(rows) >= MIN_SAMPLES,
         }
@@ -98,9 +115,194 @@ class CalibrationService:
                 "user": {"overall_win_rate": None, "decided": 0, "by_sport": {}, "by_bet_type": {}},
                 "notes": [],
             },
+            "market_learning": {
+                "markets": [],
+                "headline": "Grade a few settled picks — Atlas starts adapting thresholds per market.",
+            },
             "learning_notes": [],
             "active": False,
         }
+
+    def _parlay_learning_note(self, rows: list[dict[str, Any]]) -> str | None:
+        decided = [r for r in rows if r.get("outcome") in ("win", "loss")]
+        if len(decided) < 4:
+            return None
+        wr = self._win_rate(decided)
+        if wr is None:
+            return None
+        if wr < 35.0:
+            return f"Parlays: hitting {wr:.0f}% over {len(decided)} — Atlas will favor fewer, stronger legs"
+        if wr >= 50.0:
+            return f"Parlays: hitting {wr:.0f}% over {len(decided)} — multi-leg builds stay eligible"
+        return f"Parlays: {wr:.0f}% over {len(decided)} graded"
+
+    def _market_learning_pulse(
+        self,
+        by_module: dict[str, list[dict[str, Any]]],
+        *,
+        sports_adj: dict[str, Any],
+        options_adj: dict[str, Any],
+        stock_adj: dict[str, Any],
+        sports_learning: dict[str, Any],
+        parlay_note: str | None,
+    ) -> dict[str, Any]:
+        """Per-market learning indicators for Performance UI + future scan bias."""
+        markets: list[dict[str, Any]] = []
+
+        def _maturity(n: int) -> str:
+            if n >= MIN_SAMPLES:
+                return "active"
+            if n >= 4:
+                return "warming"
+            if n >= 1:
+                return "seeding"
+            return "cold"
+
+        def _maturity_label(level: str) -> str:
+            return {
+                "active": "Learning active",
+                "warming": "Warming up",
+                "seeding": "Collecting grades",
+                "cold": "Needs first grades",
+            }.get(level, level)
+
+        # Sports
+        sports_rows = [r for r in (by_module.get("sports") or []) if r.get("outcome") in ("win", "loss")]
+        sports_wr = self._win_rate(sports_rows)
+        atlas = sports_learning.get("atlas") if isinstance(sports_learning.get("atlas"), dict) else {}
+        user = sports_learning.get("user") if isinstance(sports_learning.get("user"), dict) else {}
+        sports_detail: list[str] = []
+        if atlas.get("decided"):
+            sports_detail.append(
+                f"Board {atlas.get('overall_win_rate')}% ({atlas.get('decided')} outcomes)"
+            )
+        if user.get("decided"):
+            sports_detail.append(
+                f"Your picks {user.get('overall_win_rate')}% ({user.get('decided')})"
+            )
+        top_bets = sorted(
+            (sports_learning.get("by_bet_type") or {}).items(),
+            key=lambda kv: kv[1].get("count", 0),
+            reverse=True,
+        )[:3]
+        for bet, meta in top_bets:
+            if meta.get("count", 0) >= 3:
+                sports_detail.append(
+                    f"{str(bet).replace('_', ' ')} {meta.get('win_rate')}% ({meta.get('count')})"
+                )
+        sports_level = _maturity(len(sports_rows))
+        markets.append(
+            {
+                "id": "sports",
+                "label": "Sports",
+                "decided": len(sports_rows),
+                "win_rate": sports_wr,
+                "maturity": sports_level,
+                "maturity_label": _maturity_label(sports_level),
+                "adjustment": sports_adj.get("note")
+                or (
+                    f"Edge bar {sports_adj.get('min_edge_pct')}% · opp ≥ {sports_adj.get('min_opportunity')}"
+                    if sports_level == "active"
+                    else "Thresholds still at defaults until more grades land"
+                ),
+                "feeds_next_picks": True,
+                "details": sports_detail[:4],
+            }
+        )
+
+        # Stocks
+        stock_rows = [r for r in (by_module.get("stock") or []) if r.get("outcome") in ("win", "loss")]
+        stock_wr = self._win_rate(stock_rows)
+        stock_level = _maturity(len(stock_rows))
+        markets.append(
+            {
+                "id": "stock",
+                "label": "Stocks",
+                "decided": len(stock_rows),
+                "win_rate": stock_wr,
+                "maturity": stock_level,
+                "maturity_label": _maturity_label(stock_level),
+                "adjustment": stock_adj.get("note")
+                or (
+                    f"Min opportunity {stock_adj.get('min_opportunity')}"
+                    if stock_level == "active"
+                    else "Stock scans use default opportunity floor until grades accumulate"
+                ),
+                "feeds_next_picks": True,
+                "details": [],
+            }
+        )
+
+        # Options
+        opt_rows = [r for r in (by_module.get("options") or []) if r.get("outcome") in ("win", "loss")]
+        opt_wr = self._win_rate(opt_rows)
+        opt_level = _maturity(len(opt_rows))
+        markets.append(
+            {
+                "id": "options",
+                "label": "Options",
+                "decided": len(opt_rows),
+                "win_rate": opt_wr,
+                "maturity": opt_level,
+                "maturity_label": _maturity_label(opt_level),
+                "adjustment": options_adj.get("note")
+                or (
+                    f"Min profit prob {options_adj.get('min_profit_probability')}% · opp ≥ {options_adj.get('min_opportunity')}"
+                    if opt_level == "active"
+                    else "Options scans use default probability floor until grades accumulate"
+                ),
+                "feeds_next_picks": True,
+                "details": [],
+            }
+        )
+
+        # Parlays
+        parlay_rows = [r for r in (by_module.get("parlay") or []) if r.get("outcome") in ("win", "loss")]
+        parlay_wr = self._win_rate(parlay_rows)
+        parlay_level = _maturity(len(parlay_rows))
+        markets.append(
+            {
+                "id": "parlay",
+                "label": "Parlays",
+                "decided": len(parlay_rows),
+                "win_rate": parlay_wr,
+                "maturity": parlay_level,
+                "maturity_label": _maturity_label(parlay_level),
+                "adjustment": parlay_note
+                or (
+                    "Parlay builders learn from settled multi-leg results"
+                    if parlay_level != "cold"
+                    else "Build and grade parlays so Atlas can tighten leg selection"
+                ),
+                "feeds_next_picks": True,
+                "details": [],
+            }
+        )
+
+        active_n = sum(1 for m in markets if m["maturity"] == "active")
+        warming_n = sum(1 for m in markets if m["maturity"] in {"warming", "seeding"})
+        if active_n >= 2:
+            headline = (
+                f"Atlas is actively adapting {active_n} markets from real outcomes — "
+                "future scans raise or lower bars from what actually hit."
+            )
+        elif active_n == 1:
+            headline = (
+                "One market is fully calibrating; keep grading sports, stocks, and options "
+                "so the loop spreads across the whole app."
+            )
+        elif warming_n:
+            headline = (
+                "Learning loop is seeding — each graded win/loss teaches Atlas how to pick "
+                "the next sports, stock, options, and parlay setups."
+            )
+        else:
+            headline = (
+                "Grade settled picks (or open Sports so Atlas auto-grades finished games) — "
+                "that feedback is how Atlas learns each market."
+            )
+
+        return {"markets": markets, "headline": headline, "active_markets": active_n}
 
     def _sports_learning_slices(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
         """Win-rate slices from graded sports picks — Atlas board + user picks."""

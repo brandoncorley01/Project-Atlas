@@ -38,7 +38,7 @@ export default async function PerformancePage() {
     <>
       <PageHeader
         title="Performance & learning"
-        description="Atlas auto-tracks every scanned pick and every watchlist save. Atlas picks and your picks are tracked separately — both auto-grade when events settle."
+        description="Atlas learns from every graded result across sports, stocks, options, and parlays — then adapts the next picks. Your waiting list stays yours; Atlas board grades run in the background."
       />
       <PerformanceView initialSummary={summary} initialHistory={history} />
     </>

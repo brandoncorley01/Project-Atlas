@@ -439,6 +439,8 @@ class PerformanceService:
         summary["confidence_accuracy"] = calibration.get("confidence_accuracy") or {}
         summary["learning_active"] = bool(calibration.get("active"))
         summary["learning_notes"] = calibration.get("learning_notes") or []
+        summary["market_learning"] = calibration.get("market_learning") or {}
+        summary["sports_learning"] = calibration.get("sports_learning") or {}
         return summary
 
     async def aggregate_and_store(self, *, days: int = 30) -> dict[str, Any]:
