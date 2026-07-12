@@ -78,7 +78,9 @@ async def refresh_sports(
     if force_refresh and cache_only:
         raise HTTPException(status_code=400, detail="force_refresh and cache_only cannot both be true")
 
-    service = SportsRefreshService(SupabaseClient(token), user_id)
+    from app.db.service_client import get_write_db
+
+    service = SportsRefreshService(get_write_db(token), user_id)
     result = await service.refresh_sports(
         replace=replace,
         limit=limit,
@@ -95,24 +97,27 @@ async def refresh_sports_openai(
     token: str = Depends(get_access_token),
     limit: int = 16,
 ) -> dict:
-    """Atlas Insight — find analyst / popular-bettor picks from the public internet.
+    """Atlas Insight — FanDuel-verified edge ranking + optional OpenAI polish.
 
-    Uses OPENAI_API_KEY + web search. Does not spend Odds API credits.
     Merges onto the board without wiping Odds-derived picks.
+    Uses service-role writes when configured so RLS cannot block a signed-in scan.
     """
+    from app.db.service_client import get_write_db
     from app.services.sports_openai_picks_service import SportsOpenAiPicksService
 
     try:
-        service = SportsOpenAiPicksService(SupabaseClient(token), user_id)
+        service = SportsOpenAiPicksService(get_write_db(token), user_id)
         result = await service.refresh_openai_picks(limit=limit)
         set_last_job("refresh_sports_openai")
-        return {"status": "ok", "module": "sports_openai", **result}
+        status = "error" if result.get("ok") is False else "ok"
+        return {"status": status, "module": "sports_openai", **result}
     except Exception as exc:
         logger.exception("refresh-sports-openai failed: %s", exc)
         return {
             "status": "error",
             "module": "sports_openai",
             "signals_created": 0,
+            "ok": False,
             "message": f"Atlas Insight failed: {str(exc)[:180]}",
         }
 

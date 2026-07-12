@@ -633,30 +633,32 @@ async def _polish_explanations(items: list[dict[str, Any]]) -> dict[str, dict[st
     )
     result: dict[str, Any] | None = None
     used_web = False
+    # Prefer fast local polish so Insight finishes under Vercel/Hobby proxy budgets.
+    # Web search polish is optional and often the cause of timeouts / quota burn.
     try:
         result = await asyncio.wait_for(
-            llm_service.complete_json_with_web_search(
+            llm_service.complete_json(
                 system=_EXPLAIN_SYSTEM,
                 user=user,
-                max_tokens=1800,
-                web_timeout_s=22.0,
+                max_tokens=1200,
             ),
-            timeout=28.0,
+            timeout=12.0,
         )
-        used_web = bool((result or {}).get("_web_search"))
     except Exception as exc:
-        logger.warning("Atlas Insight web polish failed, trying local polish: %s", exc)
+        logger.warning("Atlas Insight local polish skipped: %s", exc)
         try:
             result = await asyncio.wait_for(
-                llm_service.complete_json(
+                llm_service.complete_json_with_web_search(
                     system=_EXPLAIN_SYSTEM,
                     user=user,
-                    max_tokens=1600,
+                    max_tokens=1400,
+                    web_timeout_s=10.0,
                 ),
-                timeout=20.0,
+                timeout=14.0,
             )
+            used_web = bool((result or {}).get("_web_search"))
         except Exception as exc2:
-            logger.warning("Atlas Insight explanation polish skipped: %s", exc2)
+            logger.warning("Atlas Insight web polish skipped: %s", exc2)
             return {}
 
     out: dict[str, dict[str, Any]] = {}
@@ -713,13 +715,23 @@ class SportsOpenAiPicksService:
             return await self._refresh_openai_picks_inner(limit=limit)
         except Exception as exc:
             logger.exception("Atlas Insight scan failed: %s", exc)
+            detail = str(exc)
+            if "42501" in detail or "row-level security" in detail.lower():
+                detail = (
+                    "Could not save Insight picks (database permission). "
+                    "Sign out and sign back in. If this continues, set the real "
+                    "SUPABASE_SERVICE_ROLE_KEY on the API (not the anon key)."
+                )
+            else:
+                detail = f"Atlas Insight failed: {detail[:180]}. Tap Insight again."
             return {
+                "ok": False,
                 "signals_created": 0,
                 "credits_used": 0,
                 "cache_used": True,
                 "openai_web": llm_service.is_configured(),
                 "fanduel_verified": True,
-                "message": f"Atlas Insight failed: {str(exc)[:180]}. Tap Rescore / Insight again.",
+                "message": detail,
             }
 
     async def _refresh_openai_picks_inner(self, *, limit: int = 16) -> dict[str, Any]:
@@ -738,20 +750,36 @@ class SportsOpenAiPicksService:
         except Exception as exc:
             logger.warning("Atlas Insight pre-grade skipped: %s", exc)
 
-        # Skip live Odds prop pulls (slow + credits). Use odds cache + props cache.
+        # Prefer cache (0 credits). If cold (e.g. Render disk reset), seed like Fetch —
+        # the user explicitly tapped Atlas Insight.
         catalog_meta = await build_fanduel_catalog(include_props=True, max_prop_events=0)
         catalog = list(catalog_meta.get("items") or [])
         credits_used = int(catalog_meta.get("credits_used") or 0)
+        seeded_live = False
+        if not catalog:
+            try:
+                from app.providers.sports.odds_api import fetch_all_sports_odds
+
+                logger.info("Atlas Insight: odds cache empty — seeding with Fetch live odds")
+                _events, fetch_stats = await fetch_all_sports_odds(force_refresh=True)
+                credits_used += int((fetch_stats or {}).get("credits_used") or 0)
+                seeded_live = True
+                catalog_meta = await build_fanduel_catalog(include_props=True, max_prop_events=0)
+                catalog = list(catalog_meta.get("items") or [])
+            except Exception as exc:
+                logger.warning("Atlas Insight live seed failed: %s", exc)
+
         if not catalog:
             return {
+                "ok": False,
                 "signals_created": 0,
                 "credits_used": credits_used,
-                "cache_used": True,
+                "cache_used": credits_used == 0,
                 "openai_web": True,
                 "fanduel_verified": True,
                 "graded_prior": graded_prior,
                 "message": catalog_meta.get("message")
-                or "No FanDuel-verified markets available. Unlock Odds or wait for cache, then Atlas Insight.",
+                or "No FanDuel-verified markets available. Tap Fetch live odds once, then Atlas Insight.",
             }
 
         calibration = await CalibrationService(self.db, self.user_id).get_adjustments(lookback=200)
@@ -857,7 +885,28 @@ class SportsOpenAiPicksService:
         from app.agents.sports_categories import tag_pool_categories
 
         tag_pool_categories(rows)
-        saved = await self.db.insert("sports_signals", rows) if rows else []
+        try:
+            saved = await self.db.insert("sports_signals", rows) if rows else []
+        except Exception as exc:
+            detail = str(exc)
+            logger.exception("Atlas Insight insert failed: %s", exc)
+            if "42501" in detail or "row-level security" in detail.lower():
+                msg = (
+                    "Atlas Insight ranked picks but could not save them (database permission). "
+                    "Sign out/in, and set the real SUPABASE_SERVICE_ROLE_KEY on the API host."
+                )
+            else:
+                msg = f"Atlas Insight could not save picks: {detail[:160]}"
+            return {
+                "ok": False,
+                "signals_created": 0,
+                "events_scanned": len(rows),
+                "credits_used": credits_used,
+                "cache_used": credits_used == 0,
+                "openai_web": True,
+                "fanduel_verified": True,
+                "message": msg,
+            }
 
         if saved:
             try:
@@ -887,11 +936,13 @@ class SportsOpenAiPicksService:
             f" ({prop_count} props, {edged} with multi-book edge, {with_stats} with form/H2H"
             f", {news_backed} with news/web context"
             f", catalog {catalog_meta.get('player_props', 0)} props / {catalog_meta.get('game_lines', 0)} lines"
-            f", 0 Odds credits"
+            f", {'~' + str(credits_used) + ' Odds credits (seeded cache)' if credits_used else '0 Odds credits'}"
             f"{' · web analyst search on' if used_web else ''}"
             f"{f'; graded {graded_prior} finished board picks' if graded_prior else ''}"
             f"{f'; replaced {expired} prior Insight picks' if expired else ''})."
         )
+        if seeded_live and credits_used:
+            msg = f"{msg} Seeded live odds for a cold cache first."
         if llm_service.is_configured() and not polished:
             msg = (
                 f"{msg} OpenAI polish skipped (billing/quota) — "
@@ -907,6 +958,7 @@ class SportsOpenAiPicksService:
             )
 
         return {
+            "ok": True,
             "signals_created": len(saved),
             "signals_expired": expired,
             "events_scanned": len(rows),

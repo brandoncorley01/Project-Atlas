@@ -299,10 +299,21 @@ export function SportsSignalsView({
         return;
       }
       const created = Number(body.signals_created ?? 0);
+      const failed = body.status === "error" || body.ok === false;
+      const apiMessage =
+        typeof body.message === "string" ? body.message : undefined;
       setMessage(
-        (typeof body.message === "string" ? body.message : undefined) ??
-          `Atlas Insight added ${created} picks (0 Odds credits)`,
+        apiMessage ??
+          (failed
+            ? "Atlas Insight failed — try again"
+            : `Atlas Insight added ${created} picks`),
       );
+      if (failed || created <= 0) {
+        // Stay on the current board — don't flip to an empty Insight filter.
+        await refreshOddsStatus();
+        setLoading(null);
+        return;
+      }
       // Show Insight results immediately — widen window and focus Insight + Props.
       setWindow("all");
       setFilter("openai");
