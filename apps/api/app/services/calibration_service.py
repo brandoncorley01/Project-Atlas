@@ -39,13 +39,17 @@ class CalibrationService:
             order="logged_at.desc",
             limit=max(lookback, MIN_SAMPLES * 2),
         )
-        if len(rows) < MIN_SAMPLES:
-            return self._defaults(sample_count=len(rows))
-
         by_module: dict[str, list[dict[str, Any]]] = {}
         for row in rows:
             mod = str(row.get("module") or "")
             by_module.setdefault(mod, []).append(row)
+
+        sports_learning = self._sports_learning_slices(by_module.get("sports") or [])
+        if len(rows) < MIN_SAMPLES:
+            defaults = self._defaults(sample_count=len(rows))
+            defaults["sports_learning"] = sports_learning
+            defaults["learning_notes"] = list(sports_learning.get("notes") or [])
+            return defaults
 
         sports = self._sports_adjustments(by_module.get("sports") or [])
         options = self._options_adjustments(by_module.get("options") or [])
@@ -69,7 +73,8 @@ class CalibrationService:
             "options_min_opportunity": options["min_opportunity"],
             "stock_min_opportunity": stock["min_opportunity"],
             "confidence_accuracy": confidence_accuracy,
-            "learning_notes": notes,
+            "sports_learning": sports_learning,
+            "learning_notes": notes + list(sports_learning.get("notes") or []),
             "active": len(rows) >= MIN_SAMPLES,
         }
 
@@ -84,8 +89,63 @@ class CalibrationService:
             "options_min_opportunity": 45.0,
             "stock_min_opportunity": 35.0,
             "confidence_accuracy": {},
+            "sports_learning": {
+                "overall_win_rate": None,
+                "decided": 0,
+                "by_sport": {},
+                "by_bet_type": {},
+                "notes": [],
+            },
             "learning_notes": [],
             "active": False,
+        }
+
+    def _sports_learning_slices(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
+        """Win-rate slices from graded sports picks — used to bias Atlas Insight ranking."""
+        decided = [r for r in rows if r.get("outcome") in ("win", "loss")]
+        overall = self._win_rate(decided)
+        by_sport: dict[str, list[dict[str, Any]]] = {}
+        by_bet: dict[str, list[dict[str, Any]]] = {}
+        for row in decided:
+            snap = row.get("scoring_snapshot") if isinstance(row.get("scoring_snapshot"), dict) else {}
+            pick = snap.get("pick") if isinstance(snap.get("pick"), dict) else {}
+            sport = str(snap.get("sport") or row.get("label") or "Sports").split("·")[0].strip()[:40]
+            if not sport:
+                sport = "Sports"
+            bet_type = str(pick.get("bet_type") or snap.get("bet_type") or "moneyline")
+            by_sport.setdefault(sport, []).append(row)
+            by_bet.setdefault(bet_type, []).append(row)
+
+        def _slice(bucket: dict[str, list[dict[str, Any]]]) -> dict[str, dict[str, Any]]:
+            out: dict[str, dict[str, Any]] = {}
+            for key, bucket_rows in bucket.items():
+                wr = self._win_rate(bucket_rows)
+                if wr is None:
+                    continue
+                out[key] = {
+                    "count": len(bucket_rows),
+                    "win_rate": wr,
+                    "boost": round(max(-8.0, min(8.0, (wr - 50.0) * 0.35)), 2)
+                    if len(bucket_rows) >= 5
+                    else 0.0,
+                }
+            return out
+
+        sport_slices = _slice(by_sport)
+        bet_slices = _slice(by_bet)
+        notes: list[str] = []
+        if overall is not None and len(decided) >= MIN_SAMPLES:
+            notes.append(f"Your graded sports picks are {overall:.0f}% ({len(decided)} decided)")
+        for bet_type, meta in sorted(bet_slices.items(), key=lambda kv: kv[1]["count"], reverse=True)[:3]:
+            if meta["count"] >= 5:
+                notes.append(f"{bet_type.replace('_', ' ')} hits {meta['win_rate']:.0f}% over {meta['count']}")
+
+        return {
+            "overall_win_rate": overall,
+            "decided": len(decided),
+            "by_sport": sport_slices,
+            "by_bet_type": bet_slices,
+            "notes": notes,
         }
 
     def _sports_adjustments(self, rows: list[dict[str, Any]]) -> dict[str, Any]:

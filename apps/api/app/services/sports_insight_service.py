@@ -192,85 +192,58 @@ def _build_pick_thesis(
 ) -> str:
     """Full template thesis when OpenAI is unavailable — still explains the pick."""
     selection = market.get("selection") or "this side"
-    bet_type = str(market.get("bet_type") or "moneyline")
+    bet_type = str(market.get("bet_type") or "moneyline").replace("_", " ")
     event = market.get("event") or "this matchup"
     sport = market.get("sport") or "sports"
 
     parts: list[str] = []
-    rejected = market.get("rejected_side")
-    if rejected:
-        parts.append(
-            f"Atlas ranks {selection} ({bet_type}) on {event} ({sport}) over {rejected} "
-            "after comparing market edge, form/H2H, and opportunity — one best decision for this market."
-        )
-    else:
-        parts.append(
-            f"Atlas ranks {selection} ({bet_type}) on {event} ({sport}) as the best available "
-            "side for this market using price, form, and news context."
-        )
-
     odds = market.get("odds_american")
-    ev = market.get("expected_value")
     edge = market.get("edge_pct")
-    market_bits: list[str] = []
+    ev = market.get("expected_value")
+
+    lead = f"Play {selection} ({bet_type}) on {event} ({sport})."
+    price_bits: list[str] = []
     if odds is not None:
         try:
-            market_bits.append(f"FanDuel {int(odds):+d}")
+            price_bits.append(f"price {int(odds):+d}")
         except (TypeError, ValueError):
-            market_bits.append(f"odds {odds}")
-    if ev is not None:
-        try:
-            market_bits.append(f"EV {float(ev):+.1f}%")
-        except (TypeError, ValueError):
-            pass
+            price_bits.append(f"odds {odds}")
     if edge is not None:
         try:
-            market_bits.append(f"edge {float(edge):+.1f}%")
+            e = float(edge)
+            if e >= 0.3:
+                price_bits.append(f"{e:+.1f}% edge vs the market")
         except (TypeError, ValueError):
             pass
-    if market_bits:
-        parts.append("Market: " + ", ".join(market_bits) + ".")
+    if ev is not None:
+        try:
+            price_bits.append(f"EV proxy {float(ev):+.1f}%")
+        except (TypeError, ValueError):
+            pass
+    if price_bits:
+        parts.append(lead + " " + ", ".join(price_bits) + ".")
+    else:
+        parts.append(lead)
 
-    opp = market.get("opportunity")
-    conf = market.get("confidence")
-    risk = market.get("risk")
-    score_bits: list[str] = []
-    if opp is not None:
-        score_bits.append(f"opportunity {float(opp):.0f}")
-    if conf is not None:
-        score_bits.append(f"confidence {float(conf):.0f}")
-    if risk is not None:
-        score_bits.append(f"risk {float(risk):.0f}")
-    if score_bits:
-        parts.append("Atlas scores — " + ", ".join(score_bits) + ".")
-
-    if market.get("sharp_indicator"):
-        parts.append(f"Sharp read: {market['sharp_indicator']}.")
+    rejected = market.get("rejected_side")
+    if rejected:
+        parts.append(f"Atlas preferred this side over {rejected} after comparing price, form, and opportunity.")
 
     if stats.get("available") and stats.get("summary"):
         parts.append(f"Form/H2H: {stats['summary']}")
     elif stats.get("summary"):
         parts.append(str(stats["summary"]))
+    elif stats.get("form_note"):
+        parts.append(f"Form/H2H: {stats['form_note']}")
 
     if market.get("bull_case"):
-        parts.append(f"Bull case: {str(market['bull_case'])[:220]}")
+        parts.append(str(market["bull_case"])[:220])
 
     team_news = [n for n in news_articles if n.get("context_tier") != "sport"]
-    sport_news = [n for n in news_articles if n.get("context_tier") == "sport"]
     if team_news:
         titles = "; ".join(str(n.get("title")) for n in team_news[:2] if n.get("title"))
         if titles:
-            parts.append(f"Related headlines: {titles}.")
-    elif sport_news:
-        titles = "; ".join(str(n.get("title")) for n in sport_news[:2] if n.get("title"))
-        if titles:
-            parts.append(
-                f"No team-specific headlines matched closely; sport context includes: {titles}."
-            )
-    else:
-        parts.append(
-            "No strong matching headlines right now — this ranking is driven by price, edge, and form."
-        )
+            parts.append(f"Related news: {titles}.")
 
     if market.get("suggested_action"):
         parts.append(str(market["suggested_action"]))
