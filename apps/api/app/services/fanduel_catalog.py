@@ -573,30 +573,11 @@ async def build_fanduel_catalog(
     games = [c for c in catalog if c.get("bet_type") != "player_prop"]
     combat_props = [c for c in props if _is_combat_sport(str(c.get("sport_key") or ""))]
     other_props = [c for c in props if not _is_combat_sport(str(c.get("sport_key") or ""))]
-    # Prefer sooner games; pin major US books sports so Insight isn't only foreign leagues.
+    # Prefer sooner games; US + global game lines by kickoff (Insight ranks by edge next).
     games.sort(key=lambda c: hours_until_event(c.get("event_start")) or 9999)
     combat_games = [c for c in games if _is_combat_sport(str(c.get("sport_key") or ""))]
     other_games = [c for c in games if not _is_combat_sport(str(c.get("sport_key") or ""))]
-    us_priority = (
-        "americanfootball_nfl",
-        "americanfootball_ncaaf",
-        "americanfootball_nfl_preseason",
-        "baseball_mlb",
-        "basketball_nba",
-        "basketball_wnba",
-        "basketball_ncaab",
-        "icehockey_nhl",
-        "soccer_usa_mls",
-        "soccer_epl",
-    )
-    us_games = [
-        c
-        for c in other_games
-        if any(str(c.get("sport_key") or "").startswith(k) or str(c.get("sport_key") or "") == k for k in us_priority)
-        or str(c.get("sport_key") or "") in us_priority
-    ]
-    intl_games = [c for c in other_games if c not in us_games]
-    mixed_games = (us_games[:36] + intl_games[:24])[:48]
+    mixed_games = other_games[:48]
     trimmed = (combat_props[:36] + other_props[:50])[:80] + (combat_games[:24] + mixed_games)[:72]
     for i, row in enumerate(trimmed):
         row["id"] = f"fd{i+1}"

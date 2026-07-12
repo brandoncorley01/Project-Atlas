@@ -125,16 +125,6 @@ def composite_score(row: dict[str, Any]) -> float:
     stats_support = float(snap.get("stats_support") or 0)
     today_boost = 4.0 if is_calendar_today(row) else 0.0
     insight_boost = 3.0 if insight else 0.0
-    sport_key = str(snap.get("sport_key") or lm.get("sport_key") or "").lower()
-    us_boost = 0.0
-    if sport_key:
-        try:
-            from app.providers.sports.odds_api import is_us_market_sport_key
-
-            if is_us_market_sport_key(sport_key):
-                us_boost = 8.0
-        except Exception:
-            us_boost = 0.0
     return (
         opp
         + boost
@@ -143,28 +133,13 @@ def composite_score(row: dict[str, Any]) -> float:
         + stats_support * 0.2
         + today_boost
         + insight_boost
-        + us_boost
     )
 
 
 def sort_for_display(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    def _us_rank(row: dict[str, Any]) -> int:
-        snap = row.get("scoring_snapshot") or {}
-        lm = row.get("line_movement") or {}
-        sport_key = str(snap.get("sport_key") or lm.get("sport_key") or "").lower()
-        if not sport_key:
-            return 1
-        try:
-            from app.providers.sports.odds_api import is_us_market_sport_key
-
-            return 0 if is_us_market_sport_key(sport_key) else 1
-        except Exception:
-            return 1
-
     return sorted(
         rows,
         key=lambda r: (
-            _us_rank(r),
             0 if is_calendar_today(r) else (1 if is_near_term(r) else (2 if not is_futures_row(r) else 3)),
             -composite_score(r),
             hours_to_start(r) if hours_to_start(r) is not None else 9999,

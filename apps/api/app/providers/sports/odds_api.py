@@ -621,12 +621,11 @@ def _seasonal_key_order(keys: tuple[str, ...]) -> tuple[str, ...]:
         "cricket": 8,
     }
 
-    def _sort_key(k: str) -> tuple[int, int, int, str]:
-        us = 0 if is_us_market_sport_key(k) else 1
+    def _sort_key(k: str) -> tuple[int, int, str]:
         if k in rank:
-            return (us, 0, rank[k], k)
+            return (0, rank[k], k)
         fam = _sport_family(k)
-        return (us, 1, family_boost.get(fam, 50), k)
+        return (1, family_boost.get(fam, 50), k)
 
     return tuple(sorted(keys, key=_sort_key))
 

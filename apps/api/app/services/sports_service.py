@@ -9,7 +9,7 @@ from app import config
 from app.agents.sports_analyst import analyze_event, setup_to_row
 from app.agents.sports_categories import tag_pool_categories
 from app.db.supabase_client import SupabaseClient
-from app.providers.sports.odds_api import OddsApiError, fetch_all_sports_odds, is_us_market_sport_key
+from app.providers.sports.odds_api import OddsApiError, fetch_all_sports_odds
 from app.providers.sports.sports_news import build_news_analysis, fetch_sports_news, match_news_to_signal
 from app.providers.sports.team_stats import build_stats_index, lookup_match_stats
 from app.services.freshness import filter_upcoming_events, hours_until_event, is_sports_actionable
@@ -30,42 +30,6 @@ MIN_OPPORTUNITY = 28.0
 MIN_BOARD_PICKS = 8
 MIN_PER_SPORT = 1
 MAX_PER_SPORT = 10
-# Keep most of the board on FanDuel/DK US majors — global is fill only.
-US_BOARD_SHARE = 0.7
-MAX_PER_INTL_SPORT = 2
-
-
-def _row_sport_key(row: dict[str, Any]) -> str:
-    snap = row.get("scoring_snapshot") or {}
-    lm = row.get("line_movement") or {}
-    return str(
-        snap.get("sport_key")
-        or lm.get("sport_key")
-        or row.get("sport_key")
-        or ""
-    ).lower()
-
-
-def _is_us_board_row(row: dict[str, Any]) -> bool:
-    if is_us_market_sport_key(_row_sport_key(row)):
-        return True
-    # Fallback on display labels when sport_key is missing on older rows.
-    label = str(row.get("sport") or "").strip().upper()
-    return label in {
-        "MLB",
-        "NBA",
-        "WNBA",
-        "NFL",
-        "NFL PRESEASON",
-        "NCAAF",
-        "NCAAB",
-        "NHL",
-        "MLS",
-        "MMA",
-        "UFC",
-        "BOXING",
-        "CFL",
-    }
 
 
 def _openai_quota_skipped(stats: dict[str, Any]) -> bool:
@@ -107,7 +71,7 @@ def _odds_error_message(exc: OddsApiError | str) -> str:
 
 
 def _select_diverse_setups(setups: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
-    """Prefer near-term US majors; one Atlas decision per event+market; diversify sports."""
+    """Best edge first across US + global; one pick per market; diversify sports."""
     if not setups:
         return []
 
@@ -115,72 +79,33 @@ def _select_diverse_setups(setups: list[dict[str, Any]], *, limit: int) -> list[
     later = [r for r in setups if not is_near_term(r) and is_within_horizon(r)]
     pool = near if len(near) >= max(3, limit // 3) else near + later
 
-    us_pool = [r for r in pool if _is_us_board_row(r)]
-    intl_pool = [r for r in pool if not _is_us_board_row(r)]
-    us_target = max(MIN_BOARD_PICKS, int(limit * US_BOARD_SHARE))
+    by_sport: dict[str, list[dict[str, Any]]] = {}
+    for row in pool:
+        by_sport.setdefault(str(row.get("sport") or "Sports"), []).append(row)
+    for rows in by_sport.values():
+        rows.sort(key=composite_score, reverse=True)
 
-    def _take_by_sport(
-        rows: list[dict[str, Any]],
-        *,
-        budget: int,
-        max_per: int,
-        seen: set[str],
-    ) -> list[dict[str, Any]]:
-        by_sport: dict[str, list[dict[str, Any]]] = {}
-        for row in rows:
-            by_sport.setdefault(str(row.get("sport") or "Sports"), []).append(row)
-        for sport_rows in by_sport.values():
-            sport_rows.sort(key=composite_score, reverse=True)
-
-        # Prefer sports that already have the strongest top pick.
-        sport_order = sorted(
-            by_sport.keys(),
-            key=lambda s: composite_score(by_sport[s][0]) if by_sport[s] else 0,
-            reverse=True,
-        )
-        picked: list[dict[str, Any]] = []
-        for sport in sport_order:
-            taken = 0
-            for row in by_sport[sport]:
-                if taken >= max_per or len(picked) >= budget:
-                    break
-                k = market_family_key(row)
-                if k in seen:
-                    continue
-                picked.append(row)
-                seen.add(k)
-                taken += 1
-            if len(picked) >= budget:
-                break
-        if len(picked) < budget:
-            for row in sorted(rows, key=composite_score, reverse=True):
-                k = market_family_key(row)
-                if k in seen:
-                    continue
-                picked.append(row)
-                seen.add(k)
-                if len(picked) >= budget:
-                    break
-        return picked
-
-    seen: set[str] = set()
-    selected = _take_by_sport(
-        us_pool,
-        budget=min(limit, us_target),
-        max_per=MAX_PER_SPORT,
-        seen=seen,
+    # Round 1: strongest sport first — each league gets its best edge-ranked side.
+    sport_order = sorted(
+        by_sport.keys(),
+        key=lambda s: composite_score(by_sport[s][0]) if by_sport[s] else 0,
+        reverse=True,
     )
-    remaining = limit - len(selected)
-    if remaining > 0:
-        selected.extend(
-            _take_by_sport(
-                intl_pool,
-                budget=remaining,
-                max_per=MAX_PER_INTL_SPORT,
-                seen=seen,
-            )
-        )
-    # If US slate is thin, fill leftover board from the full pool.
+    per_sport = min(
+        MAX_PER_SPORT,
+        max(MIN_PER_SPORT, limit // max(1, len(by_sport))),
+    )
+    selected: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for sport in sport_order:
+        for row in by_sport[sport][:per_sport]:
+            k = market_family_key(row)
+            if k not in seen:
+                selected.append(row)
+                seen.add(k)
+
+    # Round 2: fill remaining slots by pure Atlas composite score (US + global).
     if len(selected) < limit:
         for row in sorted(pool, key=composite_score, reverse=True):
             k = market_family_key(row)
@@ -263,12 +188,7 @@ class SportsRefreshService:
                     }
                 )
             ]
-            events.sort(
-                key=lambda e: (
-                    0 if is_us_market_sport_key(str(e.get("_sport_key") or "")) else 1,
-                    hours_until_event(e.get("commence_time")) or 9999,
-                )
-            )
+            events.sort(key=lambda e: hours_until_event(e.get("commence_time")) or 9999)
             fetch_stats["events_before_filter"] = raw_count
             fetch_stats["events_upcoming"] = len(events)
             fetch_stats["events_dropped_past"] = raw_count - len(events)
