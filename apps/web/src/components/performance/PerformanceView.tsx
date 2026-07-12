@@ -66,6 +66,13 @@ export interface PerformanceSummary {
       feeds_next_picks?: boolean;
       details?: string[];
     }>;
+    web_sources?: {
+      decided?: number;
+      win_rate?: number | null;
+      note?: string | null;
+      summary?: string;
+      examples?: Array<{ title?: string; url?: string; provider?: string }>;
+    };
   };
   sports_learning?: Record<string, unknown>;
   calibration?: {
@@ -791,6 +798,54 @@ function LearningLoopPanel({
           </div>
         ))}
       </div>
+
+      {marketLearning.web_sources && (
+        <div className="mt-4 rounded-lg border border-sky-500/30 bg-sky-500/5 p-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-sky-200/90">
+            Worldwide web &amp; news in the loop
+          </p>
+          <p className="mt-1 text-sm text-muted">
+            {marketLearning.web_sources.summary ||
+              "Free sports headlines and web analyst consensus feed Insight — then Atlas learns which of those picks hit."}
+          </p>
+          {marketLearning.web_sources.note && (
+            <p className="mt-2 text-sm text-sky-100">{marketLearning.web_sources.note}</p>
+          )}
+          {typeof marketLearning.web_sources.decided === "number" &&
+            marketLearning.web_sources.decided > 0 && (
+              <p className="mt-1 text-xs text-muted">
+                {marketLearning.web_sources.decided} graded news/web-backed sports picks
+                {marketLearning.web_sources.win_rate != null
+                  ? ` · ${marketLearning.web_sources.win_rate}% hit rate`
+                  : ""}
+              </p>
+            )}
+          {marketLearning.web_sources.examples && marketLearning.web_sources.examples.length > 0 && (
+            <ul className="mt-2 space-y-1 text-xs text-foreground/85">
+              {marketLearning.web_sources.examples.slice(0, 4).map((ex) => (
+                <li key={`${ex.title}-${ex.url || ""}`}>
+                  ·{" "}
+                  {ex.url ? (
+                    <a
+                      href={ex.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-accent hover:underline"
+                    >
+                      {ex.title}
+                    </a>
+                  ) : (
+                    ex.title
+                  )}
+                  {ex.provider ? (
+                    <span className="text-muted"> · {ex.provider}</span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </section>
   );
 }

@@ -16,7 +16,7 @@ from app.agents.sports_analyst import (
 from app.agents.sports_stats import compute_pick_support
 from app.db.supabase_client import SupabaseClient
 from app.providers.sports.odds_api import _read_cache as read_odds_cache
-from app.providers.sports.sports_news import fetch_sports_news
+from app.providers.sports.sports_news import fetch_sports_news, match_news_for_insight
 from app.providers.sports.team_stats import build_stats_index, lookup_match_stats, match_stats_payload
 from app.services.calibration_service import CalibrationService
 from app.services.fanduel_catalog import build_fanduel_catalog
@@ -27,13 +27,16 @@ logger = logging.getLogger(__name__)
 SOURCE = "openai_web"
 
 _EXPLAIN_SYSTEM = """You are Atlas Insight writing bettor-facing explanations.
-You receive PRE-RANKED picks with computed numbers (implied probability, edge, form/H2H, learning).
+You receive PRE-RANKED picks with computed numbers (implied probability, edge, form/H2H, learning)
+plus free public headlines / analyst context when available.
+
 Rewrite thesis/bull/bear in plain sports-betting English.
 
 HARD RULES:
 - Do NOT invent odds, edges, win rates, records, or analyst claims not in the facts.
 - Do NOT reorder or change ids — keep every id exactly as given.
 - Lead with the edge in bettor terms: price → implied % → why we like it.
+- If headlines or web notes are present, cite them in plain words (injury, lineup, analyst lean).
 - Keep each thesis to 2–4 short sentences. No jargon stacks, no filler.
 - If form/H2H is present, cite the record in plain words.
 - If learning win-rate is present, mention it once as track record — not a guarantee.
@@ -45,11 +48,63 @@ Return JSON only:
       "id": "fd12",
       "thesis": "...",
       "bull_case": "...",
-      "bear_case": "..."
+      "bear_case": "...",
+      "web_notes": ["short public-source takeaways used"]
     }
   ]
 }
 """
+
+
+def _news_stub_from_item(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "event_name": item.get("event_name"),
+        "selection": item.get("selection"),
+        "sport": item.get("sport"),
+        "home_team": item.get("home_team"),
+        "away_team": item.get("away_team"),
+    }
+
+
+def _attach_web_news(item: dict[str, Any], news_pool: list[dict[str, Any]]) -> dict[str, Any]:
+    """Match free RSS headlines to this catalog pick (no Odds credits)."""
+    if not news_pool:
+        return item
+    matched = match_news_for_insight(_news_stub_from_item(item), news_pool, limit=4)
+    if not matched:
+        return item
+    related = []
+    sources: list[dict[str, Any]] = []
+    for n in matched[:3]:
+        title = str(n.get("title") or "").strip()
+        if not title:
+            continue
+        related.append(
+            {
+                "title": title[:160],
+                "url": n.get("url"),
+                "source": n.get("source") or n.get("provider"),
+                "relevance_score": n.get("relevance_score"),
+            }
+        )
+        sources.append(
+            {
+                "type": "news",
+                "title": title[:160],
+                "url": n.get("url"),
+                "provider": n.get("source") or n.get("provider") or "rss",
+            }
+        )
+    if not related:
+        return item
+    item = dict(item)
+    item["_related_news"] = related
+    item["_context_sources"] = sources
+    item["_news_verified"] = True
+    item["_news_headline"] = related[0]["title"]
+    # Small ranking nudge when public coverage exists for this matchup.
+    item["_learning_boost"] = float(item.get("_learning_boost") or 0) + 1.5
+    return item
 
 
 def _is_openai_source(row: dict[str, Any]) -> bool:
@@ -282,6 +337,9 @@ def _build_bettor_thesis(item: dict[str, Any]) -> tuple[str, str, str]:
     ]
     if form_note:
         thesis_parts.append(f"Form/H2H: {form_note}.")
+    news_headline = str(item.get("_news_headline") or "").strip()
+    if news_headline:
+        thesis_parts.append(f"Public coverage: {news_headline}.")
     if learn_note:
         thesis_parts.append(f"Track record: {learn_note}.")
 
@@ -290,6 +348,8 @@ def _build_bettor_thesis(item: dict[str, Any]) -> tuple[str, str, str]:
         + (f" (+{edge:.1f}% vs the market)" if edge >= 0.5 else "")
         + (f" — {form_note}" if form_note else ".")
     )
+    if news_headline:
+        bull = (bull.rstrip(".") + f" · News: {news_headline}")[:400]
     bear = (
         "Line moves against you, late injury/news, or a short sample of form would weaken this."
         if not _is_combat_item(item)
@@ -372,13 +432,15 @@ def _catalog_to_row(
         "suggested_action": f"Play {odds_american:+d} on {book_title} for {selection}",
         "risk_warning": (
             "Atlas Insight ranks FanDuel-verified markets using price edge, form/H2H, "
-            "real outcomes of prior Atlas board picks, and your graded results. "
-            "Confirm the number is still posted before betting."
+            "free public news/analyst coverage, real outcomes of prior Atlas board picks, "
+            "and your graded results. Confirm the number is still posted before betting."
         ),
         "scoring_snapshot": {
             "source": SOURCE,
             "openai_web": True,
-            "web_search": False,
+            "web_search": bool(item.get("_web_search")),
+            "web_context": True,
+            "news_verified": bool(item.get("_news_verified")),
             "stats_engine": True,
             "fanduel_verified": True,
             "pick_origin": "atlas",
@@ -392,6 +454,8 @@ def _catalog_to_row(
             "prop_market": item.get("prop_market"),
             "player_name": item.get("player_name"),
             "sources": sources,
+            "context_sources": item.get("_context_sources") or [],
+            "related_news": item.get("_related_news") or [],
             "odds_approximate": False,
             "event_id": item.get("event_id"),
             "sport": str(item.get("sport") or "Sports")[:40],
@@ -435,11 +499,13 @@ async def _enrich_catalog(
     min_edge: float,
     min_opp: float,
     dampen: float,
+    news_pool: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     cache = read_odds_cache() or {}
     events_by_id = {
         str(e.get("id")): e for e in (cache.get("events") or []) if isinstance(e, dict) and e.get("id")
     }
+    news_pool = news_pool or []
 
     # Stats index from unique matchups (scores cache — no Odds spend when locked).
     stub_events: list[dict[str, Any]] = []
@@ -491,7 +557,6 @@ async def _enrich_catalog(
             }
             match = lookup_match_stats(stub, stats_index)
             bet_type = str(item.get("bet_type") or "moneyline")
-            # Fight props / player props: still attach team form when possible.
             support_type = (
                 "total"
                 if item.get("prop_market") == "fight_total_rounds"
@@ -522,6 +587,7 @@ async def _enrich_catalog(
         boost, learn_note = _learning_boost(item, learning)
         row["_learning_boost"] = boost
         row["_learning_note"] = learn_note
+        row = _attach_web_news(row, news_pool)
 
         scored = _score_enriched(row, min_edge=min_edge, min_opp=min_opp, dampen=dampen)
         enriched.append(scored)
@@ -531,7 +597,7 @@ async def _enrich_catalog(
 
 
 async def _polish_explanations(items: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
-    """Optional LLM polish — numbers stay authoritative; copy becomes clearer."""
+    """Optional LLM polish — numbers stay authoritative; copy becomes clearer using free web context."""
     if not items or not llm_service.is_configured():
         return {}
     slim = []
@@ -551,23 +617,48 @@ async def _polish_explanations(items: list[dict[str, Any]]) -> dict[str, dict[st
                 "form": it.get("_form_note"),
                 "stats_support": it.get("_stats_support"),
                 "learning": it.get("_learning_note"),
+                "headlines": [
+                    {"title": n.get("title"), "source": n.get("source")}
+                    for n in (it.get("_related_news") or [])[:3]
+                ],
                 "draft_thesis": _build_bettor_thesis(it)[0],
             }
         )
+    user = (
+        "Polish these pre-ranked Atlas Insight picks. "
+        "Use the provided headlines; if web search is available, add only free public "
+        "analyst/news consensus that supports or risks the pick — never invent markets.\n"
+        f"{slim}"
+    )
+    result: dict[str, Any] | None = None
+    used_web = False
     try:
         result = await asyncio.wait_for(
-            llm_service.complete_json(
+            llm_service.complete_json_with_web_search(
                 system=_EXPLAIN_SYSTEM,
-                user=f"Polish these pre-ranked Atlas Insight picks:\n{slim}",
-                max_tokens=1600,
+                user=user,
+                max_tokens=1800,
+                web_timeout_s=22.0,
             ),
-            timeout=25.0,
+            timeout=28.0,
         )
+        used_web = bool((result or {}).get("_web_search"))
     except Exception as exc:
-        logger.warning("Atlas Insight explanation polish skipped: %s", exc)
-        return {}
+        logger.warning("Atlas Insight web polish failed, trying local polish: %s", exc)
+        try:
+            result = await asyncio.wait_for(
+                llm_service.complete_json(
+                    system=_EXPLAIN_SYSTEM,
+                    user=user,
+                    max_tokens=1600,
+                ),
+                timeout=20.0,
+            )
+        except Exception as exc2:
+            logger.warning("Atlas Insight explanation polish skipped: %s", exc2)
+            return {}
 
-    out: dict[str, dict[str, str]] = {}
+    out: dict[str, dict[str, Any]] = {}
     if not result or not isinstance(result.get("picks"), list):
         return out
     for pick in result["picks"]:
@@ -576,10 +667,13 @@ async def _polish_explanations(items: list[dict[str, Any]]) -> dict[str, dict[st
         cid = str(pick.get("id") or "").strip()
         if not cid:
             continue
+        web_notes = [str(n) for n in (pick.get("web_notes") or []) if n][:3]
         out[cid] = {
             "thesis": str(pick.get("thesis") or ""),
             "bull": str(pick.get("bull_case") or ""),
             "bear": str(pick.get("bear_case") or ""),
+            "web_notes": web_notes,
+            "_web_search": used_web,
         }
     return out
 
@@ -666,8 +760,9 @@ class SportsOpenAiPicksService:
         dampen = float(calibration.get("sports_confidence_dampen") or 0.0)
 
         ranking_catalog = catalog[:64]
+        news_pool: list[dict[str, Any]] = []
         try:
-            await asyncio.wait_for(fetch_sports_news(limit_per_feed=3), timeout=6.0)
+            news_pool = await asyncio.wait_for(fetch_sports_news(limit_per_feed=5), timeout=8.0)
         except Exception as exc:
             logger.warning("Atlas Insight news prefetch skipped: %s", exc)
 
@@ -677,6 +772,7 @@ class SportsOpenAiPicksService:
             min_edge=min_edge,
             min_opp=min_opp,
             dampen=dampen,
+            news_pool=news_pool,
         )
 
         # Prefer real edge / form-backed sides; always keep a combat reserve.
@@ -711,16 +807,37 @@ class SportsOpenAiPicksService:
             selected = enriched[:limit]
 
         polished = await _polish_explanations(selected[:limit])
+        used_web = any(bool(v.get("_web_search")) for v in polished.values())
         rows: list[dict[str, Any]] = []
+        news_backed = 0
         for item in selected[: max(limit, 12)]:
             thesis, bull, bear = _build_bettor_thesis(item)
             polish = polished.get(str(item.get("id") or "")) or {}
             if polish.get("thesis"):
-                thesis = polish["thesis"]
+                thesis = str(polish["thesis"])
             if polish.get("bull"):
-                bull = polish["bull"]
+                bull = str(polish["bull"])
             if polish.get("bear"):
-                bear = polish["bear"]
+                bear = str(polish["bear"])
+            web_notes = [str(n) for n in (polish.get("web_notes") or []) if n][:3]
+            if web_notes:
+                sources_extra = list(item.get("_context_sources") or [])
+                for note in web_notes:
+                    sources_extra.append(
+                        {"type": "web_analyst", "title": note[:160], "provider": "openai_web"}
+                    )
+                item = dict(item)
+                item["_context_sources"] = sources_extra[:6]
+                item["_web_search"] = bool(polish.get("_web_search") or used_web)
+            if item.get("_news_verified") or item.get("_web_search"):
+                news_backed += 1
+            item = dict(item)
+            item["_web_search"] = bool(item.get("_web_search") or polish.get("_web_search") or used_web)
+            src_labels = ["FanDuel", "Atlas board results", "Form/H2H", "Your graded picks"]
+            if item.get("_news_verified"):
+                src_labels.append("Sports news")
+            if item.get("_web_search"):
+                src_labels.append("Web analyst consensus")
             rows.append(
                 _catalog_to_row(
                     self.user_id,
@@ -731,7 +848,7 @@ class SportsOpenAiPicksService:
                     thesis=thesis,
                     bull=bull,
                     bear=bear,
-                    sources=["FanDuel", "Atlas board results", "Your graded picks", "Form/H2H"],
+                    sources=src_labels,
                 )
             )
 
@@ -767,8 +884,10 @@ class SportsOpenAiPicksService:
         msg = (
             f"Atlas Insight posted {len(saved)} edge-ranked picks"
             f" ({prop_count} props, {edged} with multi-book edge, {with_stats} with form/H2H"
+            f", {news_backed} with news/web context"
             f", catalog {catalog_meta.get('player_props', 0)} props / {catalog_meta.get('game_lines', 0)} lines"
             f", 0 Odds credits"
+            f"{' · web analyst search on' if used_web else ''}"
             f"{f'; graded {graded_prior} finished board picks' if graded_prior else ''}"
             f"{f'; replaced {expired} prior Insight picks' if expired else ''})."
         )
@@ -790,7 +909,9 @@ class SportsOpenAiPicksService:
             "cache_used": credits_used == 0,
             "openai_web": True,
             "fanduel_verified": True,
-            "web_search": False,
+            "web_search": used_web,
+            "web_context": True,
+            "news_backed": news_backed,
             "stats_engine": True,
             "edged_picks": edged,
             "stats_backed": with_stats,

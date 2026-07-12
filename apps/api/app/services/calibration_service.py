@@ -113,11 +113,29 @@ class CalibrationService:
                 "by_bet_type": {},
                 "atlas": {"overall_win_rate": None, "decided": 0, "by_sport": {}, "by_bet_type": {}},
                 "user": {"overall_win_rate": None, "decided": 0, "by_sport": {}, "by_bet_type": {}},
+                "web_context": {
+                    "decided": 0,
+                    "win_rate": None,
+                    "plain_decided": 0,
+                    "plain_win_rate": None,
+                    "note": None,
+                    "examples": [],
+                },
                 "notes": [],
             },
             "market_learning": {
                 "markets": [],
                 "headline": "Grade a few settled picks — Atlas starts adapting thresholds per market.",
+                "web_sources": {
+                    "decided": 0,
+                    "win_rate": None,
+                    "note": None,
+                    "examples": [],
+                    "summary": (
+                        "Atlas pulls free ESPN/CBS/BBC sports headlines and OpenAI web analyst consensus "
+                        "into Insight rankings — then learns which news-backed picks actually hit."
+                    ),
+                },
             },
             "learning_notes": [],
             "active": False,
@@ -284,25 +302,43 @@ class CalibrationService:
         if active_n >= 2:
             headline = (
                 f"Atlas is actively adapting {active_n} markets from real outcomes — "
-                "future scans raise or lower bars from what actually hit."
+                "future scans raise or lower bars from what actually hit, plus free news/web context."
             )
         elif active_n == 1:
             headline = (
                 "One market is fully calibrating; keep grading sports, stocks, and options "
-                "so the loop spreads across the whole app."
+                "so the loop spreads across the whole app. News and analyst coverage feed Insight too."
             )
         elif warming_n:
             headline = (
-                "Learning loop is seeding — each graded win/loss teaches Atlas how to pick "
-                "the next sports, stock, options, and parlay setups."
+                "Learning loop is seeding — each graded win/loss plus free public news/analyst "
+                "context teaches Atlas how to pick the next sports, stock, options, and parlay setups."
             )
         else:
             headline = (
                 "Grade settled picks (or open Sports so Atlas auto-grades finished games) — "
-                "that feedback is how Atlas learns each market."
+                "Atlas also pulls free sports news and web analyst context into Insight."
             )
 
-        return {"markets": markets, "headline": headline, "active_markets": active_n}
+        web_ctx = sports_learning.get("web_context") if isinstance(sports_learning, dict) else {}
+        if not isinstance(web_ctx, dict):
+            web_ctx = {}
+
+        return {
+            "markets": markets,
+            "headline": headline,
+            "active_markets": active_n,
+            "web_sources": {
+                "decided": int(web_ctx.get("decided") or 0),
+                "win_rate": web_ctx.get("win_rate"),
+                "note": web_ctx.get("note"),
+                "examples": web_ctx.get("examples") or [],
+                "summary": (
+                    "Atlas pulls free ESPN/CBS/BBC sports headlines and OpenAI web analyst consensus "
+                    "into Insight rankings — then learns which news-backed picks actually hit."
+                ),
+            },
+        }
 
     def _sports_learning_slices(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
         """Win-rate slices from graded sports picks — Atlas board + user picks."""
@@ -374,6 +410,10 @@ class CalibrationService:
                     f"{bet_type.replace('_', ' ')} hits {meta['win_rate']:.0f}% over {meta['count']}"
                 )
 
+        web_ctx = self._web_context_slice(decided)
+        if web_ctx.get("note"):
+            notes.append(str(web_ctx["note"]))
+
         return {
             "overall_win_rate": combined.get("overall_win_rate"),
             "decided": combined.get("decided") or 0,
@@ -381,7 +421,65 @@ class CalibrationService:
             "by_bet_type": ranking_by_bet,
             "atlas": atlas,
             "user": user,
+            "web_context": web_ctx,
             "notes": notes,
+        }
+
+    def _web_context_slice(self, decided: list[dict[str, Any]]) -> dict[str, Any]:
+        """How news/web-backed sports picks are performing vs market-only."""
+        web_rows: list[dict[str, Any]] = []
+        plain_rows: list[dict[str, Any]] = []
+        examples: list[dict[str, Any]] = []
+        for row in decided:
+            snap = row.get("scoring_snapshot") if isinstance(row.get("scoring_snapshot"), dict) else {}
+            is_web = bool(
+                snap.get("news_verified")
+                or snap.get("web_search")
+                or snap.get("web_context")
+                or snap.get("related_news")
+                or snap.get("context_sources")
+            )
+            if is_web:
+                web_rows.append(row)
+                for src in (snap.get("context_sources") or [])[:2]:
+                    if isinstance(src, dict) and src.get("title"):
+                        examples.append(
+                            {
+                                "title": str(src.get("title"))[:120],
+                                "url": src.get("url"),
+                                "provider": src.get("provider") or src.get("type"),
+                            }
+                        )
+            else:
+                plain_rows.append(row)
+
+        web_wr = self._win_rate(web_rows)
+        plain_wr = self._win_rate(plain_rows)
+        note = None
+        if web_wr is not None and len(web_rows) >= 4:
+            note = (
+                f"News/web-backed sports picks hit {web_wr:.0f}% "
+                f"({len(web_rows)} graded)"
+            )
+            if plain_wr is not None and len(plain_rows) >= 4:
+                note += f" vs {plain_wr:.0f}% market-only ({len(plain_rows)})"
+        seen: set[str] = set()
+        uniq_examples: list[dict[str, Any]] = []
+        for ex in examples:
+            key = str(ex.get("title") or "")
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            uniq_examples.append(ex)
+            if len(uniq_examples) >= 5:
+                break
+        return {
+            "decided": len(web_rows),
+            "win_rate": web_wr,
+            "plain_decided": len(plain_rows),
+            "plain_win_rate": plain_wr,
+            "note": note,
+            "examples": uniq_examples,
         }
 
     def _slice_wr(self, bucket: dict[str, list[dict[str, Any]]]) -> dict[str, dict[str, Any]]:
