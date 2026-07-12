@@ -55,14 +55,20 @@ def is_sports_actionable(row: dict[str, Any]) -> bool:
 
 
 def is_sports_listable(row: dict[str, Any]) -> bool:
-    """True for active saved picks — including OpenAI/user picks without a kickoff time."""
+    """True for active board picks that have not started/concluded yet.
+
+    Futures and undated Insight/user picks stay listable until they have a past kickoff.
+    """
     hours = hours_until_event(row.get("event_start"))
     if hours is not None:
-        return True
+        # Tiny grace for clock skew only — once past that, leave the live board.
+        grace_h = SPORTS_PRE_START_GRACE_MINUTES / 60.0
+        return hours > -grace_h
+
     snap = row.get("scoring_snapshot") or {}
     lm = row.get("line_movement") or {}
     source = str(snap.get("source") or lm.get("source") or "")
-    # Atlas Insight (openai_web) and user-logged bets often omit commence_time.
+    # Atlas Insight / user-logged bets often omit commence_time — keep until dated or replaced.
     return (
         source in {"openai_web", "user_entry"}
         or bool(snap.get("openai_web"))
@@ -70,6 +76,7 @@ def is_sports_listable(row: dict[str, Any]) -> bool:
         or bool(snap.get("user_entry"))
         or str(row.get("pick_source") or "") in {"openai_web", "user_entry"}
         or str(snap.get("pick_origin") or "") == "user"
+        or str(row.get("bet_type") or "").lower() in {"futures", "outright"}
     )
 
 

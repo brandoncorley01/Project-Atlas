@@ -427,6 +427,21 @@ class SportsRefreshService:
                 except Exception as exc:
                     logger.warning("Post-scan intelligence refresh skipped: %s", exc)
 
+        # Remove concluded games from the board and grade finished Atlas + user picks promptly.
+        graded_resolved = 0
+        try:
+            from app.services.outcome_resolver import OutcomeResolverService
+            from app.services.stale_signal_service import StaleSignalService
+
+            await StaleSignalService(self.db, self.user_id).expire_concluded_sports()
+            grade_result = await OutcomeResolverService(self.db, self.user_id).resolve_pending(
+                limit=60,
+                module="sports",
+            )
+            graded_resolved = int((grade_result or {}).get("resolved") or 0)
+        except Exception as exc:
+            logger.warning("Post-scan sports grade/expire skipped: %s", exc)
+
         return {
             "signals_created": len(saved),
             "events_scanned": len(events),
@@ -437,6 +452,7 @@ class SportsRefreshService:
             "credits_used": int(fetch_stats.get("credits_used") or 0),
             "cache_used": bool(fetch_stats.get("cached")),
             "parlays_invalidated": replace,
+            "graded_resolved": graded_resolved,
             "calibration": calibration,
             "message": self._result_message(setups, fetch_stats, parlays_invalidated=replace, calibration=calibration),
         }

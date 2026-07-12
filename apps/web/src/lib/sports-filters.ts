@@ -127,45 +127,41 @@ function compositeRank(row: SportsSignal): number {
 }
 
 export function filterByWindow(items: SportsSignal[], window: SportsWindowKey): SportsSignal[] {
-  const started = items.filter((i) => (i.hours_until_start ?? 0) <= 0 && i.hours_until_start != null);
-  // Mirror API: Atlas Insight + user-logged picks stay visible across date windows
-  // (except futures-only), whether or not they have a kickoff time.
+  // Concluded / in-progress games leave the live board — keep only upcoming (or undated Insight/user).
+  const live = items.filter((i) => i.hours_until_start == null || i.hours_until_start > 0);
   const insightOrUser = (i: SportsSignal) => isOpenAiSportsPick(i) || isUserSportsPick(i);
 
   if (window === "all") {
-    return items;
+    return live;
   }
   if (window === "today") {
-    return items.filter((i) => isSportsCalendarToday(i) || insightOrUser(i));
+    return live.filter((i) => isSportsCalendarToday(i) || (insightOrUser(i) && (i.hours_until_start == null || i.hours_until_start > 0)));
   }
   if (window === "futures") {
-    return items.filter(
+    return live.filter(
       (i) => isFutures(i) || (i.hours_until_start ?? 0) > WEEK_HOURS || (insightOrUser(i) && isFutures(i)),
     );
   }
   if (window === "month") {
-    const upcoming = items.filter((i) => {
+    return live.filter((i) => {
       if (insightOrUser(i) && !isFutures(i)) return true;
       const h = i.hours_until_start ?? 9999;
       return (h > 0 && h <= MONTH_HOURS) || isFutures(i);
     });
-    return [...started, ...upcoming];
   }
   if (window === "week") {
-    const upcoming = items.filter((i) => {
+    return live.filter((i) => {
       if (insightOrUser(i) && !isFutures(i)) return true;
       const h = i.hours_until_start ?? 9999;
       return h > 0 && h <= WEEK_HOURS;
     });
-    return [...started, ...upcoming];
   }
   // soon (48h)
-  const upcoming = items.filter((i) => {
+  return live.filter((i) => {
     if (insightOrUser(i) && !isFutures(i)) return true;
     const h = i.hours_until_start ?? 9999;
     return h > 0 && h <= NEAR_TERM_HOURS && !isFutures(i);
   });
-  return [...started, ...upcoming];
 }
 
 export function filterSports(items: SportsSignal[], filter: SportsFilterKey): SportsSignal[] {

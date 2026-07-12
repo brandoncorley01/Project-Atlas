@@ -9,7 +9,7 @@ from app.db.supabase_client import SupabaseClient
 from app.services.freshness import (
     is_options_fresh,
     is_parlay_fresh,
-    is_sports_actionable,
+    is_sports_listable,
     is_stock_fresh,
 )
 
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 _BATCH_SIZE = 50
 
 _EXPIRE_SELECT: dict[str, str] = {
-    "sports_signals": "id,event_start",
+    "sports_signals": "id,event_start,bet_type,scoring_snapshot,line_movement,pick_source",
     "stock_signals": "id,data_as_of",
     "options_signals": "id,expiration,data_as_of",
     "parlays": "id,data_as_of",
@@ -30,18 +30,22 @@ class StaleSignalService:
         self.db = db
         self.user_id = user_id
 
-    async def expire_all(self, *, include_sports: bool = False) -> dict[str, int]:
+    async def expire_all(self, *, include_sports: bool = True) -> dict[str, int]:
         """Move stale active rows to status=expired.
 
-        Sports picks are kept until the user runs a new scan (include_sports=False by default).
+        Sports: kickoff already passed (concluded/in-progress) leave the live board.
         """
         counts: dict[str, int] = {}
         if include_sports:
-            counts["sports"] = await self._expire_table("sports_signals", is_sports_actionable)
+            counts["sports"] = await self._expire_table("sports_signals", is_sports_listable)
         counts["stocks"] = await self._expire_table("stock_signals", is_stock_fresh)
         counts["options"] = await self._expire_table("options_signals", is_options_fresh)
         counts["parlays"] = await self._expire_table("parlays", is_parlay_fresh)
         return counts
+
+    async def expire_concluded_sports(self) -> int:
+        """Expire sports picks whose event has started or finished."""
+        return await self._expire_table("sports_signals", is_sports_listable)
 
     async def _expire_table(
         self,

@@ -29,8 +29,11 @@ from app.services.sports_ranking import (
     is_futures_row,
     sort_for_display,
 )
+import asyncio
+import logging
 import re
 
+logger = logging.getLogger(__name__)
 
 def _is_openai_web_row(row: dict) -> bool:
     snap = row.get("scoring_snapshot") or {}
@@ -56,7 +59,7 @@ def _is_user_entry_row(row: dict) -> bool:
 
 
 def _sports_window_match(row: dict, window: str) -> bool:
-    """Include started games until the next scan replaces them."""
+    """Match board windows — concluded / started games are already excluded by is_sports_listable."""
     hours = hours_until_event(row.get("event_start"))
     if hours is None:
         # OpenAI / user-logged picks often lack a precise kickoff — still list them.
@@ -65,7 +68,7 @@ def _sports_window_match(row: dict, window: str) -> bool:
         # Futures without a commence time still listable
         return is_futures_row(row) and window in {"all", "futures", "month"}
     if hours <= 0:
-        return True
+        return False
     if window == "today":
         return is_calendar_today(row) or _is_openai_web_row(row) or _is_user_entry_row(row)
     if window == "soon":
@@ -85,7 +88,7 @@ def _sports_window_match(row: dict, window: str) -> bool:
         )
     if window == "futures":
         return is_futures_row(row) or hours > WEEK_HOURS
-    # window == "all" — every listable row stays on the board
+    # window == "all" — every upcoming listable row stays on the board
     return True
 
 
@@ -238,7 +241,29 @@ class SignalService:
         window: str = "soon",
         skip_expire: bool = False,
     ) -> list[dict]:
-        # Sports picks persist until the user runs a new scan — never auto-expire on list load.
+        # Drop concluded/in-progress games from the live board, then grade finished picks.
+        if not skip_expire and status == "active":
+            try:
+                from app.services.stale_signal_service import StaleSignalService
+
+                await StaleSignalService(self.db, self.user_id).expire_concluded_sports()
+            except Exception as exc:
+                logger.warning("Expire concluded sports on list: %s", exc)
+            try:
+                from app.services.outcome_resolver import OutcomeResolverService
+
+                await asyncio.wait_for(
+                    OutcomeResolverService(self.db, self.user_id).resolve_pending(
+                        limit=50,
+                        module="sports",
+                    ),
+                    timeout=8.0,
+                )
+            except TimeoutError:
+                logger.info("Sports list auto-grade timed out — board still filtered")
+            except Exception as exc:
+                logger.warning("Sports list auto-grade skipped: %s", exc)
+
         fetch_limit = 300 if category or window in {"all", "month", "futures", "today", "week"} else max(limit * 3, 80)
         rows = await self.db.select(
             "sports_signals",

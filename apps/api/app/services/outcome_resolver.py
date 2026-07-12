@@ -104,7 +104,7 @@ class OutcomeResolverService:
                 "status": "in.(expired,active,closed)",
             },
             order="event_start.asc",
-            limit=limit * 3,
+            limit=limit * 4,
         )
 
         now = datetime.now(UTC)
@@ -113,18 +113,30 @@ class OutcomeResolverService:
             sid = PerformanceService._normalize_signal_id(str(sig.get("id")))
             if sid in graded_ids:
                 continue
+            snap = sig.get("scoring_snapshot") or {}
             event_start = sig.get("event_start")
-            if not event_start:
-                continue
-            try:
-                text = str(event_start).replace("Z", "+00:00")
-                start = datetime.fromisoformat(text)
-                if start.tzinfo is None:
-                    start = start.replace(tzinfo=UTC)
-            except (TypeError, ValueError):
-                continue
-            if start > now:
-                continue
+            if event_start:
+                try:
+                    text = str(event_start).replace("Z", "+00:00")
+                    start = datetime.fromisoformat(text)
+                    if start.tzinfo is None:
+                        start = start.replace(tzinfo=UTC)
+                except (TypeError, ValueError):
+                    continue
+                if start > now:
+                    continue
+            else:
+                # Undated rows: still try once we have sport + teams/event id (final scores available).
+                has_match_key = bool(
+                    snap.get("sport_key")
+                    and (
+                        snap.get("event_id")
+                        or (snap.get("home_team") and snap.get("away_team"))
+                        or (sig.get("event_name"))
+                    )
+                )
+                if not has_match_key:
+                    continue
             candidates.append(sig)
 
         if not candidates:
@@ -137,7 +149,10 @@ class OutcomeResolverService:
             if key:
                 sport_keys.add(str(key))
 
-        scores_by_sport = await fetch_scores_by_sport(sport_keys) if sport_keys else {}
+        # Prefer fresh completed scores so grading happens as soon as the game is final.
+        scores_by_sport = (
+            await fetch_scores_by_sport(sport_keys, force_refresh=True) if sport_keys else {}
+        )
 
         resolved = 0
         skipped = 0

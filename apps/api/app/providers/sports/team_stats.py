@@ -346,14 +346,22 @@ def match_stats_payload(stats: MatchStats | None) -> dict[str, Any] | None:
     }
 
 
-async def fetch_scores_by_sport(sport_keys: set[str]) -> dict[str, list[dict[str, Any]]]:
-    """Fetch recent completed scores per sport (cached)."""
+async def fetch_scores_by_sport(
+    sport_keys: set[str],
+    *,
+    force_refresh: bool = False,
+) -> dict[str, list[dict[str, Any]]]:
+    """Fetch recent completed scores per sport (cached).
+
+    force_refresh=True bypasses the TTL so auto-grading can pick up just-finished games
+    as soon as The Odds API marks them completed (still respects spend lock / missing keys).
+    """
     keys = {k for k in sport_keys if _scores_key_allowed(k)}
     if not keys:
         return {}
 
     cache = _read_cache()
-    if cache and _cache_fresh(cache.get("fetched_at")):
+    if not force_refresh and cache and _cache_fresh(cache.get("fetched_at")):
         by_sport = cache.get("by_sport") or {}
         return {k: list(by_sport.get(k) or []) for k in keys if k in by_sport}
 

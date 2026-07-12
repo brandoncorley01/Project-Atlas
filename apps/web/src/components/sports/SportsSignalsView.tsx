@@ -142,11 +142,19 @@ export function SportsSignalsView({
   useEffect(() => {
     void (async () => {
       const token = await getToken();
-      if (token || usesBffProxy()) {
-        await loadItems(token, activeCategory);
+      if (!(token || usesBffProxy())) return;
+      // Grade finished Atlas + user picks as soon as final scores exist, then refresh board.
+      try {
+        await fetch(`${getApiUrl()}/engine/resolve-outcomes?limit=60&module=sports`, {
+          method: "POST",
+          headers: apiRequestHeaders(token),
+          credentials: usesBffProxy() ? "include" : "same-origin",
+        });
+      } catch {
+        /* non-fatal — list still expires concluded games server-side */
       }
+      await loadItems(token, activeCategory);
     })();
-    // Refresh on mount so picks persist after API changes without a full reload.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
