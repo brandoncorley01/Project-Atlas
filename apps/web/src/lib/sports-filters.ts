@@ -50,9 +50,12 @@ export function isUserSportsPick(row: SportsSignal): boolean {
 
 export function isPlayerPropPick(row: SportsSignal): boolean {
   const bet = (row.bet_type || "").toLowerCase();
+  const propMarket = String(row.scoring_snapshot?.prop_market || "").toLowerCase();
   return (
     bet === "player_prop"
     || Boolean(row.scoring_snapshot?.is_player_prop)
+    || Boolean(row.scoring_snapshot?.is_fight_prop)
+    || propMarket.startsWith("fight_")
     || bet.startsWith("player_")
     || bet.startsWith("batter_")
     || bet.startsWith("pitcher_")

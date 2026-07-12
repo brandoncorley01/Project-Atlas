@@ -59,6 +59,8 @@ export interface SportsSignal {
     user_entry?: boolean;
     pick_origin?: string;
     is_player_prop?: boolean;
+    is_fight_prop?: boolean;
+    prop_market?: string;
     fanduel_verified?: boolean;
     [key: string]: unknown;
   } | null;
@@ -201,9 +203,11 @@ export function SportsSignalCard({
               FanDuel verified
             </span>
           )}
-          {(row.bet_type === "player_prop" || row.scoring_snapshot?.is_player_prop) && (
+          {(row.bet_type === "player_prop"
+            || row.scoring_snapshot?.is_player_prop
+            || row.scoring_snapshot?.is_fight_prop) && (
             <span
-              title="Player prop pick — verify the live FanDuel/DraftKings line and lineup status."
+              title="Prop pick — verify the live FanDuel/DraftKings line (includes MMA round totals)."
               className="rounded-full border border-fuchsia-400/50 bg-fuchsia-500/20 px-2 py-0.5 text-xs font-bold tracking-wide text-fuchsia-100"
             >
               Prop

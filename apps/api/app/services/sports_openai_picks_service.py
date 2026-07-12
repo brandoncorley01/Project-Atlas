@@ -117,6 +117,7 @@ def _catalog_to_row(
             "web_search": True,
             "fanduel_verified": True,
             "is_player_prop": bet_type == "player_prop",
+            "is_fight_prop": bool(item.get("is_fight_prop") or item.get("prop_market") in {"fight_total_rounds", "fight_spread"}),
             "prop_market": item.get("prop_market"),
             "player_name": item.get("player_name"),
             "sources": sources,
@@ -227,9 +228,11 @@ class SportsOpenAiPicksService:
         today = datetime.now(UTC).strftime("%Y-%m-%d")
         user = (
             f"Today UTC: {today}. Rank FanDuel-verified open bets from this catalog only. "
-            f"Catalog has {catalog_meta.get('player_props', 0)} player props and "
-            f"{catalog_meta.get('game_lines', 0)} game lines. "
-            "Prefer props when available, still include strong game lines. "
+            f"Catalog has {catalog_meta.get('player_props', 0)} player props"
+            f" ({catalog_meta.get('mma_props', 0)} MMA/Boxing fight props)"
+            f" and {catalog_meta.get('game_lines', 0)} game lines. "
+            "Prefer props when available (including MMA round totals / fight spreads), "
+            "still include strong fight winners and game lines. "
             "Do not invent bets.\n\n"
             f"Catalog:\n{slim}\n\n"
             f"Recent headlines (context only):\n{headlines}"

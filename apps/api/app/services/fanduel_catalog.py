@@ -34,6 +34,10 @@ PROP_MARKETS_BY_SPORT: dict[str, tuple[str, ...]] = {
     "icehockey_nhl": ("player_points", "player_shots_on_goal"),
 }
 
+# Odds API does not expose fighter strike props for MMA — round totals / fight
+# handicaps from FD+DK cache are promoted to player_prop (see _append_game_lines).
+COMBAT_SPORT_KEYS = frozenset({"mma_mixed_martial_arts", "boxing_boxing"})
+
 PROP_MARKET_LABELS: dict[str, str] = {
     "batter_hits": "Hits",
     "batter_home_runs": "Home runs",
@@ -46,7 +50,14 @@ PROP_MARKET_LABELS: dict[str, str] = {
     "player_rush_yds": "Rush yards",
     "player_receptions": "Receptions",
     "player_shots_on_goal": "Shots",
+    "fight_total_rounds": "Rounds",
+    "fight_spread": "Fight spread",
 }
+
+
+def _is_combat_sport(sport_key: str | None) -> bool:
+    key = (sport_key or "").lower()
+    return key in COMBAT_SPORT_KEYS or key.startswith("mma_") or key.startswith("boxing_")
 
 # Common team aliases so "Portland" / "Fire" hit WNBA cache events.
 TEAM_ALIASES: dict[str, tuple[str, ...]] = {
@@ -205,6 +216,26 @@ def collapse_available_on(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _prefer_fanduel_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep one row per market, preferring FanDuel over DraftKings."""
+    if len(rows) <= 1:
+        return rows
+    best: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for row in rows:
+        key = _market_identity(row)
+        prev = best.get(key)
+        if prev is None:
+            best[key] = row
+            order.append(key)
+            continue
+        prev_fd = str(prev.get("book_key") or "") == PREFERRED_BOOK_KEY
+        cur_fd = str(row.get("book_key") or "") == PREFERRED_BOOK_KEY
+        if cur_fd and not prev_fd:
+            best[key] = row
+    return [best[k] for k in order]
+
+
 def _append_game_lines(
     catalog: list[dict[str, Any]],
     event: dict[str, Any],
@@ -221,19 +252,21 @@ def _append_game_lines(
     event_id = str(event.get("id") or "")
     event_name = f"{away} @ {home}"
     start = event.get("commence_time")
+    combat = _is_combat_sport(sport_key)
 
     books = _fanduel_books(event)
-    if not all_preferred_books:
+    if not all_preferred_books and not combat:
         # FanDuel preferred for Insight verification; fall back to first US book.
         fd = [b for b in books if str(b.get("key")) == PREFERRED_BOOK_KEY]
         books = (fd or books)[:1]
     else:
-        books = [b for b in books if str(b.get("key") or "") in US_PREFERRED_BOOK_KEYS]
+        # Search (all books) and combat Insight: FD+DK so MMA round props aren't dropped.
+        preferred = [b for b in books if str(b.get("key") or "") in US_PREFERRED_BOOK_KEYS]
+        books = preferred or books[:1]
 
+    staged: list[dict[str, Any]] = []
     for book in books:
         book_key = str(book.get("key") or PREFERRED_BOOK_KEY)
-        if all_preferred_books and book_key not in US_PREFERRED_BOOK_KEYS:
-            continue
         book_title = str(book.get("title") or book_key)
         for market in book.get("markets") or []:
             mkey = str(market.get("key") or "")
@@ -260,7 +293,24 @@ def _append_game_lines(
                     selection = f"{name} {point_f:g}"
                 else:
                     selection = name
-                catalog.append(
+
+                out_bet = bet_type
+                prop_market = None
+                player_name = None
+                # Odds API has no MMA strike props — treat round O/U + fight handicap as props.
+                if combat and bet_type == "total":
+                    out_bet = "player_prop"
+                    prop_market = "fight_total_rounds"
+                    if point_f is not None:
+                        selection = f"Fight {name} {point_f:g} Rounds"
+                    else:
+                        selection = f"Fight {name} Rounds"
+                elif combat and bet_type == "spread":
+                    out_bet = "player_prop"
+                    prop_market = "fight_spread"
+                    player_name = name
+
+                staged.append(
                     {
                         "sport": sport,
                         "sport_key": sport_key,
@@ -269,17 +319,20 @@ def _append_game_lines(
                         "event_start": start,
                         "home_team": home,
                         "away_team": away,
-                        "bet_type": bet_type,
+                        "bet_type": out_bet,
                         "selection": selection,
                         "odds_american": american,
                         "point": point_f,
                         "book_key": book_key,
                         "book_title": book_title,
-                        "prop_market": None,
-                        "player_name": None,
+                        "prop_market": prop_market,
+                        "player_name": player_name,
                         "fanduel_verified": book_key in US_PREFERRED_BOOK_KEYS,
+                        "is_fight_prop": bool(prop_market),
                     }
                 )
+
+    catalog.extend(_prefer_fanduel_rows(staged) if combat and not all_preferred_books else staged)
 
 
 def _prop_selection(market_key: str, outcome: dict[str, Any]) -> tuple[str, str | None, float | None]:
@@ -475,13 +528,16 @@ async def build_fanduel_catalog(
         if credits_used:
             invalidate_key_probe_cache()
 
-    # Cap catalog size for the LLM while keeping props priority.
+    # Cap catalog size for the LLM while keeping props priority (incl. MMA fight props).
     props = [c for c in catalog if c.get("bet_type") == "player_prop"]
     games = [c for c in catalog if c.get("bet_type") != "player_prop"]
-    # Prefer sooner games for game lines.
+    combat_props = [c for c in props if _is_combat_sport(str(c.get("sport_key") or ""))]
+    other_props = [c for c in props if not _is_combat_sport(str(c.get("sport_key") or ""))]
+    # Prefer sooner games for game lines; reserve MMA/Boxing moneylines.
     games.sort(key=lambda c: hours_until_event(c.get("event_start")) or 9999)
-    # Keep a playable mix for ranking.
-    trimmed = props[:80] + games[:60]
+    combat_games = [c for c in games if _is_combat_sport(str(c.get("sport_key") or ""))]
+    other_games = [c for c in games if not _is_combat_sport(str(c.get("sport_key") or ""))]
+    trimmed = (combat_props[:36] + other_props[:50])[:80] + (combat_games[:24] + other_games[:40])[:60]
     for i, row in enumerate(trimmed):
         row["id"] = f"fd{i+1}"
 
@@ -490,6 +546,13 @@ async def build_fanduel_catalog(
         "total": len(trimmed),
         "game_lines": len([c for c in trimmed if c["bet_type"] != "player_prop"]),
         "player_props": len([c for c in trimmed if c["bet_type"] == "player_prop"]),
+        "mma_props": len(
+            [
+                c
+                for c in trimmed
+                if c.get("bet_type") == "player_prop" and _is_combat_sport(str(c.get("sport_key") or ""))
+            ]
+        ),
         "credits_used": credits_used,
         "props_events": props_events,
         "cache_events": len(events),
@@ -829,11 +892,12 @@ async def fetch_verified_markets_for_search(
     # If the odds cache has no matching game (common for expansion teams),
     # pull that sport's FanDuel/DK board once so Search can still find the slate.
     seed_credits = 0
+    LIVE_SEED_SPORTS = set(PROP_MARKETS_BY_SPORT) | COMBAT_SPORT_KEYS
     if not matched:
         sk = sport_key or ""
         if not sk and any("portland" in t or t == "fire" or "tempo" in t for t in team_needles):
             sk = "basketball_wnba"
-        if sk in PROP_MARKETS_BY_SPORT:
+        if sk in LIVE_SEED_SPORTS:
             try:
                 client, _, info = await _select_active_client()
                 rem = info.get("total_remaining")
@@ -851,6 +915,8 @@ async def fetch_verified_markets_for_search(
                             "baseball_mlb": "MLB",
                             "americanfootball_nfl": "NFL",
                             "icehockey_nhl": "NHL",
+                            "mma_mixed_martial_arts": "MMA",
+                            "boxing_boxing": "Boxing",
                         }.get(sk, sk)
                         events.append(ev)
                     matched = [e for e in events if _event_matches_teams(e, team_needles)]
@@ -932,25 +998,32 @@ async def fetch_verified_markets_for_search(
             invalidate_key_probe_cache()
 
     collapsed = collapse_available_on(raw)
+    matched_ids = {str(e.get("id") or "") for e in matched if e.get("id")}
 
-    player_rows = [
-        m
-        for m in collapsed
-        if m.get("bet_type") == "player_prop"
-        and _player_match(str(m.get("player_name") or m.get("selection") or ""), player_needles)
-    ]
+    def _prop_for_search(m: dict[str, Any]) -> bool:
+        if m.get("bet_type") != "player_prop":
+            return False
+        if _player_match(str(m.get("player_name") or m.get("selection") or ""), player_needles):
+            return True
+        # MMA/Boxing round totals have no player_name — keep them when the fight matched.
+        return (
+            bool(player_needles)
+            and _is_combat_sport(str(m.get("sport_key") or ""))
+            and str(m.get("event_id") or "") in matched_ids
+        )
+
+    player_rows = [m for m in collapsed if _prop_for_search(m)]
     game_rows = [m for m in collapsed if m.get("bet_type") != "player_prop"]
     other_props = [
         m
         for m in collapsed
-        if m.get("bet_type") == "player_prop"
-        and not _player_match(str(m.get("player_name") or m.get("selection") or ""), player_needles)
+        if m.get("bet_type") == "player_prop" and m not in player_rows
     ]
 
     if player_needles and player_rows:
         markets = player_rows + game_rows[:8]
     elif matched:
-        markets = game_rows[:12] + other_props[:8]
+        markets = game_rows[:12] + (player_rows or other_props)[:8]
     else:
         markets = player_rows or collapsed[:20]
 
@@ -969,7 +1042,7 @@ async def fetch_verified_markets_for_search(
         "message": None
         if markets
         else (
-            "No FanDuel/DraftKings lines matched yet — tap Fetch live odds for WNBA/MLB, "
+            "No FanDuel/DraftKings lines matched yet — tap Fetch live odds for WNBA/MLB/MMA, "
             "then search again."
         ),
     }

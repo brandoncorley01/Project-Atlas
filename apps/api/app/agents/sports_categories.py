@@ -164,9 +164,12 @@ def _is_openai_web(row: dict[str, Any]) -> bool:
 def _is_player_prop(row: dict[str, Any]) -> bool:
     snap = row.get("scoring_snapshot") or {}
     bet = str(row.get("bet_type") or "").lower()
+    prop_market = str(snap.get("prop_market") or "").lower()
     return (
         bet == "player_prop"
         or bool(snap.get("is_player_prop"))
+        or bool(snap.get("is_fight_prop"))
+        or prop_market.startswith("fight_")
         or bet.startswith("player_")
         or bet.startswith("batter_")
         or bet.startswith("pitcher_")
