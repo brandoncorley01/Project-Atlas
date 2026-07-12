@@ -32,6 +32,11 @@ MIN_PER_SPORT = 1
 MAX_PER_SPORT = 10
 
 
+def _openai_quota_skipped(stats: dict[str, Any]) -> bool:
+    reason = str(stats.get("reason") or "").lower()
+    return any(token in reason for token in ("insufficient_quota", "quota", "429"))
+
+
 def _source_note(stats: dict[str, Any]) -> str:
     """Human-readable suffix describing whether odds are live, cached, or stale."""
     if stats.get("stale"):
@@ -492,7 +497,9 @@ class SportsRefreshService:
                     "use Fetch live odds (~4 credits), not Rescore"
                 )
             if stats.get("openai_slate"):
-                scan_note += f" · Atlas Insight ranked {stats.get('openai_ranked', '?')} picks"
+                scan_note += f" · OpenAI ranked {stats.get('openai_ranked', '?')} picks"
+            elif _openai_quota_skipped(stats):
+                scan_note += " · OpenAI ranking skipped (quota) — FanDuel/DK edges still saved"
         else:
             scanned = int(stats.get("sports_scanned") or 0)
             scan_note = (
@@ -502,7 +509,9 @@ class SportsRefreshService:
             if stats.get("cache_merged"):
                 scan_note += " · merged into existing cache"
             if stats.get("openai_slate"):
-                scan_note += f" · Atlas Insight ranked {stats.get('openai_ranked', '?')} picks"
+                scan_note += f" · OpenAI ranked {stats.get('openai_ranked', '?')} picks"
+            elif _openai_quota_skipped(stats):
+                scan_note += " · OpenAI ranking skipped (quota) — FanDuel/DK edges still saved"
             if stats.get("slate_mode"):
                 scan_note += " · slate mode (board fill)"
             if dropped > 0:

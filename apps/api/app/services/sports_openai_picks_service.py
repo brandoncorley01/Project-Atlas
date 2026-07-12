@@ -892,6 +892,11 @@ class SportsOpenAiPicksService:
             f"{f'; graded {graded_prior} finished board picks' if graded_prior else ''}"
             f"{f'; replaced {expired} prior Insight picks' if expired else ''})."
         )
+        if llm_service.is_configured() and not polished:
+            msg = (
+                f"{msg} OpenAI polish skipped (billing/quota) — "
+                "FanDuel edge-ranked picks still posted."
+            )
         if learn_notes:
             msg = f"{msg} Learning: {learn_notes}."
         elif atlas_learn.get("decided") or user_learn.get("decided"):
@@ -909,6 +914,7 @@ class SportsOpenAiPicksService:
             "credits_used": credits_used,
             "cache_used": credits_used == 0,
             "openai_web": True,
+            "openai_polish": bool(polished),
             "fanduel_verified": True,
             "web_search": used_web,
             "web_context": True,

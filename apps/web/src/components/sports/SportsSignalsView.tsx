@@ -239,9 +239,15 @@ export function SportsSignalsView({
               : "No edges met the threshold — try Fetch live odds or Atlas Insight"),
       );
 
+      // Leave Atlas Insight / openai filters so Odds Scan results aren't hidden.
+      setFilter("all");
+      setSort("opportunity");
+      setActiveCategory(null);
+      setActiveSport(null);
+
       await Promise.all([
         loadCategories(token),
-        loadItems(token, activeCategory),
+        loadItems(token, null, null),
         refreshOddsStatus(),
       ]);
       router.refresh();

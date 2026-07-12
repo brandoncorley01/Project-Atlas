@@ -36,8 +36,8 @@ class Settings(BaseSettings):
     odds_cache_ttl_minutes: int = 360
 
     # Max sportsbooks leagues fetched per live scan (1 credit each).
-    # Default 4 = MLB/WNBA-first US core (FanDuel/DraftKings); 0 = no cap (expensive).
-    odds_max_sports_per_scan: int = 2
+    # Default 6 = useful US-core slate; 0 = no cap (expensive).
+    odds_max_sports_per_scan: int = 6
 
     # priority = in-season majors only (credit-safe); full = every active game sport.
     odds_scan_scope: str = "priority"
@@ -46,21 +46,23 @@ class Settings(BaseSettings):
     odds_include_futures_on_live: bool = False
 
     # Refuse a live pull when remaining credits are below this + estimated scan cost.
-    odds_min_credits_reserve: int = 100
+    # Leave a small cushion so free-tier keys (~500/mo) aren't drained overnight.
+    # Values >= 500 effectively block all live Fetch — keep this well below that.
+    odds_min_credits_reserve: int = 25
 
     # Atlas Insight: max soon games to pull FanDuel player props for (each uses ~3 credits).
     # 0 = never spend Odds credits on Insight (use odds/props cache only).
     odds_insight_prop_events: int = 0
 
     # Keep a reserve so Insight prop pulls don't zero the free-tier quota.
-    odds_insight_min_credits_reserve: int = 100
+    odds_insight_min_credits_reserve: int = 25
 
     # Search: max matching games to pull FanDuel/DK player props for (credit-capped).
     # 0 = Search uses cache + OpenAI only (0 Odds credits).
     odds_search_prop_events: int = 0
 
     # Search prop pull reserve — leave credits for Fetch live.
-    odds_search_min_credits_reserve: int = 100
+    odds_search_min_credits_reserve: int = 25
 
     # cache_only = never call Odds live APIs (Rescore / Insight / Search from cache).
     # conservative = live only when remaining > reserve; no Insight/Search prop pulls.

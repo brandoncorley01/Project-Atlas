@@ -22,10 +22,10 @@ function Stop-PortListener {
         }
     } catch { }
 
-    foreach ($pid in $pids) {
-        if ($pid -le 0) { continue }
-        taskkill /F /T /PID $pid 2>$null | Out-Null
-        Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+    foreach ($procId in $pids) {
+        if ($procId -le 0) { continue }
+        taskkill /F /T /PID $procId 2>$null | Out-Null
+        Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
     }
 
     return $pids.Count

@@ -1085,6 +1085,12 @@ async def fetch_all_sports_odds(
     remaining = info.get("total_remaining")
     estimated = len(keys) + len(futures_keys)
     reserve = max(0, int(getattr(config.settings, "odds_min_credits_reserve", 15) or 0))
+    # Free keys are ~500/mo. A reserve of 500 blocks every live call. Cap auto-reserve,
+    # and for intentional Fetch only keep a tiny cushion so the button works.
+    if force_refresh:
+        reserve = min(reserve, 10)
+    else:
+        reserve = min(reserve, 100)
     if remaining is not None and remaining < estimated + reserve:
         stale = _stale_cache_response(cache, info)
         if stale is not None:
@@ -1101,6 +1107,11 @@ async def fetch_all_sports_odds(
                         f"Odds credits low ({remaining} left; need ~{estimated}+{reserve} reserve). "
                         "Using cached FanDuel/DraftKings lines — Rescore is free. "
                         "OpenAI still ranks picks from cache."
+                        if not force_refresh
+                        else (
+                            f"Odds credits low ({remaining} left; need ~{estimated}+{reserve} for Fetch). "
+                            "Served cache instead — add another free Odds key or wait for reset."
+                        )
                     ),
                 }
             )
