@@ -6,8 +6,10 @@ import { LogOutcomeButtons } from "@/components/performance/LogOutcomeButtons";
 import { buildClientCoachInsight, type CoachInsight } from "@/lib/performance-coach";
 import {
   groupBySector,
+  gradedOnly,
   isAtlasOnlyLane,
   isUserLane,
+  pendingOnly,
   resolvePickOrigin,
 } from "@/lib/performance-origin";
 import {
@@ -88,6 +90,7 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
   const [coachError, setCoachError] = useState<string | null>(null);
   const [dataSource, setDataSource] = useState<"api" | "direct" | null>(null);
   const [atlasExpanded, setAtlasExpanded] = useState(false);
+  const [showMyGraded, setShowMyGraded] = useState(false);
   const didBootstrap = useRef(false);
   const syncInFlight = useRef(false);
 
@@ -322,7 +325,11 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
   const userPicks = useMemo(() => history.filter(isUserLane), [history]);
   const atlasPicks = useMemo(() => history.filter(isAtlasOnlyLane), [history]);
 
-  const userBySector = useMemo(() => groupBySector(userPicks), [userPicks]);
+  const userPending = useMemo(() => pendingOnly(userPicks), [userPicks]);
+  const userGraded = useMemo(() => gradedOnly(userPicks), [userPicks]);
+
+  const userPendingBySector = useMemo(() => groupBySector(userPending), [userPending]);
+  const userGradedBySector = useMemo(() => groupBySector(userGraded), [userGraded]);
   const atlasBySector = useMemo(() => groupBySector(atlasPicks), [atlasPicks]);
 
   const laneStats = useMemo(() => {
@@ -560,7 +567,9 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
           }`}
         >
           <p className="text-xs font-semibold uppercase tracking-wide text-sky-300">Atlas scan picks</p>
-          <p className="mt-1 text-sm text-muted">Every ranked signal from scans — auto-tracked</p>
+          <p className="mt-1 text-sm text-muted">
+            Auto-tracked for learning — not shown in your waiting list
+          </p>
           <div className="mt-3 flex flex-wrap gap-4 text-sm">
             <span>
               <strong className="text-2xl text-foreground">{laneStats.atlas.total}</strong>
@@ -584,10 +593,10 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
       </section>
 
       <PickOriginLane
-        title="Your picks"
-        subtitle="From your watchlist — sports bets, stocks, options, and parlays you saved"
+        title="Waiting to be graded"
+        subtitle="Only your watchlist / logged picks — Atlas board picks grade in the background for learning"
         accent="emerald"
-        picksBySector={userBySector}
+        picksBySector={userPendingBySector}
         summary={summary}
         coachInsight={coachInsight}
         gradingSector={gradingSector}
@@ -595,19 +604,56 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
         onUpdated={refreshSummary}
         emptyHint={
           <>
-            Save plays from Sports, Stocks, Options, or Parlays to your{" "}
+            Nothing waiting — save plays from Sports, Stocks, Options, or Parlays to your{" "}
             <Link href="/watchlist" className="text-accent hover:underline">
               watchlist
             </Link>{" "}
-            — they appear here automatically.
+            and they show up here until graded.
           </>
         }
       />
 
+      {userGraded.length > 0 && (
+        <section className="rounded-xl border border-border bg-surface/40 p-4">
+          <button
+            type="button"
+            onClick={() => setShowMyGraded((v) => !v)}
+            className="flex w-full items-center justify-between text-left"
+          >
+            <div>
+              <h2 className="text-base font-semibold">Your graded results</h2>
+              <p className="mt-0.5 text-sm text-muted">
+                {userGraded.length} settled pick{userGraded.length === 1 ? "" : "s"} you tracked
+              </p>
+            </div>
+            <span className="text-xs font-medium text-emerald-300">
+              {showMyGraded ? "Hide ↑" : "Show ↓"}
+            </span>
+          </button>
+          {showMyGraded && (
+            <div className="mt-4">
+              <PickOriginLane
+                title="Your graded results"
+                subtitle="Wins, losses, and scratches from picks you saved or logged"
+                accent="emerald"
+                picksBySector={userGradedBySector}
+                summary={summary}
+                coachInsight={coachInsight}
+                gradingSector={gradingSector}
+                onGrade={(id) => void runResolveSector(id)}
+                onUpdated={refreshSummary}
+                emptyHint="No graded picks yet."
+                hideHeader
+              />
+            </div>
+          )}
+        </section>
+      )}
+
       {atlasExpanded && (
         <PickOriginLane
           title="Atlas scan picks"
-          subtitle="Every pick Atlas surfaced in a scan — used to measure and improve scan quality"
+          subtitle="Board picks Atlas presented — auto-graded for learning; not mixed into your waiting list"
           accent="sky"
           picksBySector={atlasBySector}
           summary={summary}
@@ -713,6 +759,7 @@ function PickOriginLane({
   onUpdated,
   previewLimit,
   emptyHint,
+  hideHeader = false,
 }: {
   title: string;
   subtitle: string;
@@ -725,12 +772,14 @@ function PickOriginLane({
   onUpdated: () => Promise<void>;
   previewLimit?: number;
   emptyHint: ReactNode;
+  hideHeader?: boolean;
 }) {
   const border = accent === "emerald" ? "border-emerald-500/40" : "border-sky-500/40";
   const headerBg = accent === "emerald" ? "bg-emerald-500/10" : "bg-sky-500/10";
   const total = SECTORS.reduce((n, s) => n + picksBySector[s.id].length, 0);
 
   if (total === 0) {
+    if (hideHeader) return null;
     return (
       <section className={`rounded-xl border border-dashed ${border} p-6`}>
         <h2 className="text-base font-semibold">{title}</h2>
@@ -742,11 +791,13 @@ function PickOriginLane({
 
   return (
     <section className={`rounded-xl border ${border} overflow-hidden`}>
-      <div className={`border-b ${border} px-4 py-3 ${headerBg}`}>
-        <h2 className="text-base font-semibold">{title}</h2>
-        <p className="mt-0.5 text-sm text-muted">{subtitle}</p>
-        <p className="mt-1 text-xs text-muted">{total} pick{total === 1 ? "" : "s"} in this lane</p>
-      </div>
+      {!hideHeader && (
+        <div className={`border-b ${border} px-4 py-3 ${headerBg}`}>
+          <h2 className="text-base font-semibold">{title}</h2>
+          <p className="mt-0.5 text-sm text-muted">{subtitle}</p>
+          <p className="mt-1 text-xs text-muted">{total} pick{total === 1 ? "" : "s"} in this list</p>
+        </div>
+      )}
       <div className="space-y-4 p-4">
         {SECTORS.map((sector) => {
           const picks = picksBySector[sector.id];
