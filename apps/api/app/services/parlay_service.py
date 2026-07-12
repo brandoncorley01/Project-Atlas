@@ -572,4 +572,54 @@ class ParlayService:
     async def format_parlay_with_legs(self, row: dict[str, Any]) -> dict[str, Any]:
         legs = await self.get_legs(str(row["id"]))
         signal_map = await self._load_signals_for_legs(legs)
-        return self.format_parlay(row, legs, signal_map=signal_map)
+        formatted = self.format_parlay(row, legs, signal_map=signal_map)
+        return await self._attach_leg_outcomes(formatted)
+
+    async def _attach_leg_outcomes(self, formatted: dict[str, Any]) -> dict[str, Any]:
+        """Stamp win/loss/scratch onto each leg from performance grading."""
+        parlay_id = str(formatted.get("id") or "")
+        if not parlay_id:
+            return formatted
+        try:
+            from app.services.performance_service import PerformanceService
+
+            entry = await PerformanceService(self.db, self.user_id).get_outcome(
+                module="parlay", signal_id=parlay_id
+            )
+        except Exception:
+            return formatted
+        if not entry:
+            return formatted
+        leg_outcomes = entry.get("leg_outcomes") if isinstance(entry, dict) else None
+        if not isinstance(leg_outcomes, list) or not leg_outcomes:
+            return formatted
+
+        by_order: dict[int, dict[str, Any]] = {}
+        by_key: dict[tuple[str, str], dict[str, Any]] = {}
+        for item in leg_outcomes:
+            if not isinstance(item, dict):
+                continue
+            try:
+                order = int(item.get("leg_order") or 0)
+            except (TypeError, ValueError):
+                order = 0
+            if order:
+                by_order[order] = item
+            sel = str(item.get("selection") or "")
+            event = str(item.get("event_name") or "")
+            if sel and event:
+                by_key[(sel, event)] = item
+
+        stamped = []
+        for leg in formatted.get("legs") or []:
+            next_leg = dict(leg)
+            match = by_order.get(int(leg.get("leg_order") or 0)) or by_key.get(
+                (str(leg.get("selection") or ""), str(leg.get("event_name") or ""))
+            )
+            if match and match.get("outcome"):
+                next_leg["outcome"] = match["outcome"]
+            stamped.append(next_leg)
+        formatted["legs"] = stamped
+        formatted["leg_outcomes"] = leg_outcomes
+        formatted["ticket_outcome"] = entry.get("outcome")
+        return formatted

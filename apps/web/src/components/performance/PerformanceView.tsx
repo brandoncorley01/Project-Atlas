@@ -34,6 +34,15 @@ export interface PerformanceEntry {
   signal_label?: string | null;
   pick_origin?: string | null;
   graded_by?: string | null;
+  leg_outcomes?: Array<{
+    leg_order?: number;
+    selection?: string;
+    event_name?: string;
+    bet_type?: string;
+    odds_american?: number;
+    outcome?: string;
+    sport?: string;
+  }> | null;
 }
 
 export interface PerformanceSummary {
@@ -1222,6 +1231,31 @@ function OutcomeRow({
         )}
         {origin === "both" && (
           <p className="mt-0.5 text-[10px] text-violet-300/90">Also in Atlas scan</p>
+        )}
+        {sector === "parlay" && Array.isArray(row.leg_outcomes) && row.leg_outcomes.length > 0 && (
+          <ul className="mt-2 space-y-1">
+            {row.leg_outcomes.map((leg, idx) => {
+              const outcome = String(leg.outcome || "pending");
+              const color =
+                outcome === "win"
+                  ? "text-emerald-300"
+                  : outcome === "loss"
+                    ? "text-red-300"
+                    : "text-muted";
+              return (
+                <li key={`${leg.leg_order ?? idx}-${leg.selection}`} className="text-[11px] leading-snug">
+                  <span className={`font-semibold uppercase ${color}`}>
+                    {outcome === "win" ? "Won" : outcome === "loss" ? "Lost" : "Scratch"}
+                  </span>
+                  <span className="text-muted">
+                    {" "}
+                    · Leg {leg.leg_order ?? idx + 1}: {leg.selection}
+                    {leg.event_name ? ` · ${leg.event_name}` : ""}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
         )}
         {isPending && (
           <LogOutcomeButtons

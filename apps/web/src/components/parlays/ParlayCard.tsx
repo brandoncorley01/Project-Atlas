@@ -23,6 +23,7 @@ export interface ParlayLeg {
   book_odds?: BookOddsLine[];
   leg_reason?: string | null;
   sports_signal_id?: string | null;
+  outcome?: "win" | "loss" | "scratch" | string | null;
 }
 
 export interface Parlay {
@@ -100,6 +101,29 @@ function formatTimeWindow(row: Parlay) {
     return `${formatEventStart(row.earliest_event_start)} → ${formatEventStart(row.latest_event_start)}`;
   }
   return null;
+}
+
+function legOutcomeBadge(outcome?: string | null) {
+  if (!outcome || outcome === "pending") return null;
+  if (outcome === "win") {
+    return (
+      <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-300">
+        Won
+      </span>
+    );
+  }
+  if (outcome === "loss") {
+    return (
+      <span className="rounded-full bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase text-red-300">
+        Lost
+      </span>
+    );
+  }
+  return (
+    <span className="rounded-full bg-background px-2 py-0.5 text-[10px] font-semibold uppercase text-muted">
+      Scratch
+    </span>
+  );
 }
 
 export function ParlayCard({ row, rank }: { row: Parlay; rank: number }) {
@@ -202,9 +226,12 @@ export function ParlayCard({ row, rank }: { row: Parlay; rank: number }) {
           <p className="text-sm text-muted">{row.explanation}</p>
           {row.legs.map((leg) => (
             <div key={leg.leg_order} className="rounded-lg border border-border bg-background/50 p-3">
-              <p className="text-xs uppercase tracking-wide text-muted">
-                Leg {leg.leg_order} · {leg.sport} · {leg.bet_type}
-              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-xs uppercase tracking-wide text-muted">
+                  Leg {leg.leg_order} · {leg.sport} · {leg.bet_type}
+                </p>
+                {legOutcomeBadge(leg.outcome)}
+              </div>
               <p className="mt-1 font-semibold">{leg.selection}</p>
               <p className="text-xs text-muted">{leg.event_name}</p>
               {leg.event_start && (

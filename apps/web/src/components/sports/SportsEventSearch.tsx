@@ -75,6 +75,17 @@ export interface SportsMarketHit extends SportsEventMarket {
   is_most_likely?: boolean;
 }
 
+/** Signal payload returned when adding a FanDuel market as a parlay leg. */
+export interface ParlayLegSignal {
+  id: string;
+  sport: string;
+  event_name: string;
+  bet_type: string;
+  selection: string;
+  odds_american: number;
+  event_start?: string | null;
+}
+
 async function getToken() {
   if (usesBffProxy()) return undefined;
   const { createClient } = await import("@/lib/supabase/client");
@@ -125,11 +136,46 @@ function booksLabel(m: SportsEventMarket | SportsMarketHit) {
     .join(" · ");
 }
 
+function hasFanDuel(m: SportsEventMarket | SportsMarketHit) {
+  if (m.book_key === "fanduel") return true;
+  if (truthy((m as SportsMarketHit).fanduel_verified)) return true;
+  return Boolean(
+    m.available_on?.some(
+      (b) => b.book_key === "fanduel" && typeof b.odds_american === "number",
+    ),
+  );
+}
+
+function withFanDuelLine<T extends SportsEventMarket | SportsMarketHit>(m: T): T {
+  const fd = m.available_on?.find(
+    (b) => b.book_key === "fanduel" && typeof b.odds_american === "number",
+  );
+  if (fd && typeof fd.odds_american === "number") {
+    return {
+      ...m,
+      book_key: "fanduel",
+      book_title: "FanDuel",
+      odds_american: fd.odds_american,
+    };
+  }
+  return {
+    ...m,
+    book_key: m.book_key || "fanduel",
+    book_title: m.book_title || "FanDuel",
+  };
+}
+
 export function SportsEventSearch({
   onBetLogged,
+  intent = "log",
+  onParlayLegAdded,
 }: {
   onBetLogged?: () => void | Promise<void>;
+  /** `parlay` = FanDuel-only search that adds legs to a ticket builder. */
+  intent?: "log" | "parlay";
+  onParlayLegAdded?: (leg: ParlayLegSignal) => void | Promise<void>;
 }) {
+  const isParlay = intent === "parlay";
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<SportsEventHit[]>([]);
   const [markets, setMarkets] = useState<SportsMarketHit[]>([]);
@@ -168,9 +214,12 @@ export function SportsEventSearch({
         setMarkets([]);
         return;
       }
-      setItems((body.items as SportsEventHit[]) ?? []);
-      const nextMarkets = ((body.markets as SportsMarketHit[]) ?? []).map((m, idx) => ({
-        ...m,
+      const rawEvents = ((body.items as SportsEventHit[]) ?? []).map((event) => ({
+        ...event,
+        markets: (event.markets ?? []).map((m) => withFanDuelLine(m)),
+      }));
+      let nextMarkets = ((body.markets as SportsMarketHit[]) ?? []).map((m, idx) => ({
+        ...withFanDuelLine(m),
         insight_rank: typeof m.insight_rank === "number" ? m.insight_rank : idx + 1,
         is_top_pick: truthy(m.is_top_pick) || idx === 0,
         is_best_odds: truthy(m.is_best_odds),
@@ -179,6 +228,9 @@ export function SportsEventSearch({
           m.thesis ||
           `Atlas Insight ranked this #${typeof m.insight_rank === "number" ? m.insight_rank : idx + 1} for your search.`,
       }));
+      if (isParlay) {
+        nextMarkets = nextMarkets.filter(hasFanDuel);
+      }
       // Guarantee badge coverage even if API omitted flags.
       if (nextMarkets.length && !nextMarkets.some((m) => m.is_best_odds)) {
         let bestIdx = 0;
@@ -205,9 +257,21 @@ export function SportsEventSearch({
         });
         nextMarkets[likelyIdx] = { ...nextMarkets[likelyIdx], is_most_likely: true };
       }
+      setItems(
+        isParlay
+          ? rawEvents
+              .map((event) => ({
+                ...event,
+                markets: (event.markets ?? []).filter(hasFanDuel),
+              }))
+              .filter((event) => (event.markets?.length ?? 0) > 0)
+          : rawEvents,
+      );
       setMarkets(nextMarkets);
       if (body.message) {
         setMessage(body.message as string);
+      } else if (isParlay && nextMarkets.length === 0) {
+        setMessage("No FanDuel markets matched that search. Try another team or player.");
       }
     } catch {
       setMessage("Could not reach the API for event search");
@@ -216,7 +280,7 @@ export function SportsEventSearch({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isParlay]);
 
   function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -236,7 +300,8 @@ export function SportsEventSearch({
   function pickEvent(event: SportsEventHit) {
     setSelected(event);
     setManualMode(false);
-    const first = event.markets[0] ?? null;
+    const firstRaw = event.markets[0] ?? null;
+    const first = firstRaw ? withFanDuelLine(firstRaw) : null;
     setMarket(first);
     setCustomSelection(first?.selection ?? "");
     setCustomOdds(first ? String(first.odds_american) : "");
@@ -246,23 +311,24 @@ export function SportsEventSearch({
   }
 
   function pickMarketHit(hit: SportsMarketHit) {
+    const fdHit = withFanDuelLine(hit);
     const event: SportsEventHit = {
-      event_id: hit.event_id || "",
-      sport: hit.sport || "Sports",
-      sport_key: hit.sport_key,
-      home_team: hit.home_team || "",
-      away_team: hit.away_team || "",
-      event_name: hit.event_name || "Event",
-      event_start: hit.event_start,
-      hours_until_start: hit.hours_until_start,
-      markets: [hit],
+      event_id: fdHit.event_id || "",
+      sport: fdHit.sport || "Sports",
+      sport_key: fdHit.sport_key,
+      home_team: fdHit.home_team || "",
+      away_team: fdHit.away_team || "",
+      event_name: fdHit.event_name || "Event",
+      event_start: fdHit.event_start,
+      hours_until_start: fdHit.hours_until_start,
+      markets: [fdHit],
     };
     setSelected(event);
     setManualMode(false);
-    setMarket(hit);
-    setCustomSelection(hit.selection);
-    setCustomOdds(String(hit.odds_american));
-    setCustomBetType(hit.bet_type || "player_prop");
+    setMarket(fdHit);
+    setCustomSelection(fdHit.selection);
+    setCustomOdds(String(fdHit.odds_american));
+    setCustomBetType(fdHit.bet_type || "player_prop");
     setNotes("");
     setStake("");
   }
@@ -300,6 +366,7 @@ export function SportsEventSearch({
     try {
       const token = await getToken();
       const apiUrl = getApiUrl();
+      const fdMarket = market ? withFanDuelLine(market) : null;
       const body = {
         event_id: event?.event_id || undefined,
         sport: event?.sport || "Sports",
@@ -308,13 +375,13 @@ export function SportsEventSearch({
         away_team: event?.away_team,
         event_name: event?.event_name || (manualMode ? `Manual · ${selection}` : eventName),
         event_start: event?.event_start,
-        bet_type: market?.bet_type || customBetType,
+        bet_type: fdMarket?.bet_type || customBetType,
         selection,
         odds_american: odds,
-        book_key: market?.book_key || "fanduel",
-        book_title: market?.book_title || "FanDuel",
+        book_key: isParlay ? "fanduel" : fdMarket?.book_key || "fanduel",
+        book_title: isParlay ? "FanDuel" : fdMarket?.book_title || "FanDuel",
         notes: notes.trim() || undefined,
-        stake: stake.trim() || undefined,
+        stake: isParlay ? undefined : stake.trim() || undefined,
       };
       const res = await fetch(`${apiUrl}/signals/sports/user-bets`, {
         method: "POST",
@@ -330,13 +397,37 @@ export function SportsEventSearch({
         setMessage(typeof data.detail === "string" ? data.detail : "Could not save bet");
         return;
       }
-      setMessage((data.message as string) || "Bet logged for Atlas learning");
+      const item = data.item as
+        | {
+            id?: string;
+            sport?: string;
+            event_name?: string;
+            bet_type?: string;
+            selection?: string;
+            odds_american?: number;
+            event_start?: string | null;
+          }
+        | undefined;
+      if (isParlay && item?.id) {
+        await onParlayLegAdded?.({
+          id: String(item.id),
+          sport: String(item.sport || body.sport || "Sports"),
+          event_name: String(item.event_name || body.event_name),
+          bet_type: String(item.bet_type || body.bet_type),
+          selection: String(item.selection || selection),
+          odds_american: Number(item.odds_american ?? odds),
+          event_start: item.event_start ?? body.event_start ?? null,
+        });
+        setMessage(`Added FanDuel leg: ${selection}`);
+      } else {
+        setMessage((data.message as string) || "Bet logged for Atlas learning");
+        await onBetLogged?.();
+      }
       setSelected(null);
       setMarket(null);
       setManualMode(false);
       setNotes("");
       setStake("");
-      await onBetLogged?.();
       globalThis.dispatchEvent(new Event("atlas:dashboard-refresh"));
     } catch {
       setMessage("Backend not responding — restart the API and try again");
@@ -348,22 +439,33 @@ export function SportsEventSearch({
   const showResults = hasSearched && !selected && !manualMode;
 
   return (
-    <section className="mb-6 rounded-xl border border-orange-500/25 bg-orange-500/5 p-4">
+    <section
+      className={`mb-6 rounded-xl border p-4 ${
+        isParlay
+          ? "border-fanduel/40 bg-fanduel-muted/30"
+          : "border-orange-500/25 bg-orange-500/5"
+      }`}
+    >
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h2 className="text-sm font-semibold text-foreground">Search & log my bet</h2>
+          <h2 className="text-sm font-semibold text-foreground">
+            {isParlay ? "Search FanDuel bets" : "Search & log my bet"}
+          </h2>
           <p className="mt-1 text-xs text-muted">
-            Atlas Insight resolves the player/team, pulls real FanDuel/DraftKings lines, then ranks
-            which are most likely to hit and where the best odds are.
+            {isParlay
+              ? "Find real FanDuel lines, then add each selection as a leg on your parlay."
+              : "Atlas Insight resolves the player/team, pulls real FanDuel/DraftKings lines, then ranks which are most likely to hit and where the best odds are."}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={openManual}
-          className="rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:border-orange-400/50"
-        >
-          Log custom pick
-        </button>
+        {!isParlay && (
+          <button
+            type="button"
+            onClick={openManual}
+            className="rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:border-orange-400/50"
+          >
+            Log custom pick
+          </button>
+        )}
       </div>
 
       <form className="mt-3 flex gap-2" onSubmit={onSubmit}>
@@ -644,9 +746,17 @@ export function SportsEventSearch({
             type="button"
             disabled={saving}
             onClick={() => void submitBet()}
-            className="mt-3 rounded-lg bg-orange-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            className={`mt-3 rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
+              isParlay ? "bg-[var(--fanduel)] hover:brightness-110" : "bg-orange-500"
+            }`}
           >
-            {saving ? "Saving…" : "Log bet for Atlas learning"}
+            {saving
+              ? isParlay
+                ? "Adding…"
+                : "Saving…"
+              : isParlay
+                ? "Add FanDuel leg to parlay"
+                : "Log bet for Atlas learning"}
           </button>
         </div>
       )}

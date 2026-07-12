@@ -611,6 +611,9 @@ class PerformanceService:
     def _format_entry(row: dict[str, Any]) -> dict[str, Any]:
         snap = row.get("scoring_snapshot") if isinstance(row.get("scoring_snapshot"), dict) else {}
         origin = PerformanceService._pick_origin(row)
+        leg_outcomes = snap.get("leg_outcomes")
+        if not isinstance(leg_outcomes, list):
+            leg_outcomes = None
         return {
             "id": row["id"],
             "module": row["module"],
@@ -626,4 +629,5 @@ class PerformanceService:
             "confidence_score": row.get("confidence_score"),
             "pick_origin": origin,
             "graded_by": snap.get("graded_by"),
+            "leg_outcomes": leg_outcomes,
         }

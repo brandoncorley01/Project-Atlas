@@ -51,6 +51,9 @@ function formatRow(row: Record<string, unknown>): PerformanceEntry {
     signal_label: typeof row.signal_label === "string" ? row.signal_label : null,
     pick_origin,
     graded_by: typeof snap.graded_by === "string" ? snap.graded_by : null,
+    leg_outcomes: Array.isArray(snap.leg_outcomes)
+      ? (snap.leg_outcomes as NonNullable<PerformanceEntry["leg_outcomes"]>)
+      : null,
   };
 }
 

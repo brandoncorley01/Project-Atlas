@@ -517,15 +517,18 @@ class OutcomeResolverService:
             if result is None:
                 pending += 1
                 continue
-            outcome, return_pct = result
+            outcome, return_pct, leg_outcomes = result
             try:
+                snap = dict(row.get("scoring_snapshot") or {})
+                snap["leg_outcomes"] = leg_outcomes
+                snap["graded_by"] = "auto_parlay"
                 await self.performance.log_outcome(
                     module="parlay",
                     signal_id=parlay_id,
                     outcome=outcome,
                     return_pct=return_pct,
                     resolution_source="auto_parlay",
-                    signal_snapshot=row,
+                    signal_snapshot={**row, "scoring_snapshot": snap, "legs": leg_outcomes},
                 )
                 if str(row.get("status") or "") == "active":
                     await self.db.update(
@@ -540,7 +543,9 @@ class OutcomeResolverService:
 
         return {"resolved": resolved, "skipped": skipped, "pending": pending}
 
-    async def _grade_one_parlay(self, parlay: dict[str, Any]) -> tuple[str, float] | None:
+    async def _grade_one_parlay(
+        self, parlay: dict[str, Any]
+    ) -> tuple[str, float, list[dict[str, Any]]] | None:
         parlay_id = str(parlay["id"])
         legs = await self.db.select(
             "parlay_legs",
@@ -578,7 +583,7 @@ class OutcomeResolverService:
 
         now = datetime.now(UTC)
         sport_keys: set[str] = set()
-        leg_signals: list[dict[str, Any]] = []
+        leg_pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
 
         for leg in legs:
             sid = leg.get("sports_signal_id")
@@ -594,10 +599,11 @@ class OutcomeResolverService:
                     "selection": leg.get("selection"),
                     "odds_american": leg.get("odds_american"),
                     "event_name": leg.get("event_name"),
+                    "sport": leg.get("sport"),
                     "event_start": None,
                     "scoring_snapshot": {"sport_key": None},
                 }
-            event_start = sig.get("event_start")
+            event_start = sig.get("event_start") or leg.get("event_start")
             if event_start:
                 try:
                     text = str(event_start).replace("Z", "+00:00")
@@ -612,12 +618,13 @@ class OutcomeResolverService:
             key = snap.get("sport_key") or leg.get("sport")
             if key:
                 sport_keys.add(str(key))
-            leg_signals.append(sig)
+            leg_pairs.append((leg, sig))
 
         scores_by_sport = await fetch_scores_by_sport(sport_keys) if sport_keys else {}
 
-        leg_outcomes: list[str] = []
-        for sig in leg_signals:
+        outcome_codes: list[str] = []
+        leg_details: list[dict[str, Any]] = []
+        for order, (leg, sig) in enumerate(leg_pairs, start=1):
             snap = sig.get("scoring_snapshot") or {}
             sport_key = str(snap.get("sport_key") or "")
             games = list(scores_by_sport.get(sport_key) or [])
@@ -640,11 +647,31 @@ class OutcomeResolverService:
             )
             if not graded:
                 return None
-            leg_outcomes.append(graded[0])
+            leg_outcome = graded[0]
+            outcome_codes.append(leg_outcome)
+            try:
+                odds_american = int(leg.get("odds_american") if leg.get("odds_american") is not None else sig.get("odds_american") or 0)
+            except (TypeError, ValueError):
+                odds_american = 0
+            leg_details.append(
+                {
+                    "leg_order": int(leg.get("leg_order") or order),
+                    "sport": leg.get("sport") or sig.get("sport"),
+                    "event_name": leg.get("event_name") or sig.get("event_name"),
+                    "bet_type": leg.get("bet_type") or sig.get("bet_type"),
+                    "selection": leg.get("selection") or sig.get("selection"),
+                    "odds_american": odds_american,
+                    "outcome": leg_outcome,
+                    "sports_signal_id": leg.get("sports_signal_id") or sig.get("id"),
+                }
+            )
 
         odds = parlay.get("combined_odds_american")
         try:
             odds_int = int(odds) if odds is not None else None
         except (TypeError, ValueError):
             odds_int = None
-        return grade_parlay_from_legs(leg_outcomes, combined_odds_american=odds_int)
+        ticket = grade_parlay_from_legs(outcome_codes, combined_odds_american=odds_int)
+        if not ticket:
+            return None
+        return ticket[0], ticket[1], leg_details
