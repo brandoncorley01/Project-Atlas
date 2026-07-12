@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+import logging
 
 from app.db.supabase_client import SupabaseClient
 from app.dependencies import get_access_token, get_current_user_id
@@ -16,6 +17,7 @@ from app.services.options_service import OptionsRefreshService
 from app.services.signal_service import SignalService
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _service(user_id: str, token: str) -> SignalService:
@@ -100,10 +102,19 @@ async def refresh_sports_openai(
     """
     from app.services.sports_openai_picks_service import SportsOpenAiPicksService
 
-    service = SportsOpenAiPicksService(SupabaseClient(token), user_id)
-    result = await service.refresh_openai_picks(limit=limit)
-    set_last_job("refresh_sports_openai")
-    return {"status": "ok", "module": "sports_openai", **result}
+    try:
+        service = SportsOpenAiPicksService(SupabaseClient(token), user_id)
+        result = await service.refresh_openai_picks(limit=limit)
+        set_last_job("refresh_sports_openai")
+        return {"status": "ok", "module": "sports_openai", **result}
+    except Exception as exc:
+        logger.exception("refresh-sports-openai failed: %s", exc)
+        return {
+            "status": "error",
+            "module": "sports_openai",
+            "signals_created": 0,
+            "message": f"Atlas Insight failed: {str(exc)[:180]}",
+        }
 
 
 @router.post("/coach-aggregate")

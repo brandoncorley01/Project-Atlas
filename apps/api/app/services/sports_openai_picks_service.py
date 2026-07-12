@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import Any
@@ -117,7 +118,10 @@ def _catalog_to_row(
             "web_search": True,
             "fanduel_verified": True,
             "is_player_prop": bet_type == "player_prop",
-            "is_fight_prop": bool(item.get("is_fight_prop") or item.get("prop_market") in {"fight_total_rounds", "fight_spread"}),
+            "is_fight_prop": bool(
+                item.get("is_fight_prop")
+                or item.get("prop_market") in {"fight_total_rounds", "fight_spread"}
+            ),
             "prop_market": item.get("prop_market"),
             "player_name": item.get("player_name"),
             "sources": sources,
@@ -185,7 +189,22 @@ class SportsOpenAiPicksService:
                 "message": "OPENAI_API_KEY is not configured on the API — add it on Render/.env.",
             }
 
-        catalog_meta = await build_fanduel_catalog(include_props=True)
+        try:
+            return await self._refresh_openai_picks_inner(limit=limit)
+        except Exception as exc:
+            logger.exception("Atlas Insight scan failed: %s", exc)
+            return {
+                "signals_created": 0,
+                "credits_used": 0,
+                "cache_used": True,
+                "openai_web": True,
+                "fanduel_verified": True,
+                "message": f"Atlas Insight failed: {str(exc)[:180]}. Tap Fetch live odds, then try again.",
+            }
+
+    async def _refresh_openai_picks_inner(self, *, limit: int = 16) -> dict[str, Any]:
+        # Skip live Odds prop pulls (slow + credits). Use odds cache + props cache.
+        catalog_meta = await build_fanduel_catalog(include_props=True, max_prop_events=0)
         catalog = list(catalog_meta.get("items") or [])
         credits_used = int(catalog_meta.get("credits_used") or 0)
         if not catalog:
@@ -199,17 +218,17 @@ class SportsOpenAiPicksService:
                 or "No FanDuel-verified markets available. Tap Fetch live odds, then Atlas Insight.",
             }
 
+        ranking_catalog = catalog[:48]
         news: list[dict[str, Any]] = []
         try:
-            news = await fetch_sports_news(limit_per_feed=6)
+            news = await asyncio.wait_for(fetch_sports_news(limit_per_feed=4), timeout=8.0)
         except Exception as exc:
             logger.warning("Atlas Insight news prefetch skipped: %s", exc)
 
         headlines = [
             {"title": n.get("title"), "source": n.get("source"), "url": n.get("url")}
-            for n in news[:18]
+            for n in news[:12]
         ]
-        # Compact catalog for the model — ids + essentials only.
         slim = [
             {
                 "id": c["id"],
@@ -223,7 +242,7 @@ class SportsOpenAiPicksService:
                 "prop_market": c.get("prop_market"),
                 "player": c.get("player_name"),
             }
-            for c in catalog
+            for c in ranking_catalog
         ]
         today = datetime.now(UTC).strftime("%Y-%m-%d")
         user = (
@@ -241,62 +260,57 @@ class SportsOpenAiPicksService:
         result = await llm_service.complete_json_with_web_search(
             system=_SYSTEM,
             user=user,
-            max_tokens=2200,
+            max_tokens=1800,
+            web_timeout_s=35.0,
         )
-        if not result or not isinstance(result.get("picks"), list):
-            return {
-                "signals_created": 0,
-                "credits_used": credits_used,
-                "cache_used": True,
-                "openai_web": True,
-                "fanduel_verified": True,
-                "message": "Atlas Insight returned no ranked FanDuel picks — try again in a minute.",
-            }
 
-        by_id = {str(c.get("id")): c for c in catalog}
+        by_id = {str(c.get("id")): c for c in ranking_catalog}
         rows: list[dict[str, Any]] = []
         seen: set[str] = set()
         dropped_invented = 0
-        for pick in result["picks"]:
-            if not isinstance(pick, dict):
-                continue
-            cid = str(pick.get("id") or "").strip()
-            item = by_id.get(cid)
-            if not item or cid in seen:
-                if cid and cid not in by_id:
-                    dropped_invented += 1
-                continue
-            seen.add(cid)
-            try:
-                confidence = max(40.0, min(90.0, float(pick.get("confidence") or 62)))
-                opportunity = max(35.0, min(90.0, float(pick.get("opportunity") or 55)))
-                risk = max(25.0, min(85.0, float(pick.get("risk") or 48)))
-            except (TypeError, ValueError):
-                confidence, opportunity, risk = 62.0, 55.0, 48.0
-            if item.get("bet_type") == "player_prop":
-                opportunity = min(90.0, opportunity + 2.0)
-            sources = [str(s) for s in (pick.get("sources") or []) if s][:6]
-            rows.append(
-                _catalog_to_row(
-                    self.user_id,
-                    item,
-                    confidence=confidence,
-                    opportunity=opportunity,
-                    risk=risk,
-                    thesis=str(pick.get("thesis") or ""),
-                    bull=str(pick.get("bull_case") or ""),
-                    bear=str(pick.get("bear_case") or ""),
-                    sources=sources,
+        if result and isinstance(result.get("picks"), list):
+            for pick in result["picks"]:
+                if not isinstance(pick, dict):
+                    continue
+                cid = str(pick.get("id") or "").strip()
+                item = by_id.get(cid)
+                if not item or cid in seen:
+                    if cid and cid not in by_id:
+                        dropped_invented += 1
+                    continue
+                seen.add(cid)
+                try:
+                    confidence = max(40.0, min(90.0, float(pick.get("confidence") or 62)))
+                    opportunity = max(35.0, min(90.0, float(pick.get("opportunity") or 55)))
+                    risk = max(25.0, min(85.0, float(pick.get("risk") or 48)))
+                except (TypeError, ValueError):
+                    confidence, opportunity, risk = 62.0, 55.0, 48.0
+                if item.get("bet_type") == "player_prop":
+                    opportunity = min(90.0, opportunity + 2.0)
+                sources = [str(s) for s in (pick.get("sources") or []) if s][:6]
+                rows.append(
+                    _catalog_to_row(
+                        self.user_id,
+                        item,
+                        confidence=confidence,
+                        opportunity=opportunity,
+                        risk=risk,
+                        thesis=str(pick.get("thesis") or ""),
+                        bull=str(pick.get("bull_case") or ""),
+                        bear=str(pick.get("bear_case") or ""),
+                        sources=sources,
+                    )
                 )
-            )
-            if len(rows) >= limit:
-                break
+                if len(rows) >= limit:
+                    break
 
-        # If the model returned nothing valid, surface top FanDuel props/game lines deterministically.
+        # Always surface a board when the catalog has markets.
         if not rows:
-            seed = [c for c in catalog if c.get("bet_type") == "player_prop"][:8]
+            seed = [c for c in ranking_catalog if c.get("bet_type") == "player_prop"][:8]
             if len(seed) < 6:
-                seed = seed + [c for c in catalog if c.get("bet_type") != "player_prop"][: 8 - len(seed)]
+                seed = seed + [
+                    c for c in ranking_catalog if c.get("bet_type") != "player_prop"
+                ][: 8 - len(seed)]
             for item in seed[:limit]:
                 rows.append(
                     _catalog_to_row(
@@ -305,7 +319,10 @@ class SportsOpenAiPicksService:
                         confidence=58.0,
                         opportunity=52.0 if item.get("bet_type") != "player_prop" else 56.0,
                         risk=50.0,
-                        thesis="FanDuel-verified open market — ranked as a fallback when Insight ranking was empty.",
+                        thesis=(
+                            "FanDuel-verified open market — ranked as a fallback when "
+                            "Insight ranking was empty."
+                        ),
                         bull="Posted on FanDuel right now.",
                         bear="Public number may move quickly.",
                         sources=["FanDuel"],
@@ -326,7 +343,7 @@ class SportsOpenAiPicksService:
             except Exception as exc:
                 logger.warning("Atlas Insight sports registry skipped: %s", exc)
 
-        used_web = bool(result.get("_web_search")) if result else False
+        used_web = bool((result or {}).get("_web_search")) if result else False
         prop_count = sum(1 for r in (saved or rows) if str(r.get("bet_type")) == "player_prop")
         summary = str((result or {}).get("summary") or "").strip()
         msg = (
@@ -334,7 +351,7 @@ class SportsOpenAiPicksService:
             f" ({prop_count} player props"
             f", catalog {catalog_meta.get('player_props', 0)} props / {catalog_meta.get('game_lines', 0)} game lines"
             f"{f', ~{credits_used} Odds credits for props' if credits_used else ', 0 Odds credits for game lines'})"
-            f"{' via web ranking' if used_web else ''}"
+            f"{' via web ranking' if used_web else ' via fast ranking'}"
             f"{f'; dropped {dropped_invented} invented ids' if dropped_invented else ''}"
             f"{f'; replaced {expired} prior Insight picks' if expired else ''})."
         )
@@ -354,6 +371,7 @@ class SportsOpenAiPicksService:
             "dropped_invented": dropped_invented,
             "catalog_props": catalog_meta.get("player_props"),
             "catalog_game_lines": catalog_meta.get("game_lines"),
+            "mma_props": catalog_meta.get("mma_props"),
             "top_opportunity": float(saved[0]["opportunity_score"]) if saved else None,
             "message": msg,
         }

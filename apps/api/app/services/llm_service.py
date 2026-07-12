@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -115,10 +116,12 @@ class LlmService:
         system: str,
         user: str,
         max_tokens: int = 1600,
+        web_timeout_s: float = 35.0,
     ) -> dict[str, Any] | None:
         """Use OpenAI Responses API + hosted web_search for live internet grounding.
 
-        Falls back to chat JSON (no browse) if Responses/web_search is unavailable.
+        Falls back to chat JSON (no browse) if Responses/web_search is unavailable
+        or exceeds web_timeout_s — keeps Atlas Insight inside the BFF budget.
         """
         client = self._get_client()
         if client is None:
@@ -131,34 +134,37 @@ class LlmService:
             f"{user}"
         )
         try:
-            response = await client.responses.create(
-                model=self.model,
-                input=prompt,
-                tools=[{"type": "web_search"}],
-                tool_choice="required",
-                max_output_tokens=max_tokens,
-            )
-            content = getattr(response, "output_text", None)
-            if not content:
-                # Some SDK shapes nest text in output items.
-                chunks: list[str] = []
-                for item in getattr(response, "output", None) or []:
-                    for part in getattr(item, "content", None) or []:
-                        text = getattr(part, "text", None)
-                        if text:
-                            chunks.append(str(text))
-                content = "\n".join(chunks).strip() or None
-            if not content:
-                raise RuntimeError("empty web_search response")
-            # Strip optional markdown fences if the model ignores JSON mode.
-            cleaned = content.strip()
-            if cleaned.startswith("```"):
-                cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
-                cleaned = re.sub(r"\s*```$", "", cleaned)
-            parsed = json.loads(cleaned)
-            if isinstance(parsed, dict):
+
+            async def _web_call() -> dict[str, Any]:
+                response = await client.responses.create(
+                    model=self.model,
+                    input=prompt,
+                    tools=[{"type": "web_search"}],
+                    tool_choice="required",
+                    max_output_tokens=max_tokens,
+                )
+                content = getattr(response, "output_text", None)
+                if not content:
+                    chunks: list[str] = []
+                    for item in getattr(response, "output", None) or []:
+                        for part in getattr(item, "content", None) or []:
+                            text = getattr(part, "text", None)
+                            if text:
+                                chunks.append(str(text))
+                    content = "\n".join(chunks).strip() or None
+                if not content:
+                    raise RuntimeError("empty web_search response")
+                cleaned = content.strip()
+                if cleaned.startswith("```"):
+                    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+                    cleaned = re.sub(r"\s*```$", "", cleaned)
+                parsed = json.loads(cleaned)
+                if not isinstance(parsed, dict):
+                    raise RuntimeError("web_search returned non-object JSON")
                 parsed["_web_search"] = True
                 return parsed
+
+            return await asyncio.wait_for(_web_call(), timeout=max(8.0, web_timeout_s))
         except Exception as exc:
             logger.warning("OpenAI web_search path failed (%s); falling back to chat JSON", exc)
 
@@ -166,7 +172,6 @@ class LlmService:
         if fallback is not None:
             fallback["_web_search"] = False
         return fallback
-
 
 
 llm_service = LlmService()

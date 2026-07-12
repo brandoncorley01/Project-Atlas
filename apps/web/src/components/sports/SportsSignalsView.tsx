@@ -263,9 +263,19 @@ export function SportsSignalsView({
         credentials: usesBffProxy() ? "include" : "same-origin",
         signal: AbortSignal.timeout(300000),
       });
-      const body = await res.json();
+      let body: Record<string, unknown> = {};
+      try {
+        body = (await res.json()) as Record<string, unknown>;
+      } catch {
+        body = {};
+      }
       if (!res.ok) {
-        const detail = typeof body.detail === "string" ? body.detail : "Atlas Insight scan failed";
+        const detail =
+          typeof body.detail === "string"
+            ? body.detail
+            : res.status === 503
+              ? "Atlas Insight timed out reaching the API — try again in a moment."
+              : "Atlas Insight scan failed";
         setMessage(
           res.status === 404
             ? "Atlas Insight endpoint not found — redeploy/restart the API"
@@ -276,7 +286,7 @@ export function SportsSignalsView({
       }
       const created = Number(body.signals_created ?? 0);
       setMessage(
-        (body.message as string | undefined) ??
+        (typeof body.message === "string" ? body.message : undefined) ??
           `Atlas Insight added ${created} picks (0 Odds credits)`,
       );
       // Show Insight results immediately — widen window and focus Insight + Props.
@@ -307,8 +317,13 @@ export function SportsSignalsView({
       ]);
       router.refresh();
       globalThis.dispatchEvent(new Event("atlas:dashboard-refresh"));
-    } catch {
-      setMessage("Backend not responding — run .\\scripts\\start-dev.ps1");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+      setMessage(
+        msg.includes("timeout") || msg.includes("Timeout") || msg.includes("aborted")
+          ? "Atlas Insight timed out — the API is still warming up or OpenAI is slow. Try again."
+          : "Backend not responding — run .\\scripts\\start-dev.ps1",
+      );
     }
     setLoading(null);
   }

@@ -7,6 +7,26 @@ const PROXY_TIMEOUT_MS = 60_000;
 const DASHBOARD_PROXY_TIMEOUT_MS = 50_000;
 const AI_PROXY_TIMEOUT_MS = 90_000;
 const INSIGHT_SEARCH_PROXY_TIMEOUT_MS = 150_000;
+/** Atlas Insight + Odds scans need longer than the default 60s BFF budget. */
+const ENGINE_LONG_PROXY_TIMEOUT_MS = 180_000;
+
+/** Vercel Pro allows up to 300s; Hobby caps at 60s regardless. */
+export const maxDuration = 300;
+export const dynamic = "force-dynamic";
+
+function proxyTimeoutFor(subpath: string): number {
+  if (subpath.startsWith("ai/")) return AI_PROXY_TIMEOUT_MS;
+  if (subpath === "signals/sports/events") return INSIGHT_SEARCH_PROXY_TIMEOUT_MS;
+  if (subpath === "dashboard") return DASHBOARD_PROXY_TIMEOUT_MS;
+  if (
+    subpath === "engine/refresh-sports-openai"
+    || subpath === "engine/refresh-sports"
+    || subpath.startsWith("engine/refresh-sports")
+  ) {
+    return ENGINE_LONG_PROXY_TIMEOUT_MS;
+  }
+  return PROXY_TIMEOUT_MS;
+}
 
 async function proxyRequest(request: NextRequest, pathSegments: string[]) {
   try {
@@ -27,13 +47,7 @@ async function proxyRequest(request: NextRequest, pathSegments: string[]) {
 
     const subpath = pathSegments.join("/");
     const target = `${API_BASE}/${subpath}${request.nextUrl.search}`;
-    const timeoutMs = subpath.startsWith("ai/")
-      ? AI_PROXY_TIMEOUT_MS
-      : subpath === "signals/sports/events"
-        ? INSIGHT_SEARCH_PROXY_TIMEOUT_MS
-        : subpath === "dashboard"
-          ? DASHBOARD_PROXY_TIMEOUT_MS
-          : PROXY_TIMEOUT_MS;
+    const timeoutMs = proxyTimeoutFor(subpath);
 
     const hasBody = request.method !== "GET" && request.method !== "HEAD";
     const body = hasBody ? await request.text() : undefined;
@@ -85,7 +99,9 @@ async function proxyRequest(request: NextRequest, pathSegments: string[]) {
         detail: unreachable
           ? process.env.NODE_ENV === "development"
             ? `Cannot reach API at ${API_BASE}. Tap Restart in the top-right header (~60 seconds).`
-            : "Atlas API is temporarily unavailable. Try again in a moment."
+            : message.includes("timeout") || message.includes("aborted")
+              ? "Atlas Insight timed out — try again. If this keeps happening, wait for Render to finish redeploying."
+              : "Atlas API is temporarily unavailable. Try again in a moment."
           : message,
       },
       { status: unreachable ? 503 : 500 },

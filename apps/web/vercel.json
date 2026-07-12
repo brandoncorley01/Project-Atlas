@@ -5,7 +5,7 @@
   "buildCommand": "npm run build",
   "functions": {
     "src/app/api/atlas/[...path]/route.ts": {
-      "maxDuration": 60
+      "maxDuration": 300
     }
   }
 }

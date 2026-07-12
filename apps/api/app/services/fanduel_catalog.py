@@ -472,6 +472,44 @@ async def build_fanduel_catalog(
     for event in events:
         _append_game_lines(catalog, event)
 
+    # Reuse previously verified props from cache (0 Odds credits) before any live pull.
+    if include_props:
+        cached = _read_props_cache(respect_ttl=False) or {}
+        seen_keys = {
+            "|".join(
+                [
+                    str(r.get("event_id") or ""),
+                    str(r.get("bet_type") or ""),
+                    str(r.get("selection") or ""),
+                    str(r.get("book_key") or ""),
+                ]
+            )
+            for r in catalog
+        }
+        for row in cached.get("items") or []:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("book_key") or "") not in US_PREFERRED_BOOK_KEYS:
+                continue
+            if str(row.get("bet_type") or "") != "player_prop":
+                continue
+            key = "|".join(
+                [
+                    str(row.get("event_id") or ""),
+                    str(row.get("bet_type") or ""),
+                    str(row.get("selection") or ""),
+                    str(row.get("book_key") or ""),
+                ]
+            )
+            if key in seen_keys:
+                continue
+            # Drop props for games that already started.
+            hours = hours_until_event(row.get("event_start"))
+            if hours is not None and hours <= 0:
+                continue
+            catalog.append(dict(row))
+            seen_keys.add(key)
+
     credits_used = 0
     props_events = 0
     prop_cap = max_prop_events
