@@ -98,11 +98,18 @@ class Settings(BaseSettings):
         "polygon_api_key",
         "odds_api_key",
         "openai_api_key",
+        "supabase_anon_key",
+        "supabase_service_role_key",
+        "supabase_jwt_secret",
+        "supabase_url",
         mode="before",
     )
     @classmethod
     def _strip_api_keys(cls, value: object) -> object:
-        return value.strip() if isinstance(value, str) else value
+        if not isinstance(value, str):
+            return value
+        # Drop CR/LF/control chars from pasted secrets (common .env / Render paste bug).
+        return "".join(ch for ch in value if 32 <= ord(ch) <= 126).strip()
 
     @property
     def cors_origin_list(self) -> list[str]:

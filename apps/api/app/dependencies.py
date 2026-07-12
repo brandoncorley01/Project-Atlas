@@ -19,14 +19,31 @@ async def _ensure_profile(user_id: str, email: str | None, token: str) -> None:
     if not settings.supabase_url:
         return
 
-    service_key = settings.supabase_service_role_key or settings.supabase_anon_key
-    headers = {
-        "apikey": service_key,
-        "Authorization": f"Bearer {service_key}",
+    from app.db.service_client import is_opaque_secret_key, is_real_service_role_key
+    from app.db.supabase_client import _sanitize_header_value
+
+    service_key = _sanitize_header_value(
+        (settings.supabase_service_role_key or settings.supabase_anon_key or "").strip(),
+        name="service key",
+    )
+    anon_key = _sanitize_header_value(
+        (settings.supabase_anon_key or "").strip() or service_key,
+        name="anon key",
+    )
+    headers: dict[str, str] = {
         "Content-Type": "application/json",
         "Prefer": "return=minimal",
     }
-    base = f"{settings.supabase_url.rstrip('/')}/rest/v1/profiles"
+    if is_real_service_role_key(service_key) and is_opaque_secret_key(service_key):
+        headers["apikey"] = service_key
+    elif is_real_service_role_key(service_key):
+        headers["apikey"] = service_key
+        headers["Authorization"] = f"Bearer {service_key}"
+    else:
+        headers["apikey"] = anon_key
+        headers["Authorization"] = f"Bearer {_sanitize_header_value(token, name='access token')}"
+
+    base = f"{_sanitize_header_value(settings.supabase_url, name='SUPABASE_URL').rstrip('/')}/rest/v1/profiles"
 
     try:
         client = get_http_client()
@@ -60,14 +77,18 @@ async def _fetch_supabase_user(token: str) -> dict:
             detail="Server auth is not configured (missing Supabase URL or anon key)",
         )
 
-    url = f"{settings.supabase_url.rstrip('/')}/auth/v1/user"
+    from app.db.supabase_client import _sanitize_header_value
+
+    clean_token = _sanitize_header_value(token, name="access token")
+    clean_anon = _sanitize_header_value(settings.supabase_anon_key, name="SUPABASE_ANON_KEY")
+    url = f"{_sanitize_header_value(settings.supabase_url, name='SUPABASE_URL').rstrip('/')}/auth/v1/user"
     try:
         client = get_http_client()
         response = await client.get(
             url,
             headers={
-                "apikey": settings.supabase_anon_key,
-                "Authorization": f"Bearer {token}",
+                "apikey": clean_anon,
+                "Authorization": f"Bearer {clean_token}",
             },
         )
     except httpx.HTTPError as exc:

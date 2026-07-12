@@ -68,14 +68,11 @@ def get_service_db() -> SupabaseClient:
                 "or the legacy service_role JWT from the Legacy API keys tab."
             ),
         )
-    client = SupabaseClient(key)
-    # Privileged key must be the apikey. Opaque sb_secret_ keys must NOT also be
-    # sent as Authorization Bearer — Supabase rejects that with Invalid JWT.
-    client.headers["apikey"] = key
-    if is_opaque_secret_key(key):
-        client.headers.pop("Authorization", None)
-    else:
-        client.headers["Authorization"] = f"Bearer {key}"
+    # Build with anon + a placeholder bearer first, then swap to privileged key.
+    # Opaque sb_secret_ must never ride on Authorization.
+    anon = (settings.supabase_anon_key or "").strip() or key
+    client = SupabaseClient(anon)
+    client.set_privileged_key(key, opaque_secret=is_opaque_secret_key(key))
     return client
 
 
@@ -90,7 +87,7 @@ def get_write_db(user_access_token: str) -> SupabaseClient:
             return get_service_db()
         except HTTPException:
             logger.warning("Service-role write client unavailable — using user JWT")
-    token = (user_access_token or "").strip()
+    token = "".join(ch for ch in (user_access_token or "") if 32 <= ord(ch) <= 126).strip()
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

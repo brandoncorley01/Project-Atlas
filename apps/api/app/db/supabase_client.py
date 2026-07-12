@@ -8,16 +8,41 @@ from app.config import settings
 from app.db.http_client import get_http_client
 
 
+def _sanitize_header_value(value: str | None, *, name: str = "header") -> str:
+    """Strip whitespace/control chars — httpx raises Illegal header value otherwise."""
+    if value is None:
+        return ""
+    cleaned = "".join(ch for ch in str(value) if 32 <= ord(ch) <= 126).strip()
+    if value and not cleaned:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Invalid {name} value (empty after sanitizing). Check API env keys.",
+        )
+    return cleaned
+
+
 class SupabaseClient:
     def __init__(self, access_token: str) -> None:
-        self.base_url = f"{settings.supabase_url.rstrip('/')}/rest/v1"
-        self.access_token = access_token
+        self.base_url = f"{_sanitize_header_value(settings.supabase_url, name='SUPABASE_URL').rstrip('/')}/rest/v1"
+        token = _sanitize_header_value(access_token, name="access token")
+        apikey = _sanitize_header_value(settings.supabase_anon_key, name="SUPABASE_ANON_KEY")
+        self.access_token = token
         self.headers = {
-            "apikey": settings.supabase_anon_key,
-            "Authorization": f"Bearer {access_token}",
+            "apikey": apikey,
+            "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
             "Prefer": "return=representation",
         }
+
+    def set_privileged_key(self, key: str, *, opaque_secret: bool = False) -> None:
+        """Use service_role JWT or sb_secret_ for writes that bypass RLS."""
+        cleaned = _sanitize_header_value(key, name="SUPABASE_SERVICE_ROLE_KEY")
+        self.headers["apikey"] = cleaned
+        if opaque_secret:
+            # New sb_secret_ keys must not go on Authorization (Invalid JWT).
+            self.headers.pop("Authorization", None)
+        else:
+            self.headers["Authorization"] = f"Bearer {cleaned}"
 
     async def _request(
         self,
@@ -28,10 +53,15 @@ class SupabaseClient:
         json: Any = None,
     ) -> Any:
         url = f"{self.base_url}/{table}"
+        # Re-sanitize every request in case callers mutated headers.
+        safe_headers = {
+            k: _sanitize_header_value(v, name=k) if isinstance(v, str) else v
+            for k, v in self.headers.items()
+        }
         try:
             client = get_http_client()
             response = await client.request(
-                method, url, headers=self.headers, params=params, json=json
+                method, url, headers=safe_headers, params=params, json=json
             )
         except httpx.HTTPError as exc:
             raise HTTPException(
@@ -105,7 +135,13 @@ class SupabaseClient:
         *,
         on_conflict: str | None = None,
     ) -> list[dict[str, Any]]:
-        url_headers = {**self.headers, "Prefer": "return=representation,resolution=merge-duplicates"}
+        url_headers = {
+            **{
+                k: _sanitize_header_value(v, name=k) if isinstance(v, str) else v
+                for k, v in self.headers.items()
+            },
+            "Prefer": "return=representation,resolution=merge-duplicates",
+        }
         url = f"{self.base_url}/{table}"
         params: dict[str, str] = {}
         if on_conflict:
