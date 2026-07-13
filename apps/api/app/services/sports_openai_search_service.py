@@ -254,6 +254,29 @@ def _normalize_available_on(raw: Any, fallback_odds: int, market: dict[str, Any]
     return out
 
 
+LEAGUE_QUERY_KEYS: dict[str, str] = {
+    "wnba": "basketball_wnba",
+    "nba": "basketball_nba",
+    "mlb": "baseball_mlb",
+    "nfl": "americanfootball_nfl",
+    "nhl": "icehockey_nhl",
+    "mls": "soccer_usa_mls",
+    "epl": "soccer_epl",
+    "ufc": "mma_mixed_martial_arts",
+    "mma": "mma_mixed_martial_arts",
+}
+
+
+def _league_sport_key_from_query(query: str) -> str | None:
+    """If the user typed a league name (e.g. WNBA), return its Odds sport key."""
+    tokens = set(_tokens(query))
+    if len(tokens) != 1:
+        # Allow bare "wnba" / "mlb" only — "wnba sparks" is a team search.
+        return None
+    only = next(iter(tokens))
+    return LEAGUE_QUERY_KEYS.get(only)
+
+
 def _looks_like_person_query(query: str) -> bool:
     tokens = _tokens(query)
     if not tokens:
@@ -667,7 +690,8 @@ def _finalize_insight_badges(
     for i, m in enumerate(ranked, start=1):
         m["insight_id"] = f"m{i}"
         m["insight_rank"] = i
-        m["event_id"] = f"openai-search-{i}"
+        # Never clobber a real Odds/FanDuel event_id — that used to split/collapse
+        # multi-game league searches (e.g. only one WNBA game surviving in the UI).
 
     payload = payload or {}
     by_sel = {_sel_key(str(m.get("selection") or "")): m for m in ranked}
@@ -924,12 +948,27 @@ async def search_markets_with_openai(
         }
 
     person = _looks_like_person_query(q)
-    resolved = await _resolve_search_target(q, sport)
-    resolved_player = resolved.get("player_name")
-    resolved_teams = list(resolved.get("team_names") or [])
-    resolved_sport_key = resolved.get("sport_key") or (
-        "basketball_wnba" if (resolved.get("sport") or "").upper() == "WNBA" else None
-    )
+    league_key = _league_sport_key_from_query(q)
+    # League browse (e.g. "wnba") must not resolve to a single team — that hid
+    # the rest of the slate and made search look like "only one WNBA result".
+    if league_key:
+        resolved = {
+            "player_name": None,
+            "team_names": [],
+            "sport": q.strip().upper(),
+            "sport_key": league_key,
+            "note": f"Showing all cached {q.strip().upper()} FanDuel/DraftKings games.",
+        }
+        resolved_player = None
+        resolved_teams: list[str] = []
+        resolved_sport_key = league_key
+    else:
+        resolved = await _resolve_search_target(q, sport)
+        resolved_player = resolved.get("player_name")
+        resolved_teams = list(resolved.get("team_names") or [])
+        resolved_sport_key = resolved.get("sport_key") or (
+            "basketball_wnba" if (resolved.get("sport") or "").upper() == "WNBA" else None
+        )
 
     # Heuristic boost for common miss: last-name-only WNBA stars.
     if person and not resolved_teams and "leite" in _norm_text(q):
@@ -938,15 +977,21 @@ async def search_markets_with_openai(
         resolved_sport_key = resolved_sport_key or "basketball_wnba"
 
     # Explicit sport query param can filter; default searches the entire FanDuel board.
+    # League-name queries (wnba/mlb/…) should stay on that league's full cached slate.
     explicit_sport = (sport or "").strip() or None
     restrict_sport = bool(explicit_sport) and not all_sports
+    if league_key:
+        restrict_sport = True
+        explicit_sport = league_key
     sport_filter = explicit_sport if restrict_sport else None
     market_cap = max(1, min(limit, 80 if all_sports else 40))
 
     # 1) Full cached FanDuel/DK catalog across every sport already fetched.
+    # Keep the league token in the query so flat market hits populate (empty
+    # query only fills grouped events, which Insight then under-ranks).
     catalog_hit = search_verified_markets(
         query=q,
-        sport=sport_filter,
+        sport=sport_filter or (league_key if league_key else None),
         limit=market_cap,
     )
     markets = [

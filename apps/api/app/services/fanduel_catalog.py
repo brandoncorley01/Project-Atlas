@@ -921,6 +921,15 @@ async def fetch_verified_markets_for_search(
         ]
 
     matched = [e for e in events if _event_matches_teams(e, team_needles)]
+    # League browse with no team/player: return every upcoming game for that sport.
+    if (
+        not matched
+        and sport_key
+        and restrict_sport
+        and not team_needles
+        and not (player_name or "").strip()
+    ):
+        matched = list(events)
     if not matched and cached_props:
         eids = {str(p.get("event_id") or "") for p in cached_props}
         matched = [e for e in events if str(e.get("id") or "") in eids]
