@@ -26,10 +26,104 @@ from app.services.sports_ranking import (
 logger = logging.getLogger(__name__)
 
 MAX_SIGNALS = 120
+# ~3 scroll pages of cards on the Sports board (desktop ~10–12/viewport).
+TARGET_BOARD_PICKS = 90
 MIN_OPPORTUNITY = 28.0
 MIN_BOARD_PICKS = 8
 MIN_PER_SPORT = 1
-MAX_PER_SPORT = 10
+MAX_PER_SPORT = 12
+# Keep both American and international markets on every board — never flip to one side.
+MIN_US_BOARD_SHARE = 0.35
+MIN_GLOBAL_BOARD_SHARE = 0.35
+
+
+def _setup_sport_key(row: dict[str, Any]) -> str:
+    snap = row.get("scoring_snapshot") or {}
+    lm = row.get("line_movement") or {}
+    return str(snap.get("sport_key") or lm.get("sport_key") or "")
+
+
+def _select_diverse_setups(setups: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
+    """Fill a large US+global board from cache-scored edges — no extra Odds credits."""
+    if not setups:
+        return []
+
+    from app.providers.sports.odds_api import is_us_market_sport_key
+
+    # Always keep the full horizon pool. Near-term-only often yields <25 plays and
+    # makes the board look empty / single-market after a Rescore.
+    pool = [r for r in setups if is_near_term(r) or is_within_horizon(r)]
+    if not pool:
+        pool = list(setups)
+
+    us_pool = sorted(
+        (r for r in pool if is_us_market_sport_key(_setup_sport_key(r))),
+        key=composite_score,
+        reverse=True,
+    )
+    global_pool = sorted(
+        (r for r in pool if not is_us_market_sport_key(_setup_sport_key(r))),
+        key=composite_score,
+        reverse=True,
+    )
+
+    selected: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def _take(row: dict[str, Any]) -> bool:
+        k = market_family_key(row)
+        if k in seen:
+            return False
+        selected.append(row)
+        seen.add(k)
+        return True
+
+    # Round 1: lock a real combination first so the board never flips US-only or global-only.
+    if us_pool and global_pool and limit >= 8:
+        us_floor = min(len(us_pool), max(1, int(round(limit * MIN_US_BOARD_SHARE))))
+        global_floor = min(len(global_pool), max(1, int(round(limit * MIN_GLOBAL_BOARD_SHARE))))
+        for row in us_pool:
+            if sum(1 for r in selected if is_us_market_sport_key(_setup_sport_key(r))) >= us_floor:
+                break
+            _take(row)
+        for row in global_pool:
+            if sum(1 for r in selected if not is_us_market_sport_key(_setup_sport_key(r))) >= global_floor:
+                break
+            _take(row)
+
+    by_sport: dict[str, list[dict[str, Any]]] = {}
+    for row in pool:
+        by_sport.setdefault(str(row.get("sport") or "Sports"), []).append(row)
+    for rows in by_sport.values():
+        rows.sort(key=composite_score, reverse=True)
+
+    sport_order = sorted(
+        by_sport.keys(),
+        key=lambda s: composite_score(by_sport[s][0]) if by_sport[s] else 0,
+        reverse=True,
+    )
+    per_sport = min(
+        MAX_PER_SPORT,
+        max(MIN_PER_SPORT, limit // max(1, min(len(by_sport), 20))),
+    )
+
+    # Round 2: diversify remaining slots across leagues.
+    for sport in sport_order:
+        if len(selected) >= limit:
+            break
+        for row in by_sport[sport][:per_sport]:
+            if len(selected) >= limit:
+                break
+            _take(row)
+
+    # Round 3: fill by pure Atlas composite score.
+    if len(selected) < limit:
+        for row in sorted(pool, key=composite_score, reverse=True):
+            if len(selected) >= limit:
+                break
+            _take(row)
+
+    return sort_for_display(dedupe_one_side_per_market(selected))[:limit]
 
 
 def _openai_quota_skipped(stats: dict[str, Any]) -> bool:
@@ -68,55 +162,6 @@ def _odds_error_message(exc: OddsApiError | str) -> str:
             "or you upgrade at the-odds-api.com."
         )
     return msg
-
-
-def _select_diverse_setups(setups: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
-    """Best edge first across US + global; one pick per market; diversify sports."""
-    if not setups:
-        return []
-
-    near = [r for r in setups if is_near_term(r)]
-    later = [r for r in setups if not is_near_term(r) and is_within_horizon(r)]
-    pool = near if len(near) >= max(3, limit // 3) else near + later
-
-    by_sport: dict[str, list[dict[str, Any]]] = {}
-    for row in pool:
-        by_sport.setdefault(str(row.get("sport") or "Sports"), []).append(row)
-    for rows in by_sport.values():
-        rows.sort(key=composite_score, reverse=True)
-
-    # Round 1: strongest sport first — each league gets its best edge-ranked side.
-    sport_order = sorted(
-        by_sport.keys(),
-        key=lambda s: composite_score(by_sport[s][0]) if by_sport[s] else 0,
-        reverse=True,
-    )
-    per_sport = min(
-        MAX_PER_SPORT,
-        max(MIN_PER_SPORT, limit // max(1, len(by_sport))),
-    )
-    selected: list[dict[str, Any]] = []
-    seen: set[str] = set()
-
-    for sport in sport_order:
-        for row in by_sport[sport][:per_sport]:
-            k = market_family_key(row)
-            if k not in seen:
-                selected.append(row)
-                seen.add(k)
-
-    # Round 2: fill remaining slots by pure Atlas composite score (US + global).
-    if len(selected) < limit:
-        for row in sorted(pool, key=composite_score, reverse=True):
-            k = market_family_key(row)
-            if k in seen:
-                continue
-            selected.append(row)
-            seen.add(k)
-            if len(selected) >= limit:
-                break
-
-    return sort_for_display(dedupe_one_side_per_market(selected))[:limit]
 
 
 class SportsRefreshService:
@@ -289,18 +334,30 @@ class SportsRefreshService:
 
         setups = _score_events(calibration, min_opp)
 
-        # If strict filters wipe today's MLB/WNBA slate, reopen with slate mode
-        # so OpenAI can rank real FanDuel/DraftKings lines instead of returning empty.
+        # Always soft-fill from the full odds cache toward a multi-page board.
+        # Uses 0 Odds credits — scoring only — so Rescore/Scan stay dense.
+        target = min(limit, TARGET_BOARD_PICKS)
         openai_meta: dict[str, Any] = {"openai_slate": False}
-        if len(setups) < MIN_BOARD_PICKS and events:
+        if len(setups) < target and events:
             slate_cal = dict(calibration)
             slate_cal["slate_mode"] = True
-            slate_cal["sports_min_edge_pct"] = min(0.35, float(slate_cal.get("sports_min_edge_pct") or 0.6))
-            slate_cal["sports_min_opportunity"] = min(20.0, float(slate_cal.get("sports_min_opportunity") or 28.0))
+            slate_cal["sports_min_edge_pct"] = min(
+                0.25, float(slate_cal.get("sports_min_edge_pct") or 0.6)
+            )
+            slate_cal["sports_min_opportunity"] = min(
+                18.0, float(slate_cal.get("sports_min_opportunity") or 28.0)
+            )
             soft = _score_events(slate_cal, float(slate_cal["sports_min_opportunity"]))
-            if len(soft) > len(setups):
-                setups = soft
+            if soft:
+                by_key: dict[str, dict[str, Any]] = {}
+                for row in setups + soft:
+                    key = market_family_key(row)
+                    prev = by_key.get(key)
+                    if prev is None or composite_score(row) > composite_score(prev):
+                        by_key[key] = row
+                setups = list(by_key.values())
                 fetch_stats["slate_mode"] = True
+                fetch_stats["board_fill_target"] = target
 
         setups.sort(key=composite_score, reverse=True)
 

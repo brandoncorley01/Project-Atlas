@@ -43,7 +43,7 @@ export function SportsSignalsView({
   const [activeSport, setActiveSport] = useState<string | null>(null);
   const [sort, setSort] = useState<SportsSortKey>("soonest");
   const [filter, setFilter] = useState<SportsFilterKey>("all");
-  const [window, setWindow] = useState<SportsWindowKey>("month");
+  const [window, setWindow] = useState<SportsWindowKey>("all");
   const [loading, setLoading] = useState<null | "scan" | "live" | "rescore" | "openai">(null);
   const [message, setMessage] = useState<string | null>(null);
   const [parlaySelection, setParlaySelection] = useState<Set<string>>(new Set());
@@ -242,7 +242,8 @@ export function SportsSignalsView({
               : "No edges met the threshold — try Fetch live odds or Atlas Insight"),
       );
 
-      // Leave Insight filters so Odds Scan results aren't hidden before Insight runs.
+      // Leave filters wide so Odds Scan results stay visible (US + global).
+      setWindow("all");
       setFilter("all");
       setSort("opportunity");
       setActiveCategory(null);
@@ -328,19 +329,18 @@ export function SportsSignalsView({
         setLoading(null);
         return;
       }
-      // Show Insight results immediately — widen window and focus Insight + Props.
+      // Show the full Odds + Insight board — don't hide 90+ scan picks behind Insight-only.
       setWindow("all");
-      setFilter("openai");
-      setSort("openai");
+      setFilter("all");
+      setSort("opportunity");
       setActiveSport(null);
-      setActiveCategory("atlas_insight");
+      setActiveCategory(null);
       await Promise.all([
         loadCategories(token),
         (async () => {
           const listParams = new URLSearchParams({
             limit: "200",
             window: "all",
-            category: "atlas_insight",
           });
           const listRes = await fetch(`${apiUrl}/signals/sports?${listParams}`, {
             headers: apiRequestHeaders(token),

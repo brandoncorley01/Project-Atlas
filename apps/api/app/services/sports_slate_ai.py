@@ -11,16 +11,17 @@ logger = logging.getLogger(__name__)
 
 _SYSTEM = """You are Atlas sports desk. Rank playable FanDuel/DraftKings bets from the
 candidate slate. Every candidate already has real American odds from The Odds API.
-Never invent odds, lines, injuries, or scores. Prefer today's MLB and WNBA when present.
-Return JSON only:
+Never invent odds, lines, injuries, or scores. Balance American majors (MLB, WNBA,
+NFL, NBA, NHL, MLS, MMA) with strong international edges (EPL, UCL, La Liga, etc.) —
+do not collapse the board to only one geography. Return JSON only:
 {
   "picks": [
     {"id": "<candidate id>", "rank": 1, "boost": 0-8, "why": "one short sentence"}
   ],
   "notes": "optional one-liner"
 }
-Pick at most 24 ids that already appear in the slate. Prefer positive or near-zero edge,
-US books (FanDuel/DraftKings), and games starting soon."""
+Pick at most 24 ids that already appear in the slate. Prefer positive or near-zero edge
+and games starting sooner, while keeping a US + global mix."""
 
 
 def _candidate_payload(row: dict[str, Any], idx: int) -> dict[str, Any]:
@@ -61,9 +62,9 @@ async def rank_slate_with_openai(
         result = await llm_service.complete_json(
             system=_SYSTEM,
             user=(
-                "Rank the best bets for an American sportsbook board "
-                "(FanDuel / DraftKings). Candidates:\n"
-                f"{payload}"
+                "Rank the best bets for a FanDuel/DraftKings board that mixes "
+                "American and international leagues. Keep both sides represented. "
+                f"Candidates:\n{payload}"
             ),
             max_tokens=900,
             temperature=0.2,
