@@ -91,8 +91,9 @@ ESSENTIAL_WINTER_KEYS = frozenset(
     {"basketball_nba", "icehockey_nhl", "americanfootball_nfl", "americanfootball_ncaaf"}
 )
 
-# Live Fetch always targets these US-book leagues first (FanDuel/DraftKings boards).
-# Order = credit priority; cap via ODDS_MAX_SPORTS_PER_SCAN.
+# Live Fetch prefers these US-book leagues first (FanDuel/DraftKings boards).
+# International priority keys fill remaining slots — see _limit_sport_keys.
+# Cap via ODDS_MAX_SPORTS_PER_SCAN.
 CORE_US_LIVE_KEYS = (
     "baseball_mlb",
     "basketball_wnba",
@@ -104,6 +105,25 @@ CORE_US_LIVE_KEYS = (
     "soccer_usa_mls",
     "mma_mixed_martial_arts",
     "boxing_boxing",
+)
+
+# Top global leagues mixed into every capped scan (FanDuel/DK still carry lines).
+CORE_GLOBAL_LIVE_KEYS = (
+    "soccer_epl",
+    "soccer_uefa_champs_league",
+    "soccer_spain_la_liga",
+    "soccer_germany_bundesliga",
+    "soccer_italy_serie_a",
+    "soccer_france_ligue_one",
+    "soccer_uefa_europa_league",
+    "soccer_mexico_ligamx",
+    "soccer_fifa_world_cup",
+    "tennis_atp_us_open",
+    "tennis_wta_us_open",
+    "tennis_atp_wimbledon",
+    "tennis_wta_wimbledon",
+    "golf_pga_championship",
+    "golf_the_open_championship",
 )
 
 # Only pull lines from American retail books — same credit cost, playable numbers.
@@ -546,27 +566,68 @@ def _sport_family(key: str) -> str:
     return str(key).split("_", 1)[0]
 
 
+def _mix_us_and_global_keys(
+    us_keys: tuple[str, ...],
+    global_keys: tuple[str, ...],
+    *,
+    cap: int,
+) -> tuple[str, ...]:
+    """Split a credit cap across US majors and global leagues so neither starves."""
+    if cap <= 0:
+        return us_keys + global_keys
+    if not global_keys:
+        return us_keys[:cap]
+    if not us_keys:
+        return global_keys[:cap]
+    # ~60% US / ~40% global when both pools have active leagues.
+    if cap >= 3:
+        global_slots = max(1, min(len(global_keys), round(cap * 0.4)))
+    elif cap == 2:
+        global_slots = 1
+    else:
+        global_slots = 0
+    us_slots = max(1, cap - global_slots)
+    picked_us = list(us_keys[:us_slots])
+    leftover = us_slots - len(picked_us)
+    picked_global = list(global_keys[: global_slots + leftover])
+    leftover_g = (global_slots + leftover) - len(picked_global)
+    if leftover_g > 0:
+        picked_us = list(us_keys[: us_slots + leftover_g])
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for key in picked_us + picked_global:
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(key)
+        if len(ordered) >= cap:
+            break
+    return tuple(ordered)
+
+
 def _limit_sport_keys(keys: tuple[str, ...], *, force_refresh: bool = False) -> tuple[str, ...]:
-    """Apply scan scope / max-sports. Live Fetch uses a tight US-core allowlist to save credits."""
+    """Apply scan scope / max-sports. Mix US majors + global leagues within the credit cap."""
     scope = (config.settings.odds_scan_scope or "priority").lower()
     max_sports = int(config.settings.odds_max_sports_per_scan or 0)
     # Routine live Fetch always credit-caps even if env still says full/0.
     tight_live = bool(force_refresh)
+    cap = max_sports if max_sports > 0 else (4 if tight_live else 0)
 
     if tight_live:
-        # Credit-safe live path: only US-book majors that are active right now.
         available = set(keys)
-        core = tuple(k for k in CORE_US_LIVE_KEYS if k in available)
-        # Seasonal essentials first when present (MLB/WNBA in summer, NBA/NFL/NHL in winter).
         essential = _essential_keys_for_month()
-        pinned = tuple(k for k in core if k in essential)
-        rest = tuple(k for k in core if k not in essential)
-        ordered = pinned + rest
-        # Tiny seasonal fill from priority list only if core is empty (shouldn't happen).
-        if not ordered:
-            ordered = tuple(k for k in keys if k in {p for p in PRIORITY_SPORT_KEYS})
-        cap = max_sports if max_sports > 0 else 4
-        return ordered[:cap]
+        us_core = tuple(k for k in CORE_US_LIVE_KEYS if k in available)
+        us_ordered = tuple(k for k in us_core if k in essential) + tuple(
+            k for k in us_core if k not in essential
+        )
+        global_core = tuple(k for k in CORE_GLOBAL_LIVE_KEYS if k in available)
+        # Seasonal priority order for globals that aren't already in CORE_GLOBAL.
+        seasonal = _seasonal_key_order(tuple(k for k in keys if not is_us_market_sport_key(k)))
+        global_ordered = tuple(dict.fromkeys(global_core + seasonal))
+        if not us_ordered and not global_ordered:
+            fallback = tuple(k for k in keys if k in set(PRIORITY_SPORT_KEYS))
+            return fallback[: cap or 4]
+        return _mix_us_and_global_keys(us_ordered, global_ordered, cap=cap or 4)
 
     if scope == "priority":
         priority = {k for k in PRIORITY_SPORT_KEYS}
@@ -587,20 +648,15 @@ def _limit_sport_keys(keys: tuple[str, ...], *, force_refresh: bool = False) -> 
         keys = front + back
 
     essential = _essential_keys_for_month()
-    pinned = tuple(
-        k
-        for k in keys
-        if k in essential or _sport_family(k) in PRIORITY_SPORT_PREFIXES
+    us_keys = tuple(k for k in keys if is_us_market_sport_key(k))
+    global_keys = tuple(k for k in keys if not is_us_market_sport_key(k))
+    us_ordered = tuple(k for k in us_keys if k in essential) + tuple(
+        k for k in us_keys if k not in essential
     )
-    rest = tuple(k for k in keys if k not in pinned)
 
-    if max_sports > 0:
-        remaining = max(0, max_sports - len(pinned))
-        keys = pinned + rest[:remaining]
-    else:
-        keys = pinned + rest
-
-    return keys
+    if cap > 0:
+        return _mix_us_and_global_keys(us_ordered, global_keys, cap=cap)
+    return us_ordered + global_keys
 
 
 def _seasonal_key_order(keys: tuple[str, ...]) -> tuple[str, ...]:
@@ -1182,7 +1238,7 @@ async def fetch_all_sports_odds(
         "league_catalog": league_catalog,
         "key_count": info.get("key_count"),
         "active_key_index": info.get("active_key_index"),
-        "scan_scope": "us_core_live" if force_refresh else config.settings.odds_scan_scope,
+        "scan_scope": "us_global_live" if force_refresh else config.settings.odds_scan_scope,
         "max_sports_per_scan": config.settings.odds_max_sports_per_scan,
         "bookmakers": US_BOOKMAKER_KEYS,
         # /sports is free — only per-league odds calls cost credits.

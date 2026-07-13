@@ -63,6 +63,10 @@ function windowHint(window: SportsWindowKey): string {
   }
 }
 
+function sortHint(sort: SportsSortKey): string {
+  return SORT_OPTIONS.find((o) => o.value === sort)?.label.toLowerCase() ?? "best overall";
+}
+
 export function SportsToolbar({
   sort,
   filter,
@@ -76,8 +80,13 @@ export function SportsToolbar({
     <div className="mb-4 flex flex-col gap-3 rounded-xl border border-violet-500/25 bg-violet-500/5 p-4 sm:flex-row sm:items-end sm:justify-between">
       <p className="text-sm text-muted">
         <strong className="text-foreground">{resultCount}</strong> play{resultCount === 1 ? "" : "s"}{" "}
-        · {windowHint(window)} · sort favors{" "}
-        <TermHint term="opportunity" className="text-muted" />
+        · {windowHint(window)} · sorted by {sortHint(sort)}
+        {sort === "opportunity" ? (
+          <>
+            {" "}
+            (<TermHint term="opportunity" className="text-muted" />)
+          </>
+        ) : null}
       </p>
       <div className="flex flex-wrap gap-2">
         <label className="flex flex-col gap-1 text-xs text-muted">

@@ -61,31 +61,23 @@ def _is_user_entry_row(row: dict) -> bool:
 def _sports_window_match(row: dict, window: str) -> bool:
     """Match board windows — concluded / started games are already excluded by is_sports_listable."""
     hours = hours_until_event(row.get("event_start"))
+    insight_or_user = _is_openai_web_row(row) or _is_user_entry_row(row)
     if hours is None:
         # OpenAI / user-logged picks often lack a precise kickoff — still list them.
-        if _is_openai_web_row(row) or _is_user_entry_row(row):
+        if insight_or_user:
             return window != "futures" or is_futures_row(row)
         # Futures without a commence time still listable
         return is_futures_row(row) and window in {"all", "futures", "month"}
     if hours <= 0:
         return False
     if window == "today":
-        return is_calendar_today(row) or _is_openai_web_row(row) or _is_user_entry_row(row)
+        return is_calendar_today(row)
     if window == "soon":
-        return (
-            (hours <= NEAR_TERM_HOURS and not is_futures_row(row))
-            or _is_openai_web_row(row)
-            or _is_user_entry_row(row)
-        )
+        return hours <= NEAR_TERM_HOURS and not is_futures_row(row)
     if window == "week":
-        return hours <= WEEK_HOURS or _is_openai_web_row(row) or _is_user_entry_row(row)
+        return hours <= WEEK_HOURS and not is_futures_row(row)
     if window == "month":
-        return (
-            hours <= MONTH_HOURS
-            or is_futures_row(row)
-            or _is_openai_web_row(row)
-            or _is_user_entry_row(row)
-        )
+        return hours <= MONTH_HOURS or is_futures_row(row)
     if window == "futures":
         return is_futures_row(row) or hours > WEEK_HOURS
     # window == "all" — every upcoming listable row stays on the board

@@ -129,36 +129,37 @@ function compositeRank(row: SportsSignal): number {
 export function filterByWindow(items: SportsSignal[], window: SportsWindowKey): SportsSignal[] {
   // Concluded / in-progress games leave the live board — keep only upcoming (or undated Insight/user).
   const live = items.filter((i) => i.hours_until_start == null || i.hours_until_start > 0);
-  const insightOrUser = (i: SportsSignal) => isOpenAiSportsPick(i) || isUserSportsPick(i);
+  const undatedInsightOrUser = (i: SportsSignal) =>
+    (isOpenAiSportsPick(i) || isUserSportsPick(i)) && i.hours_until_start == null;
 
   if (window === "all") {
     return live;
   }
   if (window === "today") {
-    return live.filter((i) => isSportsCalendarToday(i) || (insightOrUser(i) && (i.hours_until_start == null || i.hours_until_start > 0)));
+    return live.filter((i) => isSportsCalendarToday(i) || undatedInsightOrUser(i));
   }
   if (window === "futures") {
     return live.filter(
-      (i) => isFutures(i) || (i.hours_until_start ?? 0) > WEEK_HOURS || (insightOrUser(i) && isFutures(i)),
+      (i) => isFutures(i) || (i.hours_until_start ?? 0) > WEEK_HOURS,
     );
   }
   if (window === "month") {
     return live.filter((i) => {
-      if (insightOrUser(i) && !isFutures(i)) return true;
+      if (undatedInsightOrUser(i)) return true;
       const h = i.hours_until_start ?? 9999;
       return (h > 0 && h <= MONTH_HOURS) || isFutures(i);
     });
   }
   if (window === "week") {
     return live.filter((i) => {
-      if (insightOrUser(i) && !isFutures(i)) return true;
+      if (undatedInsightOrUser(i)) return true;
       const h = i.hours_until_start ?? 9999;
-      return h > 0 && h <= WEEK_HOURS;
+      return h > 0 && h <= WEEK_HOURS && !isFutures(i);
     });
   }
   // soon (48h)
   return live.filter((i) => {
-    if (insightOrUser(i) && !isFutures(i)) return true;
+    if (undatedInsightOrUser(i)) return true;
     const h = i.hours_until_start ?? 9999;
     return h > 0 && h <= NEAR_TERM_HOURS && !isFutures(i);
   });
