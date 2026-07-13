@@ -92,6 +92,21 @@ def _select_diverse_setups(setups: list[dict[str, Any]], *, limit: int) -> list[
                 break
             _take(row)
 
+    # Round 1b: keep near-term plays on the board so Today / 48h / Week windows aren't empty.
+    near_pool = sorted(
+        (r for r in pool if is_near_term(r)),
+        key=composite_score,
+        reverse=True,
+    )
+    if near_pool and limit >= 8:
+        near_floor = min(len(near_pool), max(3, int(round(limit * 0.35))))
+        near_have = sum(1 for r in selected if is_near_term(r))
+        for row in near_pool:
+            if near_have >= near_floor or len(selected) >= limit:
+                break
+            if _take(row):
+                near_have += 1
+
     by_sport: dict[str, list[dict[str, Any]]] = {}
     for row in pool:
         by_sport.setdefault(str(row.get("sport") or "Sports"), []).append(row)

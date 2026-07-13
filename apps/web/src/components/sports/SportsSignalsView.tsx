@@ -98,7 +98,9 @@ export function SportsSignalsView({
   const loadItems = useCallback(
     async (token?: string, category?: string | null, sport?: string | null) => {
       const apiUrl = getApiUrl();
-      const params = new URLSearchParams({ limit: "200", window });
+      // Always fetch the full upcoming slate — Window/Sort/Bet type filter client-side.
+      // Fetching a narrow window then switching to a wider one used to leave the board stuck.
+      const params = new URLSearchParams({ limit: "200", window: "all" });
       if (category) params.set("category", category);
       if (sport) params.set("sport", sport);
       const res = await fetch(`${apiUrl}/signals/sports?${params}`, {
@@ -111,25 +113,12 @@ export function SportsSignalsView({
         setItems(dedupeOneSidePerMarket(data.items ?? []));
       }
     },
-    [window],
+    [],
   );
 
   async function handleWindowChange(next: SportsWindowKey) {
+    // Client-side only — items already hold the full slate from window=all fetches.
     setWindow(next);
-    const token = await getToken();
-    const apiUrl = getApiUrl();
-    const params = new URLSearchParams({ limit: "200", window: next });
-    if (activeCategory) params.set("category", activeCategory);
-    if (activeSport) params.set("sport", activeSport);
-    const res = await fetch(`${apiUrl}/signals/sports?${params}`, {
-      headers: apiRequestHeaders(token),
-      cache: "no-store",
-      credentials: usesBffProxy() ? "include" : "same-origin",
-    });
-    if (res.ok) {
-      const data = await res.json();
-      setItems(dedupeOneSidePerMarket(data.items ?? []));
-    }
   }
 
   async function getToken() {
@@ -536,11 +525,19 @@ export function SportsSignalsView({
         </div>
       ) : (
         <EmptyState
-          title={activeCategory || activeSport || filter !== "all" ? "No plays match these filters" : "No upcoming sports plays"}
+          title={
+            activeCategory || activeSport || filter !== "all" || window !== "all"
+              ? "No plays match these filters"
+              : "No upcoming sports plays"
+          }
           description={
-            activeCategory || activeSport || filter !== "all"
-              ? "Try All leagues, set Window to Today for same-day parlays, or widen (Next 48h / Next 30 days), then scan."
-              : "Use Fetch live odds for FanDuel/DraftKings lines, Rescore for free re-ranks, or Atlas Insight for analyst consensus."
+            window === "today" && !activeCategory && filter === "all" && !activeSport
+              ? "Nothing kicks off today (US/Eastern). Try Next 48h, This week, or All dates."
+              : window === "soon" && !activeCategory && filter === "all" && !activeSport
+                ? "No plays in the next 48 hours. Try This week, Next 30 days, or All dates."
+                : activeCategory || activeSport || filter !== "all"
+                  ? "Try All leagues, All bet types, or widen the Window (Next 48h / Next 30 days / All dates)."
+                  : "Use Fetch live odds for FanDuel/DraftKings lines, Rescore for free re-ranks, or Atlas Insight for analyst consensus."
           }
           action={
             <div className="flex flex-wrap justify-center gap-2">

@@ -79,8 +79,24 @@ function getEv(row: SportsSignal): number {
   return ev;
 }
 
+/** Hours until kickoff — prefer API field, else derive from event_start. */
+export function hoursUntilStart(row: SportsSignal): number | null {
+  if (typeof row.hours_until_start === "number" && Number.isFinite(row.hours_until_start)) {
+    return row.hours_until_start;
+  }
+  if (!row.event_start) return null;
+  try {
+    const ms = new Date(row.event_start).getTime() - Date.now();
+    if (!Number.isFinite(ms)) return null;
+    return ms / 3_600_000;
+  } catch {
+    return null;
+  }
+}
+
 function getSoonest(row: SportsSignal): number {
-  if (row.hours_until_start != null) return row.hours_until_start;
+  const hours = hoursUntilStart(row);
+  if (hours != null) return hours;
   // Undated OpenAI picks stay visible near the top of "soonest" rather than sinking to 9999.
   if (isOpenAiSportsPick(row)) return 20;
   return 9999;
@@ -103,8 +119,8 @@ function easternDayKey(iso: string | Date): string {
 /** Same Eastern calendar day as now — for Today parlays / sports window. */
 export function isSportsCalendarToday(row: SportsSignal): boolean {
   if (!row.event_start || isFutures(row)) return false;
-  const hours = row.hours_until_start ?? 9999;
-  if (hours <= 0) return false;
+  const hours = hoursUntilStart(row);
+  if (hours == null || hours <= 0) return false;
   try {
     return easternDayKey(row.event_start) === easternDayKey(new Date());
   } catch {
@@ -128,9 +144,12 @@ function compositeRank(row: SportsSignal): number {
 
 export function filterByWindow(items: SportsSignal[], window: SportsWindowKey): SportsSignal[] {
   // Concluded / in-progress games leave the live board — keep only upcoming (or undated Insight/user).
-  const live = items.filter((i) => i.hours_until_start == null || i.hours_until_start > 0);
+  const live = items.filter((i) => {
+    const h = hoursUntilStart(i);
+    return h == null || h > 0;
+  });
   const undatedInsightOrUser = (i: SportsSignal) =>
-    (isOpenAiSportsPick(i) || isUserSportsPick(i)) && i.hours_until_start == null;
+    (isOpenAiSportsPick(i) || isUserSportsPick(i)) && hoursUntilStart(i) == null;
 
   if (window === "all") {
     return live;
@@ -139,29 +158,34 @@ export function filterByWindow(items: SportsSignal[], window: SportsWindowKey): 
     return live.filter((i) => isSportsCalendarToday(i) || undatedInsightOrUser(i));
   }
   if (window === "futures") {
-    return live.filter(
-      (i) => isFutures(i) || (i.hours_until_start ?? 0) > WEEK_HOURS,
-    );
+    return live.filter((i) => {
+      if (isFutures(i)) return true;
+      const h = hoursUntilStart(i);
+      return h != null && h > WEEK_HOURS;
+    });
   }
   if (window === "month") {
     return live.filter((i) => {
       if (undatedInsightOrUser(i)) return true;
-      const h = i.hours_until_start ?? 9999;
-      return (h > 0 && h <= MONTH_HOURS) || isFutures(i);
+      if (isFutures(i)) return true;
+      const h = hoursUntilStart(i);
+      return h != null && h > 0 && h <= MONTH_HOURS;
     });
   }
   if (window === "week") {
     return live.filter((i) => {
       if (undatedInsightOrUser(i)) return true;
-      const h = i.hours_until_start ?? 9999;
-      return h > 0 && h <= WEEK_HOURS && !isFutures(i);
+      if (isFutures(i)) return false;
+      const h = hoursUntilStart(i);
+      return h != null && h > 0 && h <= WEEK_HOURS;
     });
   }
   // soon (48h)
   return live.filter((i) => {
     if (undatedInsightOrUser(i)) return true;
-    const h = i.hours_until_start ?? 9999;
-    return h > 0 && h <= NEAR_TERM_HOURS && !isFutures(i);
+    if (isFutures(i)) return false;
+    const h = hoursUntilStart(i);
+    return h != null && h > 0 && h <= NEAR_TERM_HOURS;
   });
 }
 
@@ -253,13 +277,12 @@ function marketFamilyKey(row: SportsSignal): string {
     row.event_name ||
     row.id;
   const betType = (row.bet_type || "moneyline").toLowerCase();
-  // Keep Odds, OpenAI, and user-logged picks side-by-side instead of deduping one away.
-  const source = isUserSportsPick(row) ? "user" : isOpenAiSportsPick(row) ? "openai" : "odds";
+  const sourceKey = isUserSportsPick(row) ? "user" : isOpenAiSportsPick(row) ? "openai" : "odds";
   // Player props need selection in the key or every prop on a game collapses to one card.
   if (isPlayerPropPick(row)) {
-    return `${eventId}|${betType}|${row.selection}|${source}`;
+    return `${eventId}|${betType}|${row.selection}|${sourceKey}`;
   }
-  return `${eventId}|${betType}|${source}`;
+  return `${eventId}|${betType}|${sourceKey}`;
 }
 
 /** Drop alternate sides of the same event+market so the board never shows both ML/spread/total sides. */
