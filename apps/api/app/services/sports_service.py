@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -307,13 +308,18 @@ class SportsRefreshService:
             }
 
         live_odds_pulled = self._live_odds_pulled(cache_only=cache_only, fetch_stats=fetch_stats)
+        used_cache = bool(cache_only or fetch_stats.get("cached") or fetch_stats.get("stale"))
 
         setups: list[dict[str, Any]] = []
-        try:
-            stats_index = await build_stats_index(events)
-        except Exception as exc:
-            logger.warning("Team stats skipped (non-fatal): %s", exc)
-            stats_index = {}
+        # Scores pulls cost Odds credits and can take minutes across 40+ leagues —
+        # never do that on cache Scan/Rescore.
+        stats_index: dict[str, Any] = {}
+        if not used_cache:
+            try:
+                stats_index = await build_stats_index(events)
+            except Exception as exc:
+                logger.warning("Team stats skipped (non-fatal): %s", exc)
+                stats_index = {}
 
         from app.services.calibration_service import CalibrationService
 
@@ -324,7 +330,7 @@ class SportsRefreshService:
             scored: list[dict[str, Any]] = []
             for event in events:
                 try:
-                    match_stats = lookup_match_stats(event, stats_index)
+                    match_stats = lookup_match_stats(event, stats_index) if stats_index else None
                     for setup in analyze_event(event, match_stats=match_stats, calibration=cal):
                         if setup.opportunity_score >= floor:
                             scored.append(setup_to_row(self.user_id, setup))
@@ -361,12 +367,22 @@ class SportsRefreshService:
 
         setups.sort(key=composite_score, reverse=True)
 
-        if setups and config.settings.openai_api_key:
+        # OpenAI slate ranking is optional polish — never block a dense cache scan.
+        # Quota/timeouts previously burned 60–120s and the BFF dropped the response,
+        # so the UI showed "no changes" even after a successful board fill.
+        if setups and config.settings.openai_api_key and not used_cache:
             try:
                 from app.services.sports_slate_ai import rank_slate_with_openai
 
-                setups, openai_meta = await rank_slate_with_openai(setups, limit=min(limit, 24))
+                setups, openai_meta = await asyncio.wait_for(
+                    rank_slate_with_openai(setups, limit=min(limit, 24)),
+                    timeout=12.0,
+                )
                 fetch_stats.update(openai_meta)
+            except TimeoutError:
+                logger.warning("OpenAI slate ranking timed out — keeping deterministic ranks")
+                fetch_stats["openai_slate"] = False
+                fetch_stats["reason"] = "timeout"
             except Exception as exc:
                 logger.warning("OpenAI slate ranking skipped: %s", exc)
 
@@ -375,34 +391,40 @@ class SportsRefreshService:
         tag_pool_categories(setups)
 
         news_pool: list[dict[str, Any]] = []
-        try:
-            news_pool = await fetch_sports_news(limit_per_feed=10)
-        except Exception as exc:
-            logger.warning("Sports news fetch skipped: %s", exc)
+        # News enrichment is nice-to-have; skip on cache scans so the board returns fast.
+        if not used_cache:
+            try:
+                news_pool = await fetch_sports_news(limit_per_feed=10)
+            except Exception as exc:
+                logger.warning("Sports news fetch skipped: %s", exc)
 
         for row in setups:
-            matched = match_news_to_signal(row, news_pool)
-            analysis = build_news_analysis(row, matched)
-            row["explanation"] = analysis["explanation"]
-            row["bull_case"] = analysis["bull_case"]
-            row["bear_case"] = analysis["bear_case"]
-            snap = row.setdefault("scoring_snapshot", {})
-            snap["related_news"] = [
-                {
-                    "title": n.get("title"),
-                    "url": n.get("url"),
-                    "source": n.get("source"),
-                    "summary": n.get("summary"),
-                    "published_at": n.get("published_at"),
-                    "relevance_score": n.get("relevance_score"),
-                    "matched_tokens": n.get("matched_tokens"),
-                }
-                for n in matched
-            ]
-            snap["analysis_summary"] = analysis["analysis_summary"]
-            snap["news_count"] = len(matched)
-            snap["news_verified"] = bool(analysis.get("news_verified"))
-            snap["timing_tier"] = timing_tier(row)
+            if news_pool:
+                matched = match_news_to_signal(row, news_pool)
+                analysis = build_news_analysis(row, matched)
+                row["explanation"] = analysis["explanation"]
+                row["bull_case"] = analysis["bull_case"]
+                row["bear_case"] = analysis["bear_case"]
+                snap = row.setdefault("scoring_snapshot", {})
+                snap["related_news"] = [
+                    {
+                        "title": n.get("title"),
+                        "url": n.get("url"),
+                        "source": n.get("source"),
+                        "summary": n.get("summary"),
+                        "published_at": n.get("published_at"),
+                        "relevance_score": n.get("relevance_score"),
+                        "matched_tokens": n.get("matched_tokens"),
+                    }
+                    for n in matched
+                ]
+                snap["analysis_summary"] = analysis["analysis_summary"]
+                snap["news_count"] = len(matched)
+                snap["news_verified"] = bool(analysis.get("news_verified"))
+                snap["timing_tier"] = timing_tier(row)
+            else:
+                snap = row.setdefault("scoring_snapshot", {})
+                snap["timing_tier"] = timing_tier(row)
 
         setups = sort_for_display([row for row in setups if is_sports_actionable(row)])
 
@@ -450,8 +472,10 @@ class SportsRefreshService:
             active = await self.db.select(
                 "sports_signals",
                 filters={"user_id": f"eq.{self.user_id}", "status": "eq.active"},
+                select="id,scoring_snapshot,line_movement",
                 limit=300,
             )
+            delete_ids: list[str] = []
             for row in active:
                 snap = row.get("scoring_snapshot") or {}
                 lm = row.get("line_movement") or {}
@@ -461,17 +485,22 @@ class SportsRefreshService:
                     or bool(snap.get("openai_web"))
                     or bool(lm.get("openai_web"))
                     or bool(snap.get("user_entry"))
-                    or str(row.get("pick_source") or "") in {"openai_web", "user_entry"}
                     or str(snap.get("pick_origin") or "") == "user"
                 ):
                     continue
                 sid = row.get("id")
-                if not sid:
-                    continue
+                if sid:
+                    delete_ids.append(str(sid))
+            # Batch deletes — one-by-one was taking minutes and timing out the UI.
+            for start in range(0, len(delete_ids), 40):
+                chunk = delete_ids[start : start + 40]
                 try:
-                    await self.db.delete("sports_signals", {"id": f"eq.{sid}"})
+                    await self.db.delete(
+                        "sports_signals",
+                        {"id": f"in.({','.join(chunk)})", "user_id": f"eq.{self.user_id}"},
+                    )
                 except Exception as exc:
-                    logger.warning("Failed to clear odds sports pick %s: %s", sid, exc)
+                    logger.warning("Failed to clear odds sports chunk: %s", exc)
             # Sports IDs change on rescan — invalidate parlays that reference old legs.
             try:
                 await self.db.update(
@@ -485,21 +514,51 @@ class SportsRefreshService:
             except Exception as exc:
                 logger.warning("Expire parlays after sports rescan: %s", exc)
 
-        saved = await self.db.insert("sports_signals", setups) if setups else []
+        saved: list[dict[str, Any]] = []
+        if setups:
+            # Chunk inserts — a 90–120 row payload with snapshots can trip gateway limits.
+            chunk_size = 40
+            for start in range(0, len(setups), chunk_size):
+                chunk = setups[start : start + chunk_size]
+                try:
+                    inserted = await self.db.insert("sports_signals", chunk)
+                    if inserted:
+                        saved.extend(inserted)
+                except Exception as exc:
+                    logger.warning("Sports insert chunk failed (%s rows): %s", len(chunk), exc)
 
         if saved:
-            from app.services.alert_service import AlertService
-            from app.services.signal_registry_service import SignalRegistryService
+            if not used_cache:
+                from app.services.signal_registry_service import SignalRegistryService
 
-            await SignalRegistryService(self.db, self.user_id).register_batch("sports", saved)
-            await AlertService(self.db, self.user_id).notify_high_score_signals(
-                "sports",
-                saved,
-                title_fn=lambda s: f"Sports play · {s.get('sport')} ({float(s.get('opportunity_score') or 0):.0f}/100)",
-                message_fn=lambda s: str(s.get("recommendation") or s.get("selection") or "New sports signal"),
-            )
+                try:
+                    await asyncio.wait_for(
+                        SignalRegistryService(self.db, self.user_id).register_batch("sports", saved),
+                        timeout=10.0,
+                    )
+                except TimeoutError:
+                    logger.warning("Signal registry timed out after sports save")
+                except Exception as exc:
+                    logger.warning("Signal registry skipped: %s", exc)
 
-            if config.settings.is_intelligence_enabled():
+                try:
+                    from app.services.alert_service import AlertService
+
+                    await asyncio.wait_for(
+                        AlertService(self.db, self.user_id).notify_high_score_signals(
+                            "sports",
+                            saved,
+                            title_fn=lambda s: f"Sports play · {s.get('sport')} ({float(s.get('opportunity_score') or 0):.0f}/100)",
+                            message_fn=lambda s: str(s.get("recommendation") or s.get("selection") or "New sports signal"),
+                        ),
+                        timeout=8.0,
+                    )
+                except TimeoutError:
+                    logger.warning("Sports alerts timed out")
+                except Exception as exc:
+                    logger.warning("Sports alerts skipped: %s", exc)
+
+            if config.settings.is_intelligence_enabled() and not used_cache:
                 try:
                     from app.sports_intelligence.service import SportsIntelligenceService
 
@@ -513,15 +572,22 @@ class SportsRefreshService:
         # Remove concluded games from the board and grade finished Atlas + user picks promptly.
         graded_resolved = 0
         try:
-            from app.services.outcome_resolver import OutcomeResolverService
             from app.services.stale_signal_service import StaleSignalService
 
             await StaleSignalService(self.db, self.user_id).expire_concluded_sports()
-            grade_result = await OutcomeResolverService(self.db, self.user_id).resolve_pending(
-                limit=60,
-                module="sports",
-            )
-            graded_resolved = int((grade_result or {}).get("resolved") or 0)
+            if not used_cache:
+                from app.services.outcome_resolver import OutcomeResolverService
+
+                grade_result = await asyncio.wait_for(
+                    OutcomeResolverService(self.db, self.user_id).resolve_pending(
+                        limit=60,
+                        module="sports",
+                    ),
+                    timeout=15.0,
+                )
+                graded_resolved = int((grade_result or {}).get("resolved") or 0)
+        except TimeoutError:
+            logger.info("Post-scan sports grade timed out — board already saved")
         except Exception as exc:
             logger.warning("Post-scan sports grade/expire skipped: %s", exc)
 

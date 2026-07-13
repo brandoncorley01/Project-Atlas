@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 _BATCH_SIZE = 50
 
 _EXPIRE_SELECT: dict[str, str] = {
-    "sports_signals": "id,event_start,bet_type,scoring_snapshot,line_movement,pick_source",
+    "sports_signals": "id,event_start,bet_type,scoring_snapshot,line_movement",
     "stock_signals": "id,data_as_of",
     "options_signals": "id,expiration,data_as_of",
     "parlays": "id,data_as_of",

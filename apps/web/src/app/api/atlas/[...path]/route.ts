@@ -8,7 +8,7 @@ const DASHBOARD_PROXY_TIMEOUT_MS = 50_000;
 const AI_PROXY_TIMEOUT_MS = 90_000;
 const INSIGHT_SEARCH_PROXY_TIMEOUT_MS = 150_000;
 /** Atlas Insight + Odds scans need longer than the default 60s BFF budget. */
-const ENGINE_LONG_PROXY_TIMEOUT_MS = 120_000;
+const ENGINE_LONG_PROXY_TIMEOUT_MS = 180_000;
 
 /** Vercel Pro allows up to 300s; Hobby caps at 60s regardless. */
 export const maxDuration = 300;

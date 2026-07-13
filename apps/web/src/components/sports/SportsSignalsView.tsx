@@ -204,7 +204,10 @@ export function SportsSignalsView({
     const apiUrl = getApiUrl();
     const params = new URLSearchParams();
     if (mode === "live") params.set("force_refresh", "true");
-    if (mode === "rescore") params.set("cache_only", "true");
+    // Prefer free cache rescore whenever warm — avoids slow live side-paths.
+    if (mode === "rescore" || (mode === "scan" && cacheRescoreFree)) {
+      params.set("cache_only", "true");
+    }
     const query = params.toString() ? `?${params}` : "";
     try {
       const res = await fetch(`${apiUrl}/engine/refresh-sports${query}`, {
