@@ -213,9 +213,22 @@ export function SportsEventSearch({
         cache: "no-store",
         signal: AbortSignal.timeout(150_000),
       });
-      const body = await res.json();
+      let body: Record<string, unknown> = {};
+      try {
+        body = (await res.json()) as Record<string, unknown>;
+      } catch {
+        body = {};
+      }
       if (!res.ok) {
-        setMessage(typeof body.detail === "string" ? body.detail : "Search failed");
+        const detail =
+          typeof body.detail === "string"
+            ? body.detail
+            : res.status === 503
+              ? "Search timed out — tap Fetch live odds, then try again."
+              : res.status === 401
+                ? "Sign in again to search FanDuel markets."
+                : "Search failed — try Fetch live odds, then search again.";
+        setMessage(detail);
         setItems([]);
         setMarkets([]);
         return;
@@ -274,13 +287,22 @@ export function SportsEventSearch({
           : rawEvents,
       );
       setMarkets(nextMarkets);
-      if (body.message) {
-        setMessage(body.message as string);
-      } else if (isParlay && nextMarkets.length === 0) {
-        setMessage("No FanDuel markets matched that search. Try another team or player.");
+      if (typeof body.message === "string" && body.message.trim()) {
+        setMessage(body.message);
+      } else if (nextMarkets.length === 0) {
+        setMessage(
+          isParlay
+            ? "No FanDuel markets matched that search. Try another team or player, or Fetch live odds first."
+            : "No verified markets found. Tap Fetch live odds once, then search a team nickname or player name.",
+        );
       }
-    } catch {
-      setMessage("Could not reach the API for event search");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+      setMessage(
+        msg.includes("timeout") || msg.includes("Timeout") || msg.includes("aborted")
+          ? "Search timed out — tap Fetch live odds, then try a shorter team/player name."
+          : "Could not reach the API for event search — check that the backend is running.",
+      );
       setItems([]);
       setMarkets([]);
     } finally {
@@ -462,7 +484,7 @@ export function SportsEventSearch({
           <p className="mt-1 text-xs text-muted">
             {isParlay
               ? "Search the full FanDuel board (all sports), then add a selection to this parlay."
-              : "Atlas Insight resolves the player/team, pulls real FanDuel/DraftKings lines, then ranks which are most likely to hit and where the best odds are."}
+              : "Search a team or player (e.g. Lakers, Chiefs, Clark). Atlas matches FanDuel/DraftKings lines from your board + cache, then ranks hit odds."}
           </p>
         </div>
         {!isParlay && (

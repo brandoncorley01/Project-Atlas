@@ -59,8 +59,9 @@ def _is_combat_sport(sport_key: str | None) -> bool:
     key = (sport_key or "").lower()
     return key in COMBAT_SPORT_KEYS or key.startswith("mma_") or key.startswith("boxing_")
 
-# Common team aliases so "Portland" / "Fire" hit WNBA cache events.
+# Common team aliases so short nicknames hit cache events.
 TEAM_ALIASES: dict[str, tuple[str, ...]] = {
+    # WNBA
     "portland": ("portland fire", "portland", "fire"),
     "fire": ("portland fire", "portland"),
     "aces": ("las vegas aces", "aces", "las vegas"),
@@ -77,7 +78,162 @@ TEAM_ALIASES: dict[str, tuple[str, ...]] = {
     "mystics": ("washington mystics", "mystics"),
     "valkyries": ("golden state valkyries", "valkyries", "golden state"),
     "tempo": ("toronto tempo", "tempo", "toronto"),
+    # NBA
+    "lakers": ("los angeles lakers", "lakers", "la lakers"),
+    "celtics": ("boston celtics", "celtics", "boston"),
+    "warriors": ("golden state warriors", "warriors", "gsw"),
+    "nuggets": ("denver nuggets", "nuggets", "denver"),
+    "bucks": ("milwaukee bucks", "bucks", "milwaukee"),
+    "heat": ("miami heat", "heat", "miami"),
+    "knicks": ("new york knicks", "knicks"),
+    "nets": ("brooklyn nets", "nets", "brooklyn"),
+    "sixers": ("philadelphia 76ers", "76ers", "sixers", "philadelphia"),
+    "76ers": ("philadelphia 76ers", "sixers", "philadelphia"),
+    "suns": ("phoenix suns", "suns", "phoenix"),
+    "mavs": ("dallas mavericks", "mavericks", "mavs", "dallas"),
+    "mavericks": ("dallas mavericks", "mavs", "dallas"),
+    "clippers": ("los angeles clippers", "clippers", "la clippers"),
+    "thunder": ("oklahoma city thunder", "thunder", "okc"),
+    "okc": ("oklahoma city thunder", "thunder"),
+    "wolves": ("minnesota timberwolves", "timberwolves", "wolves"),
+    "timberwolves": ("minnesota timberwolves", "wolves"),
+    "kings": ("sacramento kings", "kings", "sacramento"),
+    "pelicans": ("new orleans pelicans", "pelicans", "nola"),
+    "grizzlies": ("memphis grizzlies", "grizzlies", "memphis"),
+    "rockets": ("houston rockets", "rockets", "houston"),
+    "spurs": ("san antonio spurs", "spurs"),
+    "jazz": ("utah jazz", "jazz", "utah"),
+    "blazers": ("portland trail blazers", "trail blazers", "blazers", "portland"),
+    "hawks": ("atlanta hawks", "hawks", "atlanta"),
+    "hornets": ("charlotte hornets", "hornets", "charlotte"),
+    "wizards": ("washington wizards", "wizards"),
+    "pacers": ("indiana pacers", "pacers"),
+    "pistons": ("detroit pistons", "pistons", "detroit"),
+    "cavs": ("cleveland cavaliers", "cavaliers", "cavs", "cleveland"),
+    "cavaliers": ("cleveland cavaliers", "cavs", "cleveland"),
+    "bulls": ("chicago bulls", "bulls", "chicago"),
+    "raptors": ("toronto raptors", "raptors", "toronto"),
+    "magic": ("orlando magic", "magic", "orlando"),
+    # NFL
+    "chiefs": ("kansas city chiefs", "chiefs", "kansas city"),
+    "eagles": ("philadelphia eagles", "eagles"),
+    "bills": ("buffalo bills", "bills", "buffalo"),
+    "cowboys": ("dallas cowboys", "cowboys"),
+    "49ers": ("san francisco 49ers", "49ers", "niners", "sf"),
+    "niners": ("san francisco 49ers", "49ers"),
+    "ravens": ("baltimore ravens", "ravens", "baltimore"),
+    "lions": ("detroit lions", "lions"),
+    "packers": ("green bay packers", "packers", "green bay"),
+    "bengals": ("cincinnati bengals", "bengals", "cincinnati"),
+    "dolphins": ("miami dolphins", "dolphins"),
+    "jets": ("new york jets", "jets"),
+    "giants": ("new york giants", "giants"),
+    "commanders": ("washington commanders", "commanders"),
+    "bears": ("chicago bears", "bears"),
+    "vikings": ("minnesota vikings", "vikings"),
+    "saints": ("new orleans saints", "saints"),
+    "buccaneers": ("tampa bay buccaneers", "buccaneers", "bucs", "tampa"),
+    "bucs": ("tampa bay buccaneers", "buccaneers"),
+    "falcons": ("atlanta falcons", "falcons"),
+    "panthers": ("carolina panthers", "panthers", "carolina"),
+    "cardinals": ("arizona cardinals", "cardinals", "arizona"),
+    "rams": ("los angeles rams", "rams", "la rams"),
+    "seahawks": ("seattle seahawks", "seahawks", "seattle"),
+    "broncos": ("denver broncos", "broncos"),
+    "chargers": ("los angeles chargers", "chargers", "la chargers"),
+    "raiders": ("las vegas raiders", "raiders"),
+    "steelers": ("pittsburgh steelers", "steelers", "pittsburgh"),
+    "browns": ("cleveland browns", "browns"),
+    "titans": ("tennessee titans", "titans", "tennessee"),
+    "colts": ("indianapolis colts", "colts", "indianapolis"),
+    "jaguars": ("jacksonville jaguars", "jaguars", "jags"),
+    "jags": ("jacksonville jaguars", "jaguars"),
+    "texans": ("houston texans", "texans"),
+    "patriots": ("new england patriots", "patriots", "pats"),
+    # MLB
+    "yankees": ("new york yankees", "yankees"),
+    "dodgers": ("los angeles dodgers", "dodgers"),
+    "mets": ("new york mets", "mets"),
+    "cubs": ("chicago cubs", "cubs"),
+    "sox": ("chicago white sox", "white sox", "red sox", "boston red sox"),
+    "braves": ("atlanta braves", "braves"),
+    "astros": ("houston astros", "astros"),
+    "phillies": ("philadelphia phillies", "phillies"),
+    "padres": ("san diego padres", "padres"),
+    "mariners": ("seattle mariners", "mariners"),
+    "guardians": ("cleveland guardians", "guardians"),
+    "tigers": ("detroit tigers", "tigers"),
+    "royals": ("kansas city royals", "royals"),
+    "orioles": ("baltimore orioles", "orioles"),
+    "rays": ("tampa bay rays", "rays"),
+    "reds": ("cincinnati reds", "reds"),
+    "brewers": ("milwaukee brewers", "brewers"),
+    "pirates": ("pittsburgh pirates", "pirates"),
+    "nationals": ("washington nationals", "nationals", "nats"),
+    "marlins": ("miami marlins", "marlins"),
+    "rockies": ("colorado rockies", "rockies"),
+    "diamondbacks": ("arizona diamondbacks", "diamondbacks", "dbacks"),
+    "dbacks": ("arizona diamondbacks", "diamondbacks"),
+    "twins": ("minnesota twins", "twins"),
+    "angels": ("los angeles angels", "angels"),
+    "athletics": ("oakland athletics", "athletics", "as", "oakland"),
 }
+
+# Bet jargon that should not block entity matching ("Lakers ML -110").
+SEARCH_STOPWORDS = frozenset(
+    {
+        "over",
+        "under",
+        "ou",
+        "ml",
+        "moneyline",
+        "moneylines",
+        "spread",
+        "spreads",
+        "total",
+        "totals",
+        "points",
+        "pts",
+        "point",
+        "rebounds",
+        "reb",
+        "assists",
+        "ast",
+        "yards",
+        "yds",
+        "yard",
+        "odds",
+        "bet",
+        "bets",
+        "line",
+        "lines",
+        "prop",
+        "props",
+        "player",
+        "game",
+        "match",
+        "the",
+        "vs",
+        "versus",
+        "at",
+        "and",
+        "to",
+        "on",
+        "for",
+        "of",
+        "fd",
+        "fanduel",
+        "dk",
+        "draftkings",
+        "book",
+        "sportsbook",
+        "tonight",
+        "today",
+        "tomorrow",
+        "alt",
+        "alternate",
+    }
+)
 
 
 def _norm(text: str) -> str:
@@ -625,16 +781,45 @@ def _tokens(query: str) -> list[str]:
     return [t for t in _norm(query).split() if len(t) >= 2]
 
 
+def _is_odds_like_token(token: str) -> bool:
+    raw = token.lstrip("+-")
+    if not raw.isdigit():
+        return False
+    try:
+        return abs(int(raw)) >= 100
+    except ValueError:
+        return False
+
+
+def _search_tokens(query: str) -> list[str]:
+    """Entity-focused tokens — strip bet jargon / American odds so matches still hit."""
+    raw = _tokens(query)
+    meaningful = [
+        t
+        for t in raw
+        if t not in SEARCH_STOPWORDS and not _is_odds_like_token(t)
+    ]
+    return meaningful or raw
+
+
 def _match_score(haystack: str, tokens: list[str]) -> float:
     if not tokens:
         return 1.0
     hits = sum(1 for t in tokens if t in haystack)
     if hits == 0:
-        return 0.0
+        # Alias expansion: "lakers" → also try alias phrases in haystack.
+        alias_hits = 0
+        for t in tokens:
+            for alias in TEAM_ALIASES.get(t, ()):
+                if _norm(alias) and _norm(alias) in haystack:
+                    alias_hits += 1
+                    break
+        if alias_hits == 0:
+            return 0.0
+        hits = alias_hits
     score = hits / len(tokens)
     if hits == len(tokens):
         score += 0.25
-    # Strong boost when player name alone matches.
     return score
 
 
@@ -692,14 +877,16 @@ def search_verified_markets(
             or sport_norm in _norm(str(c.get("sport_key") or ""))
         ]
 
-    tokens = _tokens(query)
+    tokens = _search_tokens(query)
     scored_markets: list[tuple[float, dict[str, Any]]] = []
     for row in catalog:
         # Only surface markets that exist on at least one real preferred book.
         books = row.get("available_on") or []
         if not books:
-            continue
-        if not any(str(b.get("book_key")) in US_PREFERRED_BOOK_KEYS for b in books):
+            # Still keep single-book rows that already name FanDuel/DK.
+            if str(row.get("book_key") or "") not in US_PREFERRED_BOOK_KEYS:
+                continue
+        elif not any(str(b.get("book_key")) in US_PREFERRED_BOOK_KEYS for b in books):
             continue
         hay = _market_haystack(row)
         if tokens:
@@ -707,7 +894,7 @@ def search_verified_markets(
             if score <= 0:
                 continue
             player = _norm(str(row.get("player_name") or ""))
-            if player and all(t in player for t in tokens):
+            if player and any(t in player for t in tokens if len(t) >= 3):
                 score += 0.5
         else:
             # Browse mode: soon game lines only (props need an explicit player/team query).
@@ -718,6 +905,11 @@ def search_verified_markets(
         rank = score * 100 - min(hours, 200) * 0.05
         if tokens and row.get("bet_type") == "player_prop":
             rank += 5
+        # Prefer FanDuel-posted lines when both books exist.
+        if str(row.get("book_key") or "") == "fanduel" or any(
+            str(b.get("book_key")) == "fanduel" for b in (books or [])
+        ):
+            rank += 1.5
         scored_markets.append((rank, row))
 
     scored_markets.sort(key=lambda x: x[0], reverse=True)

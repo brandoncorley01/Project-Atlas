@@ -1,7 +1,8 @@
-"""Atlas Insight search — OpenAI web search only (no Odds API)."""
+"""Atlas Insight search — FanDuel/DK verified markets + OpenAI ranking."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import Any
@@ -909,14 +910,138 @@ def _normalize_verified_row(row: dict[str, Any], *, index: int) -> dict[str, Any
     }
 
 
+def _markets_from_board_signals(
+    rows: list[dict[str, Any]],
+    *,
+    query: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Map active sports_signals into search markets when disk odds cache is cold."""
+    from app.services.fanduel_catalog import SEARCH_STOPWORDS, TEAM_ALIASES, _norm, _search_tokens
+
+    tokens = _search_tokens(query)
+    if not rows or not tokens:
+        return []
+
+    scored: list[tuple[float, dict[str, Any]]] = []
+    for row in rows:
+        snap = row.get("scoring_snapshot") or {}
+        lm = row.get("line_movement") or {}
+        selection = str(row.get("selection") or "").strip()
+        if not selection:
+            continue
+        hay = _norm(
+            " ".join(
+                [
+                    str(row.get("event_name") or ""),
+                    selection,
+                    str(row.get("sport") or ""),
+                    str(row.get("bet_type") or ""),
+                    str(snap.get("player_name") or lm.get("player_name") or ""),
+                    str(snap.get("home_team") or ""),
+                    str(snap.get("away_team") or ""),
+                    str(snap.get("prop_market") or ""),
+                ]
+            )
+        )
+        hits = sum(1 for t in tokens if t in hay)
+        if hits == 0:
+            alias_hits = 0
+            for t in tokens:
+                for alias in TEAM_ALIASES.get(t, ()):
+                    if _norm(alias) in hay:
+                        alias_hits += 1
+                        break
+            if alias_hits == 0:
+                continue
+            hits = alias_hits
+        # Ignore pure-jargon-only hits.
+        meaningful = [t for t in tokens if t not in SEARCH_STOPWORDS]
+        if meaningful and not any(t in hay for t in meaningful):
+            alias_ok = any(
+                any(_norm(a) in hay for a in TEAM_ALIASES.get(t, ()))
+                for t in meaningful
+            )
+            if not alias_ok:
+                continue
+
+        book_key = str(
+            lm.get("preferred_book")
+            or snap.get("preferred_book")
+            or row.get("preferred_book")
+            or "fanduel"
+        )
+        book_title = str(
+            lm.get("preferred_book_title")
+            or snap.get("preferred_book_title")
+            or ("FanDuel" if book_key == "fanduel" else book_key)
+        )
+        odds = row.get("odds_american")
+        try:
+            odds_i = int(odds) if odds is not None else -110
+        except (TypeError, ValueError):
+            odds_i = -110
+        available = [
+            {
+                "book_key": book_key,
+                "book_title": book_title,
+                "odds_american": odds_i,
+            }
+        ]
+        # Include any stored multi-book strip.
+        for b in (lm.get("book_odds") or row.get("book_odds") or []):
+            if not isinstance(b, dict):
+                continue
+            bk = str(b.get("book_key") or "")
+            if not bk or any(a["book_key"] == bk for a in available):
+                continue
+            available.append(
+                {
+                    "book_key": bk,
+                    "book_title": str(b.get("book_title") or bk),
+                    "odds_american": b.get("odds_american") if b.get("odds_american") is not None else odds_i,
+                }
+            )
+
+        scored.append(
+            (
+                hits / max(1, len(tokens)),
+                {
+                    "event_id": snap.get("event_id") or row.get("id"),
+                    "sport": row.get("sport") or "Sports",
+                    "sport_key": snap.get("sport_key"),
+                    "home_team": snap.get("home_team") or "",
+                    "away_team": snap.get("away_team") or "",
+                    "event_name": row.get("event_name") or "Event",
+                    "event_start": row.get("event_start") or snap.get("event_start"),
+                    "bet_type": row.get("bet_type") or "moneyline",
+                    "selection": selection,
+                    "odds_american": odds_i,
+                    "point": (snap.get("pick") or {}).get("point") or snap.get("point"),
+                    "book_key": book_key,
+                    "book_title": book_title,
+                    "player_name": snap.get("player_name") or lm.get("player_name"),
+                    "prop_market": snap.get("prop_market") or lm.get("prop_market"),
+                    "available_on": available,
+                    "available_books": [a.get("book_title") for a in available if a.get("book_title")],
+                    "fanduel_verified": True,
+                },
+            )
+        )
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [row for _, row in scored[: max(1, min(limit, 40))]]
+
+
 async def search_markets_with_openai(
     *,
     query: str = "",
     sport: str | None = None,
     limit: int = 40,
     all_sports: bool = True,
+    board_signals: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """FanDuel-verified search first (full board), then Atlas Insight rank (OpenAI)."""
+    """FanDuel-verified search first (cache + board), then Atlas Insight rank (OpenAI)."""
     from app.services.fanduel_catalog import (
         fetch_verified_markets_for_search,
         search_verified_markets,
@@ -935,20 +1060,10 @@ async def search_markets_with_openai(
             "message": "Type a team or player name, then press Search (powered by Atlas Insight).",
         }
 
-    if not llm_service.is_configured():
-        return {
-            "items": [],
-            "markets": [],
-            "total": 0,
-            "markets_total": 0,
-            "credits_used": 0,
-            "cache": False,
-            "openai_search": False,
-            "message": "OPENAI_API_KEY is not configured on the API — add it on Render/.env.",
-        }
-
+    openai_ready = llm_service.is_configured()
     person = _looks_like_person_query(q)
     league_key = _league_sport_key_from_query(q)
+
     # League browse (e.g. "wnba") must not resolve to a single team — that hid
     # the rest of the slate and made search look like "only one WNBA result".
     if league_key:
@@ -962,13 +1077,25 @@ async def search_markets_with_openai(
         resolved_player = None
         resolved_teams: list[str] = []
         resolved_sport_key = league_key
-    else:
-        resolved = await _resolve_search_target(q, sport)
+    elif openai_ready:
+        try:
+            resolved = await asyncio.wait_for(
+                _resolve_search_target(q, sport),
+                timeout=8.0,
+            )
+        except Exception as exc:
+            logger.warning("Search target resolve skipped: %s", exc)
+            resolved = {}
         resolved_player = resolved.get("player_name")
         resolved_teams = list(resolved.get("team_names") or [])
         resolved_sport_key = resolved.get("sport_key") or (
             "basketball_wnba" if (resolved.get("sport") or "").upper() == "WNBA" else None
         )
+    else:
+        resolved = {}
+        resolved_player = None
+        resolved_teams = []
+        resolved_sport_key = None
 
     # Heuristic boost for common miss: last-name-only WNBA stars.
     if person and not resolved_teams and "leite" in _norm_text(q):
@@ -1016,6 +1143,34 @@ async def search_markets_with_openai(
         if preferred:
             markets = preferred + rest
 
+    # 1b) Board signals (Supabase) — survive Render disk cache resets.
+    board_added = 0
+    seen: set[str] = {
+        "|".join(
+            [
+                str(m.get("event_id") or ""),
+                str(m.get("bet_type") or ""),
+                str(m.get("selection") or ""),
+                str(m.get("odds_american") or ""),
+            ]
+        )
+        for m in markets
+    }
+    for row in _markets_from_board_signals(board_signals or [], query=q, limit=market_cap):
+        key = "|".join(
+            [
+                str(row.get("event_id") or ""),
+                str(row.get("bet_type") or ""),
+                str(row.get("selection") or ""),
+                str(row.get("odds_american") or ""),
+            ]
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        markets.append(_normalize_verified_row(row, index=len(markets) + 1))
+        board_added += 1
+
     # 2) Enrich with targeted props / live seed — still board-wide unless restricted.
     verified = await fetch_verified_markets_for_search(
         query=q,
@@ -1028,17 +1183,6 @@ async def search_markets_with_openai(
     credits_used = int(verified.get("credits_used") or 0)
     verified_rows = list(verified.get("markets") or [])
 
-    seen: set[str] = {
-        "|".join(
-            [
-                str(m.get("event_id") or ""),
-                str(m.get("bet_type") or ""),
-                str(m.get("selection") or ""),
-                str(m.get("odds_american") or ""),
-            ]
-        )
-        for m in markets
-    }
     for row in verified_rows:
         if not row.get("selection"):
             continue
@@ -1067,8 +1211,8 @@ async def search_markets_with_openai(
         "_web_search": False,
     }
 
-    # If FanDuel/DK returned nothing, fall back to OpenAI web discovery.
-    if not markets:
+    # If FanDuel/DK returned nothing, fall back to OpenAI web discovery (when configured).
+    if not markets and openai_ready:
         payload = await _ask_openai(_build_user_prompt(q, sport, player_retry=person))
         markets = _rank_and_filter(_markets_from_payload(payload, limit=limit), q)
         if not markets and person:
@@ -1078,7 +1222,8 @@ async def search_markets_with_openai(
     insight_meta: dict[str, Any] = {}
     if markets:
         # Always run a fast Insight scoring pass over verified (or web) markets.
-        markets = await _enrich_missing_theses(markets, query=q)
+        if openai_ready:
+            markets = await _enrich_missing_theses(markets, query=q)
         enrich_payload = None
         if markets and isinstance(markets[0].get("_enrich_payload"), dict):
             enrich_payload = markets[0].pop("_enrich_payload", None)
@@ -1113,9 +1258,10 @@ async def search_markets_with_openai(
         msg_parts.append(resolved_as)
     if verified_n:
         league_bit = f" across {', '.join(sports_found[:6])}" if sports_found else ""
+        src_bit = f", {board_added} from your board" if board_added else ""
         msg_parts.append(
             f"{verified_n} FanDuel/DraftKings-verified markets{league_bit}"
-            f" ({prop_n} props"
+            f" ({prop_n} props{src_bit}"
             f"{f', ~{credits_used} Odds credits' if credits_used else ', 0 new Odds credits'})."
         )
     elif verified.get("message"):
@@ -1127,12 +1273,21 @@ async def search_markets_with_openai(
     if insight_summary and insight_summary not in " ".join(msg_parts):
         msg_parts.append(f"Insight: {insight_summary}")
     if not markets:
-        msg_parts = [
-            "No FanDuel/DraftKings markets found. Tap Fetch live odds to refresh the full board, "
-            f"then search again for {resolved_player or q}."
-        ]
+        if not openai_ready and not (catalog_hit.get("markets") or board_signals):
+            msg_parts = [
+                "No FanDuel/DraftKings lines in cache yet. Tap Fetch live odds once to seed the board, "
+                f"then search again for {resolved_player or q}."
+            ]
+        else:
+            msg_parts = [
+                "No FanDuel/DraftKings markets matched that search. "
+                "Try a team nickname (Lakers, Chiefs) or player last name, "
+                f"or tap Fetch live odds / Atlas Insight, then search again for {resolved_player or q}."
+            ]
     elif not verified_n and not web:
         msg_parts.append("Web browse unavailable — results may be less current.")
+    elif not openai_ready:
+        msg_parts.append("OpenAI not configured — showing cache/board matches only.")
 
     return {
         "items": items,
@@ -1141,7 +1296,7 @@ async def search_markets_with_openai(
         "markets_total": len(markets),
         "credits_used": credits_used,
         "cache": credits_used == 0 and verified_n > 0,
-        "openai_search": True,
+        "openai_search": openai_ready,
         "fanduel_verified": verified_n > 0,
         "insight_analyzed": bool(insight_meta.get("insight_analyzed")),
         "web_search": web,
@@ -1156,5 +1311,6 @@ async def search_markets_with_openai(
         "top_pick_id": insight_meta.get("top_pick_id"),
         "best_odds_id": insight_meta.get("best_odds_id"),
         "most_likely_id": insight_meta.get("most_likely_id"),
-        "message": " ".join(msg_parts),
+        "board_matches": board_added,
+        "message": " ".join(msg_parts) if msg_parts else None,
     }
