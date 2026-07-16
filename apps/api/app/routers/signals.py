@@ -106,14 +106,23 @@ async def search_sports_events(
     all_sports: bool = True,
 ) -> dict:
     """Atlas Insight search — FanDuel/DK verified markets across the full board."""
+    from app.services.signal_service import SignalService
     from app.services.sports_openai_search_service import search_markets_with_openai
 
-    _ = user_id, token  # auth required
+    board_rows: list[dict] = []
+    try:
+        board_rows = await SignalService(SupabaseClient(token), user_id).list_all_sports(
+            limit=200,
+        )
+    except Exception:
+        board_rows = []
+
     return await search_markets_with_openai(
         query=q,
         sport=sport,
         limit=limit,
         all_sports=all_sports,
+        board_signals=board_rows,
     )
 
 
