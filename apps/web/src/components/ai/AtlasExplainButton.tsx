@@ -9,6 +9,8 @@ interface AtlasExplainButtonProps {
   module: "options" | "stock" | "sports";
   signalId: string;
   className?: string;
+  /** Card thesis used when the explain API times out or returns empty. */
+  fallbackThesis?: string | null;
 }
 
 interface NewsArticle {
@@ -81,7 +83,12 @@ interface ExplainResponse {
   source?: string;
 }
 
-export function AtlasExplainButton({ module, signalId, className }: AtlasExplainButtonProps) {
+export function AtlasExplainButton({
+  module,
+  signalId,
+  className,
+  fallbackThesis,
+}: AtlasExplainButtonProps) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<ExplainResponse | null>(null);
@@ -107,11 +114,40 @@ export function AtlasExplainButton({ module, signalId, className }: AtlasExplain
       const result = await apiFetch<ExplainResponse>("/ai/explain", token, {
         method: "POST",
         body: JSON.stringify({ module, signal_id: signalId }),
-        timeoutMs: module === "sports" ? 55_000 : 25_000,
+        // Sports pulls news + form + optional LLM — give the BFF room under its 90s AI budget.
+        timeoutMs: module === "sports" ? 80_000 : 25_000,
       });
-      setData(result);
+      const thesis =
+        result.why_atlas || result.pick_thesis || result.explanation || fallbackThesis || "";
+      if (!thesis && !result.bullets?.length) {
+        setData({
+          ...result,
+          why_atlas:
+            fallbackThesis ||
+            "Atlas could not build a deeper write-up for this pick yet. Market scores on the card above are still valid — try again in a moment.",
+          explanation: fallbackThesis || result.explanation,
+          source: result.source || "template",
+        });
+      } else {
+        setData({
+          ...result,
+          why_atlas: thesis,
+          pick_thesis: result.pick_thesis || thesis,
+          explanation: result.explanation || thesis,
+        });
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not load explanation");
+      if (fallbackThesis) {
+        setData({
+          why_atlas: fallbackThesis,
+          pick_thesis: fallbackThesis,
+          explanation: fallbackThesis,
+          source: "template",
+        });
+        setError(null);
+      } else {
+        setError(err instanceof Error ? err.message : "Could not load explanation");
+      }
     } finally {
       setLoading(false);
     }

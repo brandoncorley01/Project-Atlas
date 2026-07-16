@@ -408,7 +408,11 @@ export function SportsSignalCard({
 
       {/* Always visible: Ask Atlas, then standalone Analyst backing directly under it */}
       <div className="mt-5 space-y-0 border-t border-border pt-4">
-        <AtlasExplainButton module="sports" signalId={row.id} />
+        <AtlasExplainButton
+          module="sports"
+          signalId={row.id}
+          fallbackThesis={row.explanation || row.bull_case || row.analysis_summary}
+        />
         {showAnalystPicks && (
           <AnalystPickSection signalId={row.id} atlasSelection={row.selection} />
         )}
