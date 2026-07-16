@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SportsSignalCard, type SportsSignal } from "@/components/sports/SportsSignalCard";
 import { ManualParlayBuilder } from "@/components/sports/ManualParlayBuilder";
 import { SportsCategoryTabs } from "@/components/sports/SportsCategoryTabs";
@@ -49,6 +49,10 @@ export function SportsSignalsView({
   const [parlaySelection, setParlaySelection] = useState<Set<string>>(new Set());
   const [intelligenceEnabled, setIntelligenceEnabled] = useState(false);
   const { status: oddsStatus, refresh: refreshOddsStatus } = useOddsApiStatus();
+  const insightFetchFallbackUsed = useRef(false);
+  const fetchBlocked = Boolean(
+    oddsStatus?.quota_exhausted || oddsStatus?.live_fetch_allowed === false,
+  );
 
   useEffect(() => {
     void fetchIntelligenceStatus().then((s) => setIntelligenceEnabled(s.enabled));
@@ -261,7 +265,11 @@ export function SportsSignalsView({
     setLoading(null);
   }
 
-  async function refreshOpenAiPicks(opts?: { quietPrefix?: string | null }) {
+  async function refreshOpenAiPicks(opts?: {
+    quietPrefix?: string | null;
+    /** When true, skip auto-Fetch fallback (prevents Fetch→Insight→Fetch loops). */
+    skipFetchFallback?: boolean;
+  }) {
     setLoading("openai");
     if (!opts?.quietPrefix) setMessage(null);
 
@@ -305,10 +313,36 @@ export function SportsSignalsView({
       const failed = body.status === "error" || body.ok === false;
       const apiMessage =
         typeof body.message === "string" ? body.message : undefined;
+      const needsLiveOdds = Boolean(body.needs_live_odds) ||
+        Boolean(
+          failed &&
+            apiMessage &&
+            /fetch live odds|no fanduel|no.*markets available|cache/i.test(apiMessage),
+        );
       const combined =
         opts?.quietPrefix && apiMessage
           ? `${opts.quietPrefix} · ${apiMessage}`
           : apiMessage;
+
+      // Cold odds cache on a direct Insight tap: seed with Fetch, then Insight re-runs.
+      // Skip when we already arrived here from Fetch (quietPrefix) to avoid a loop.
+      if (
+        (failed || created <= 0) &&
+        needsLiveOdds &&
+        !opts?.skipFetchFallback &&
+        !opts?.quietPrefix &&
+        !insightFetchFallbackUsed.current &&
+        !fetchBlocked
+      ) {
+        insightFetchFallbackUsed.current = true;
+        setMessage(
+          "No FanDuel markets in cache — fetching live odds, then Atlas Insight will rank…",
+        );
+        setLoading(null);
+        await refreshSports("live");
+        return;
+      }
+
       setMessage(
         combined ??
           (failed
@@ -321,10 +355,11 @@ export function SportsSignalsView({
         setLoading(null);
         return;
       }
-      // Show the full Odds + Insight board — don't hide 90+ scan picks behind Insight-only.
+      insightFetchFallbackUsed.current = false;
+      // Keep the full board visible, but float Insight picks to the top so the run is obvious.
       setWindow("all");
       setFilter("all");
-      setSort("opportunity");
+      setSort("openai");
       setActiveSport(null);
       setActiveCategory(null);
       await Promise.all([
@@ -366,9 +401,6 @@ export function SportsSignalsView({
   // Auto-spend lock still allows intentional Fetch; only hard-stop when quota is gone.
   const autoSpendLocked = Boolean(
     oddsStatus?.spend_locked || oddsStatus?.auto_spend_allowed === false,
-  );
-  const fetchBlocked = Boolean(
-    oddsStatus?.quota_exhausted || oddsStatus?.live_fetch_allowed === false,
   );
   const busy = loading !== null;
 

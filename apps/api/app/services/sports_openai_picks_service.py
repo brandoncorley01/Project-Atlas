@@ -789,6 +789,7 @@ class SportsOpenAiPicksService:
                 "openai_web": True,
                 "fanduel_verified": True,
                 "graded_prior": graded_prior,
+                "needs_live_odds": True,
                 "message": catalog_meta.get("message")
                 or "No FanDuel-verified markets available. Tap Fetch live odds once, then Atlas Insight.",
             }
@@ -807,12 +808,16 @@ class SportsOpenAiPicksService:
         dampen = float(calibration.get("sports_confidence_dampen") or 0.0)
 
         ranking_catalog = catalog[:40 if fast else 64]
+        # Free RSS news is cheap — keep a short budget on the fast path so theses
+        # still get real headlines without blowing the BFF timeout.
         news_pool: list[dict[str, Any]] = []
-        if not fast:
-            try:
-                news_pool = await asyncio.wait_for(fetch_sports_news(limit_per_feed=5), timeout=8.0)
-            except Exception as exc:
-                logger.warning("Atlas Insight news prefetch skipped: %s", exc)
+        try:
+            news_pool = await asyncio.wait_for(
+                fetch_sports_news(limit_per_feed=3 if fast else 5),
+                timeout=4.0 if fast else 8.0,
+            )
+        except Exception as exc:
+            logger.warning("Atlas Insight news prefetch skipped: %s", exc)
 
         enriched = await _enrich_catalog(
             ranking_catalog,
@@ -907,6 +912,13 @@ class SportsOpenAiPicksService:
         tag_pool_categories(rows)
         try:
             saved = await self.db.insert("sports_signals", rows) if rows else []
+            # Some PostgREST responses return [] even after a successful write.
+            if rows and not saved:
+                logger.warning(
+                    "Atlas Insight insert returned empty representation — treating %s ranked rows as saved",
+                    len(rows),
+                )
+                saved = list(rows)
         except Exception as exc:
             detail = str(exc)
             logger.exception("Atlas Insight insert failed: %s", exc)
