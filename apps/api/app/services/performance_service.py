@@ -534,6 +534,7 @@ class PerformanceService:
         *,
         days: int,
         module: str | None,
+        include_by_module: bool = True,
     ) -> dict[str, Any]:
         closed = [r for r in rows if r.get("outcome") in ("win", "loss", "scratch")]
         wins = [r for r in closed if r.get("outcome") == "win"]
@@ -551,11 +552,19 @@ class PerformanceService:
         decided = len(wins) + len(losses)
         win_rate = round(len(wins) / decided * 100, 1) if decided else None
 
+        # Leaf guard — nested by_module calls must not recurse into by_module again
+        # or summary 500s with RecursionError whenever any rows exist.
         by_module: dict[str, Any] = {}
-        for mod in VALID_MODULES:
-            mod_rows = [r for r in rows if r.get("module") == mod]
-            if mod_rows:
-                by_module[mod] = self._compute_summary(mod_rows, days=days, module=mod)
+        if include_by_module:
+            for mod in VALID_MODULES:
+                mod_rows = [r for r in rows if r.get("module") == mod]
+                if mod_rows:
+                    by_module[mod] = self._compute_summary(
+                        mod_rows,
+                        days=days,
+                        module=mod,
+                        include_by_module=False,
+                    )
 
         auto_resolved = len(
             [

@@ -123,7 +123,7 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
   const [coachError, setCoachError] = useState<string | null>(null);
   const [dataSource, setDataSource] = useState<"api" | "direct" | null>(null);
   const [atlasExpanded, setAtlasExpanded] = useState(false);
-  const [showMyGraded, setShowMyGraded] = useState(false);
+  const [showMyGraded, setShowMyGraded] = useState(true);
   const [showAtlasGraded, setShowAtlasGraded] = useState(false);
   const didBootstrap = useRef(false);
   const syncInFlight = useRef(false);
@@ -153,25 +153,39 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
           credentials: creds,
         }),
       ]);
-      if (sumRes.ok && histRes.ok) {
-        setSummary(await sumRes.json());
+
+      // Prefer history even when summary fails (legacy recursion / timeout).
+      if (histRes.ok) {
         const data = await histRes.json();
-        setHistory(data.items ?? []);
-        setDataSource("api");
-        usedApi = true;
+        const items = (data.items ?? []) as PerformanceEntry[];
+        setHistory(items);
+        if (sumRes.ok) {
+          setSummary(await sumRes.json());
+          setDataSource("api");
+          usedApi = true;
+        } else if (items.length > 0) {
+          const { computeSummaryDirect } = await import("@/lib/performance-direct");
+          setSummary(computeSummaryDirect(items, 30));
+          setDataSource("direct");
+          usedApi = true;
+        }
       }
     } catch {
       /* fall through */
     }
 
     if (!usedApi) {
-      const [sum, hist] = await Promise.all([
-        fetchPerformanceSummary(30),
-        fetchPerformanceHistory(HISTORY_LIMIT),
-      ]);
-      setSummary(sum);
-      setHistory(hist);
-      setDataSource("direct");
+      try {
+        const [sum, hist] = await Promise.all([
+          fetchPerformanceSummary(30),
+          fetchPerformanceHistory(HISTORY_LIMIT),
+        ]);
+        setSummary(sum);
+        setHistory(hist);
+        setDataSource("direct");
+      } catch (err) {
+        setMessage(err instanceof Error ? err.message : "Could not load performance data");
+      }
     }
   }, []);
 
@@ -651,13 +665,36 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
         onGrade={(id) => void runResolveSector(id)}
         onUpdated={refreshSummary}
         emptyHint={
-          <>
-            Nothing waiting — save plays from Sports, Stocks, Options, or Parlays to your{" "}
-            <Link href="/watchlist" className="text-accent hover:underline">
-              watchlist
-            </Link>{" "}
-            and they show up here until graded.
-          </>
+          history.length === 0 ? (
+            <>
+              Nothing tracked yet — tap <strong className="text-foreground">Sync watchlist picks</strong>{" "}
+              above, or save plays from Sports, Stocks, Options, or Parlays to your{" "}
+              <Link href="/watchlist" className="text-accent hover:underline">
+                watchlist
+              </Link>
+              .
+            </>
+          ) : userPending.length === 0 && laneStats.atlas.pending > 0 ? (
+            <>
+              No watchlist picks waiting. Open{" "}
+              <strong className="text-foreground">Atlas scan picks</strong> above for{" "}
+              {laneStats.atlas.pending} board pick{laneStats.atlas.pending === 1 ? "" : "s"}, or save
+              more from your{" "}
+              <Link href="/watchlist" className="text-accent hover:underline">
+                watchlist
+              </Link>
+              .
+            </>
+          ) : (
+            <>
+              Nothing waiting — save plays from Sports, Stocks, Options, or Parlays to your{" "}
+              <Link href="/watchlist" className="text-accent hover:underline">
+                watchlist
+              </Link>{" "}
+              and they show up here until graded. Use <strong className="text-foreground">Change result</strong>{" "}
+              on options and parlays anytime.
+            </>
+          )
         }
       />
 
@@ -1263,6 +1300,16 @@ function OutcomeRow({
             signalId={row.signal_id}
             compact
             className="mt-2"
+            onLogged={onUpdated}
+          />
+        )}
+        {!isPending && (sector === "options" || sector === "parlay") && !editing && (
+          <LogOutcomeButtons
+            module={sector}
+            signalId={row.signal_id}
+            compact
+            className="mt-2"
+            onLogged={onUpdated}
           />
         )}
       </td>
@@ -1336,7 +1383,7 @@ function OutcomeRow({
               onClick={() => setEditing(true)}
               className="text-left text-xs font-medium text-accent hover:underline"
             >
-              Edit
+              {sector === "options" || sector === "parlay" ? "Edit result" : "Edit"}
             </button>
           )}
           {error && <span className="text-xs text-danger">{error}</span>}

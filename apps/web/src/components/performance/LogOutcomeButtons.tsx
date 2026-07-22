@@ -14,6 +14,8 @@ interface LogOutcomeButtonsProps {
   signalSnapshot?: Record<string, unknown>;
   compact?: boolean;
   className?: string;
+  /** Called after a successful grade/change so parents can refresh. */
+  onLogged?: () => void | Promise<void>;
 }
 
 interface OutcomeEntry {
@@ -30,17 +32,37 @@ function normalizeSignalId(signalId: string): string {
   return UUID_RE.test(trimmed) ? trimmed.toLowerCase() : trimmed;
 }
 
+function moduleHint(module: LogOutcomeButtonsProps["module"], compact: boolean) {
+  if (compact) {
+    return module === "options" || module === "stock" || module === "parlay"
+      ? "Close / settle?"
+      : "Result?";
+  }
+  if (module === "options") {
+    return "Closed this options position? Log win/loss so Atlas can learn — you can change it later.";
+  }
+  if (module === "parlay") {
+    return "Did this parlay hit? Log the result — you can change it later if a leg settles differently.";
+  }
+  if (module === "stock") {
+    return "Closed this position? Log win/loss so Atlas can learn.";
+  }
+  return "How did this pick turn out? Atlas learns from your results.";
+}
+
 export function LogOutcomeButtons({
   module,
   signalId,
   signalSnapshot,
   compact = false,
   className = "",
+  onLogged,
 }: LogOutcomeButtonsProps) {
   const normalizedId = normalizeSignalId(signalId);
   const [entry, setEntry] = useState<OutcomeEntry | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [changing, setChanging] = useState(false);
 
   const loadOutcome = useCallback(async () => {
     try {
@@ -63,7 +85,7 @@ export function LogOutcomeButtons({
         module,
         signalId: normalizedId,
         outcome,
-        resolutionSource: "manual",
+        resolutionSource: changing ? "manual_edit" : "manual",
         signalSnapshot,
       });
       if (!saved) {
@@ -72,15 +94,23 @@ export function LogOutcomeButtons({
         return;
       }
       setEntry(saved);
-      setMessage("Logged — Atlas will use this to improve future picks");
+      setChanging(false);
+      setMessage(
+        changing
+          ? "Result updated — Atlas will use the new outcome"
+          : "Logged — Atlas will use this to improve future picks",
+      );
       window.dispatchEvent(new Event("atlas:performance-updated"));
+      await onLogged?.();
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Backend not responding");
     }
     setLoading(false);
   }
 
-  if (entry && entry.outcome !== "pending") {
+  const graded = entry && entry.outcome !== "pending";
+
+  if (graded && !changing) {
     const auto = String(entry.resolution_source ?? "").startsWith("auto_");
     const color =
       entry.outcome === "win"
@@ -90,14 +120,30 @@ export function LogOutcomeButtons({
           : "text-muted";
     return (
       <div className={`text-xs ${className}`}>
-        <span className={`font-semibold capitalize ${color}`}>
-          {entry.outcome}
-          {entry.return_pct != null ? ` (${entry.return_pct > 0 ? "+" : ""}${entry.return_pct}%)` : ""}
-        </span>
-        {auto && <span className="ml-2 text-muted">· auto-graded</span>}
-        {!auto && entry.resolution_source === "manual" && (
-          <span className="ml-2 text-muted">· saved</span>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={`font-semibold capitalize ${color}`}>
+            {entry.outcome}
+            {entry.return_pct != null
+              ? ` (${entry.return_pct > 0 ? "+" : ""}${entry.return_pct}%)`
+              : ""}
+          </span>
+          {auto && <span className="text-muted">· auto-graded</span>}
+          {(entry.resolution_source === "manual" ||
+            entry.resolution_source === "manual_edit") && (
+            <span className="text-muted">· you</span>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              setChanging(true);
+              setMessage(null);
+            }}
+            className="font-medium text-accent hover:underline"
+          >
+            Change result
+          </button>
+        </div>
+        {message && <p className="mt-1.5 text-muted">{message}</p>}
       </div>
     );
   }
@@ -107,19 +153,17 @@ export function LogOutcomeButtons({
   return (
     <div className={className}>
       <p className="mb-1.5 text-xs text-muted">
-        {compact
-          ? module === "options" || module === "stock"
-            ? "Close position?"
-            : "Result?"
-          : module === "options" || module === "stock"
-            ? "Closed this position? Log win/loss so Atlas can learn."
-            : "How did this pick turn out? Atlas learns from your results."}
+        {changing
+          ? module === "parlay" || module === "options"
+            ? `Change this ${module === "parlay" ? "parlay" : "options"} result`
+            : "Change the logged result"
+          : moduleHint(module, compact)}
       </p>
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
           disabled={loading}
-          onClick={() => log("win")}
+          onClick={() => void log("win")}
           className={`${btn} border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10`}
         >
           Win
@@ -127,7 +171,7 @@ export function LogOutcomeButtons({
         <button
           type="button"
           disabled={loading}
-          onClick={() => log("loss")}
+          onClick={() => void log("loss")}
           className={`${btn} border-red-500/40 text-red-300 hover:bg-red-500/10`}
         >
           Loss
@@ -135,11 +179,24 @@ export function LogOutcomeButtons({
         <button
           type="button"
           disabled={loading}
-          onClick={() => log("scratch")}
+          onClick={() => void log("scratch")}
           className={`${btn} border-border text-muted hover:bg-surface-hover`}
         >
           Push / scratch
         </button>
+        {changing && (
+          <button
+            type="button"
+            disabled={loading}
+            onClick={() => {
+              setChanging(false);
+              setMessage(null);
+            }}
+            className={`${btn} border-border text-muted hover:bg-surface-hover`}
+          >
+            Cancel
+          </button>
+        )}
       </div>
       {message && <p className="mt-1.5 text-xs text-muted">{message}</p>}
     </div>
