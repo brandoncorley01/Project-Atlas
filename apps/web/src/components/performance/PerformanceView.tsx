@@ -17,6 +17,7 @@ import {
   fetchPerformanceHistory,
   fetchPerformanceSummary,
   formatWatchlistSyncMessage,
+  syncAtlasLearningAfterOutcome,
   syncWatchlistToPerformance,
   updatePerformanceOutcome,
 } from "@/lib/performance-api";
@@ -356,12 +357,18 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
     function onWatchlistUpdated() {
       void syncWatchlist(true).then(() => refreshSummary());
     }
+    function onLearningUpdated() {
+      void refreshSummary();
+      void loadCoachInsight(true);
+    }
     window.addEventListener("atlas:performance-updated", onUpdated);
     window.addEventListener("atlas:watchlist-updated", onWatchlistUpdated);
+    window.addEventListener("atlas:learning-updated", onLearningUpdated);
     return () => {
       cancelled = true;
       window.removeEventListener("atlas:performance-updated", onUpdated);
       window.removeEventListener("atlas:watchlist-updated", onWatchlistUpdated);
+      window.removeEventListener("atlas:learning-updated", onLearningUpdated);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1248,7 +1255,7 @@ function OutcomeRow({
       }
       setEditing(false);
       await onUpdated();
-      window.dispatchEvent(new CustomEvent("atlas:performance-updated"));
+      void syncAtlasLearningAfterOutcome();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not update outcome");
     } finally {
@@ -1359,10 +1366,10 @@ function OutcomeRow({
               <button
                 type="button"
                 onClick={() => void save()}
-                disabled={saving}
-                className="text-xs font-medium text-accent hover:underline disabled:opacity-50"
+                disabled={saving || !outcome}
+                className="rounded bg-accent px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-50"
               >
-                {saving ? "Saving…" : "Save"}
+                {saving ? "Saving…" : "Save result"}
               </button>
               <button
                 type="button"
