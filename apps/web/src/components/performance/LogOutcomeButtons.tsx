@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   getPerformanceOutcome,
   logPerformanceOutcome,
@@ -9,20 +9,22 @@ import {
 
 type Outcome = "win" | "loss" | "scratch";
 
-interface LogOutcomeButtonsProps {
-  module: "options" | "stock" | "sports" | "parlay";
-  signalId: string;
-  signalSnapshot?: Record<string, unknown>;
-  compact?: boolean;
-  className?: string;
-  /** Called after a successful grade/change so parents can refresh. */
-  onLogged?: () => void | Promise<void>;
-}
-
 interface OutcomeEntry {
   outcome: string;
   resolution_source?: string | null;
   return_pct?: number | null;
+}
+
+interface LogOutcomeButtonsProps {
+  module: "options" | "stock" | "sports" | "parlay";
+  signalId: string;
+  signalSnapshot?: Record<string, unknown>;
+  /** Seed from parent history so Change/Save still works if outcome fetch fails. */
+  initialOutcome?: OutcomeEntry | null;
+  compact?: boolean;
+  className?: string;
+  /** Called after a successful grade/change so parents can refresh. */
+  onLogged?: () => void | Promise<void>;
 }
 
 const UUID_RE =
@@ -34,11 +36,7 @@ function normalizeSignalId(signalId: string): string {
 }
 
 function moduleHint(module: LogOutcomeButtonsProps["module"], compact: boolean) {
-  if (compact) {
-    return module === "options" || module === "stock" || module === "parlay"
-      ? "Pick a result, then Save"
-      : "Pick a result, then Save";
-  }
+  if (compact) return "Select Win / Loss / Scratch, then Save result";
   if (module === "options") {
     return "Closed this options position? Select Win / Loss / Scratch, then Save so Atlas can learn.";
   }
@@ -55,27 +53,45 @@ export function LogOutcomeButtons({
   module,
   signalId,
   signalSnapshot,
+  initialOutcome = null,
   compact = false,
   className = "",
   onLogged,
 }: LogOutcomeButtonsProps) {
   const normalizedId = normalizeSignalId(signalId);
-  const [entry, setEntry] = useState<OutcomeEntry | null>(null);
+  const [entry, setEntry] = useState<OutcomeEntry | null>(initialOutcome);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [changing, setChanging] = useState(false);
   const [draft, setDraft] = useState<Outcome | null>(null);
-  const [returnPct, setReturnPct] = useState("");
+  const [returnPct, setReturnPct] = useState(
+    initialOutcome?.return_pct != null ? String(initialOutcome.return_pct) : "",
+  );
+  const changingRef = useRef(changing);
+  changingRef.current = changing;
+
+  const seedKey = `${initialOutcome?.outcome ?? ""}:${initialOutcome?.return_pct ?? ""}:${initialOutcome?.resolution_source ?? ""}`;
+
+  useEffect(() => {
+    if (!initialOutcome || changingRef.current) return;
+    setEntry(initialOutcome);
+    if (initialOutcome.return_pct != null) {
+      setReturnPct(String(initialOutcome.return_pct));
+    }
+  }, [seedKey]); // eslint-disable-line react-hooks/exhaustive-deps -- seed by value fingerprint
 
   const loadOutcome = useCallback(async () => {
     try {
       const row = await getPerformanceOutcome(module, normalizedId);
-      setEntry(row);
-      if (row?.return_pct != null) {
-        setReturnPct(String(row.return_pct));
+      if (changingRef.current) return;
+      if (row) {
+        setEntry(row);
+        if (row.return_pct != null) {
+          setReturnPct(String(row.return_pct));
+        }
       }
     } catch {
-      /* non-fatal */
+      /* keep seeded entry */
     }
   }, [module, normalizedId]);
 
@@ -115,7 +131,6 @@ export function LogOutcomeButtons({
       setDraft(null);
       setMessage("Saved — Atlas learning updated. Future picks will use this result.");
       await onLogged?.();
-      // Ensure learning rollup runs even if the API path skipped it.
       void syncAtlasLearningAfterOutcome();
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Backend not responding");
@@ -162,7 +177,7 @@ export function LogOutcomeButtons({
               setReturnPct(entry.return_pct != null ? String(entry.return_pct) : "");
               setMessage(null);
             }}
-            className="font-medium text-accent hover:underline"
+            className="rounded-md border border-accent/40 bg-accent/10 px-2.5 py-1 font-semibold text-accent hover:bg-accent/20"
           >
             Change result
           </button>
@@ -173,14 +188,14 @@ export function LogOutcomeButtons({
   }
 
   const choiceBtn =
-    "rounded-md border px-2.5 py-1 text-xs font-medium disabled:opacity-50 transition-colors";
+    "rounded-md border px-2.5 py-1.5 text-xs font-medium disabled:opacity-50 transition-colors";
   const selected = (value: Outcome) =>
     draft === value
       ? "ring-2 ring-offset-1 ring-offset-background ring-accent/60 bg-accent/10"
       : "";
 
   return (
-    <div className={className}>
+    <div className={`min-w-[12rem] ${className}`}>
       <p className="mb-1.5 text-xs text-muted">
         {changing
           ? "Select the corrected result, then Save — Atlas learning updates immediately."
@@ -190,7 +205,10 @@ export function LogOutcomeButtons({
         <button
           type="button"
           disabled={loading}
-          onClick={() => setDraft("win")}
+          onClick={() => {
+            setDraft("win");
+            setMessage(null);
+          }}
           aria-pressed={draft === "win"}
           className={`${choiceBtn} border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10 ${selected("win")}`}
         >
@@ -199,7 +217,10 @@ export function LogOutcomeButtons({
         <button
           type="button"
           disabled={loading}
-          onClick={() => setDraft("loss")}
+          onClick={() => {
+            setDraft("loss");
+            setMessage(null);
+          }}
           aria-pressed={draft === "loss"}
           className={`${choiceBtn} border-red-500/40 text-red-300 hover:bg-red-500/10 ${selected("loss")}`}
         >
@@ -208,7 +229,10 @@ export function LogOutcomeButtons({
         <button
           type="button"
           disabled={loading}
-          onClick={() => setDraft("scratch")}
+          onClick={() => {
+            setDraft("scratch");
+            setMessage(null);
+          }}
           aria-pressed={draft === "scratch"}
           className={`${choiceBtn} border-border text-muted hover:bg-surface-hover ${selected("scratch")}`}
         >
@@ -230,14 +254,18 @@ export function LogOutcomeButtons({
         </label>
       )}
 
-      <div className="mt-2 flex flex-wrap gap-2">
+      <div className="mt-2 flex flex-wrap items-center gap-2">
         <button
           type="button"
           disabled={loading || !draft}
           onClick={() => void save()}
-          className="rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+          className={
+            draft
+              ? "rounded-md bg-accent px-4 py-2 text-xs font-bold text-white shadow-sm hover:opacity-90 disabled:opacity-50"
+              : "rounded-md border border-dashed border-border px-4 py-2 text-xs font-semibold text-muted disabled:opacity-60"
+          }
         >
-          {loading ? "Saving…" : "Save result"}
+          {loading ? "Saving…" : draft ? "Save result" : "Save result (pick one first)"}
         </button>
         {changing && (
           <button
