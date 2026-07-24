@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
 import { DataStatusBadge, FreshnessLine } from "@/components/market-intelligence/DataStatusBadge";
 import { HeatmapPanel } from "@/components/market-intelligence/HeatmapPanel";
 import { OptionsTradeCard } from "@/components/market-intelligence/OptionsTradeCard";
@@ -16,6 +15,14 @@ import {
   fetchSmartMoney,
   type Freshness,
 } from "@/lib/market-intelligence-api";
+import {
+  CLIENT_ALERTS,
+  CLIENT_FIXTURE_FRESHNESS,
+  CLIENT_FLOW_CARDS,
+  CLIENT_HEATMAP,
+  CLIENT_PERFORMANCE,
+  CLIENT_SMART_MONEY,
+} from "@/lib/market-intelligence-fixtures";
 
 const TABS = [
   { id: "flow", label: "Flow Scanner" },
@@ -30,21 +37,21 @@ const TABS = [
 type TabId = (typeof TABS)[number]["id"];
 
 export function OptionsIntelligenceView() {
-  const search = useSearchParams();
-  const initial = (search.get("tab") as TabId) || "flow";
-  const [tab, setTab] = useState<TabId>(TABS.some((t) => t.id === initial) ? initial : "flow");
+  const [tab, setTab] = useState<TabId>("flow");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [freshness, setFreshness] = useState<Freshness | null>(null);
-  const [disclaimer, setDisclaimer] = useState<string | null>(null);
-  const [flow, setFlow] = useState<Record<string, unknown>[]>([]);
+  const [freshness, setFreshness] = useState<Freshness | null>(CLIENT_FIXTURE_FRESHNESS);
+  const [disclaimer, setDisclaimer] = useState<string | null>(
+    "Loading live provider… showing simulated fixtures until API responds.",
+  );
+  const [flow, setFlow] = useState<Record<string, unknown>[]>(CLIENT_FLOW_CARDS);
   const [lowPremium, setLowPremium] = useState<Record<string, unknown>[]>([]);
-  const [smartMoney, setSmartMoney] = useState<Record<string, unknown>[]>([]);
-  const [heatmap, setHeatmap] = useState<Record<string, unknown> | null>(null);
-  const [history, setHistory] = useState<Record<string, unknown>[]>([]);
-  const [performance, setPerformance] = useState<Record<string, unknown> | null>(null);
-  const [alerts, setAlerts] = useState<Record<string, unknown>[]>([]);
-  const [usingFixture, setUsingFixture] = useState(false);
+  const [smartMoney, setSmartMoney] = useState<Record<string, unknown>[]>(CLIENT_SMART_MONEY);
+  const [heatmap, setHeatmap] = useState<Record<string, unknown> | null>(CLIENT_HEATMAP);
+  const [history, setHistory] = useState<Record<string, unknown>[]>(CLIENT_FLOW_CARDS);
+  const [performance, setPerformance] = useState<Record<string, unknown> | null>(CLIENT_PERFORMANCE);
+  const [alerts, setAlerts] = useState<Record<string, unknown>[]>(CLIENT_ALERTS.items);
+  const [usingFixture, setUsingFixture] = useState(true);
 
   const load = useCallback(async (active: TabId) => {
     setLoading(true);
@@ -52,51 +59,45 @@ export function OptionsIntelligenceView() {
     try {
       if (active === "flow") {
         const data = await fetchOptionsFlow();
-        if (!data) throw new Error("Could not load flow scanner");
-        setFlow(data.items ?? []);
-        setFreshness(data.freshness ?? null);
+        setFlow(data.items ?? CLIENT_FLOW_CARDS);
+        setFreshness(data.freshness ?? CLIENT_FIXTURE_FRESHNESS);
         setDisclaimer(data.disclaimer ?? null);
         setUsingFixture(data.source === "client_fixture");
       } else if (active === "low-premium") {
         const data = await fetchLowPremium();
-        if (!data) throw new Error("Could not load low-premium opportunities");
-        setLowPremium((data.items ?? []).map((i) => ({ ...(i.event as object), ...(i as object) })));
-        setFreshness(data.freshness ?? null);
+        setLowPremium(data.items ?? []);
+        setFreshness(data.freshness ?? CLIENT_FIXTURE_FRESHNESS);
         setDisclaimer(data.disclaimer ?? null);
         setUsingFixture(data.source === "client_fixture");
       } else if (active === "smart-money") {
         const data = await fetchSmartMoney();
-        if (!data) throw new Error("Could not load smart-money watchlist");
-        setSmartMoney(data.items ?? []);
-        setFreshness(data.freshness ?? null);
+        setSmartMoney(data.items ?? CLIENT_SMART_MONEY);
+        setFreshness(data.freshness ?? CLIENT_FIXTURE_FRESHNESS);
         setDisclaimer(data.disclaimer ?? null);
         setUsingFixture(data.source === "client_fixture");
       } else if (active === "heatmap") {
         const data = await fetchOptionsHeatmap();
-        if (!data) throw new Error("Could not load options heatmap");
-        setHeatmap(data);
-        setFreshness((data.freshness as Freshness) ?? null);
+        setHeatmap(data ?? CLIENT_HEATMAP);
+        setFreshness((data.freshness as Freshness) ?? CLIENT_FIXTURE_FRESHNESS);
         setDisclaimer(String(data.disclaimer ?? ""));
         setUsingFixture(data.source === "client_fixture");
       } else if (active === "history") {
         const data = await fetchSignalHistory();
-        if (!data) throw new Error("Could not load signal history");
-        setHistory(data.items ?? []);
-        setFreshness(data.freshness ?? null);
+        setHistory(data.items ?? CLIENT_FLOW_CARDS);
+        setFreshness(data.freshness ?? CLIENT_FIXTURE_FRESHNESS);
         setUsingFixture(data.source === "client_fixture");
       } else if (active === "performance") {
         const data = await fetchOptionsPerformance();
-        if (!data) throw new Error("Could not load performance analytics");
-        setPerformance(data);
+        setPerformance(data ?? CLIENT_PERFORMANCE);
         setUsingFixture(data.source === "client_fixture");
       } else if (active === "alerts") {
         const data = await fetchAlertSettings();
-        if (!data) throw new Error("Could not load alert settings");
-        setAlerts(data.items ?? []);
+        setAlerts(data.items ?? CLIENT_ALERTS.items);
         setUsingFixture(data.source === "client_fixture");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Load failed");
+      setUsingFixture(true);
     } finally {
       setLoading(false);
     }
@@ -107,7 +108,31 @@ export function OptionsIntelligenceView() {
   }, [tab, load]);
 
   const lowPremiumCards = useMemo(() => {
-    return lowPremium.map((row) => {
+    const rows = lowPremium.length
+      ? lowPremium
+      : CLIENT_FLOW_CARDS.filter((c) => Number(c.current_premium) <= 5).map((card) => ({
+          event: {
+            underlying: card.ticker,
+            expiration: card.expiration,
+            strike: card.strike,
+            option_type: String(card.contract).includes("PUT") ? "put" : "call",
+            contract_price: card.current_premium,
+            midpoint: card.current_premium,
+            estimated_premium: card.estimated_total_premium,
+            contract_volume: card.volume,
+            open_interest: card.open_interest,
+            volume_oi_ratio: card.volume_oi_ratio,
+            data_status: "simulated",
+            idempotency_key: card.idempotency_key,
+          },
+          direction: card.direction,
+          score: card.score,
+          rank_score: card.unusual_score,
+          spread_pct: card.bid_ask_spread_pct,
+          review_zone: card.suggested_review_zone,
+        }));
+
+    return rows.map((row) => {
       if (row.event && typeof row.event === "object") {
         const event = row.event as Record<string, unknown>;
         const score = row.score as Record<string, unknown> | undefined;
@@ -130,9 +155,10 @@ export function OptionsIntelligenceView() {
           suggested_review_zone: row.review_zone,
           data_status: event.data_status,
           score,
+          idempotency_key: event.idempotency_key,
         } as Record<string, unknown>;
       }
-      return row;
+      return row as Record<string, unknown>;
     });
   }, [lowPremium]);
 
@@ -150,16 +176,13 @@ export function OptionsIntelligenceView() {
         </div>
         {usingFixture && (
           <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
-            Preview mode: showing <strong>simulated</strong> fixtures because the Market Intelligence
-            API is not on this environment yet. Merge PR #8 and deploy the API (plus apply the
-            Supabase migration) for live/delayed provider data. Direct links:{" "}
-            <Link href="/options-intelligence" className="underline">
-              Options Intelligence
-            </Link>{" "}
-            ·{" "}
+            Showing <strong>simulated</strong> fixtures while the Market Intelligence API is
+            unreachable or still deploying. Content below is intentional demo data — not live tape.
+            Also open{" "}
             <Link href="/market-intelligence" className="underline">
               Market Intelligence
             </Link>
+            .
           </div>
         )}
       </header>
@@ -181,41 +204,37 @@ export function OptionsIntelligenceView() {
         ))}
       </div>
 
-      {loading && <p className="text-sm text-muted">Loading…</p>}
+      {loading && <p className="text-xs text-muted">Refreshing from API…</p>}
       {error && (
         <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">
-          {error}
+          {error} — continuing with simulated fixtures.
         </div>
       )}
       {disclaimer && <p className="text-xs text-muted">{disclaimer}</p>}
 
-      {!loading && tab === "flow" && (
+      {tab === "flow" && (
         <div className="grid gap-3">
           {flow.map((card) => (
             <OptionsTradeCard key={String(card.idempotency_key ?? card.contract)} card={card} />
           ))}
-          {flow.length === 0 && <EmptyState message="No flow events available from the active provider." />}
         </div>
       )}
 
-      {!loading && tab === "low-premium" && (
+      {tab === "low-premium" && (
         <div className="grid gap-3">
           {lowPremiumCards.map((card, idx) => (
             <OptionsTradeCard key={String(card.idempotency_key ?? idx)} card={card} />
           ))}
-          {lowPremiumCards.length === 0 && (
-            <EmptyState message="No contracts passed liquidity / unusualness filters." />
-          )}
         </div>
       )}
 
-      {!loading && tab === "smart-money" && (
+      {tab === "smart-money" && (
         <div className="grid gap-3">
           {smartMoney.map((row) => (
             <article key={String(row.underlying)} className="rounded-xl border border-border bg-surface/60 p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <h3 className="text-base font-semibold">{String(row.underlying)}</h3>
-                <DataStatusBadge status={String(row.data_status ?? "")} />
+                <DataStatusBadge status={String(row.data_status ?? "simulated")} />
               </div>
               <p className="mt-1 text-sm font-medium text-foreground">{String(row.label)}</p>
               <p className="mt-2 text-xs text-muted">
@@ -227,14 +246,13 @@ export function OptionsIntelligenceView() {
                   <li key={e}>• {e}</li>
                 ))}
               </ul>
-              <p className="mt-2 text-[11px] text-amber-200/80">{String(row.disclaimer)}</p>
+              <p className="mt-2 text-[11px] text-amber-200/80">{String(row.disclaimer ?? "")}</p>
             </article>
           ))}
-          {smartMoney.length === 0 && <EmptyState message="No concentrated activity clusters yet." />}
         </div>
       )}
 
-      {!loading && tab === "heatmap" && heatmap && (
+      {tab === "heatmap" && heatmap && (
         <HeatmapPanel
           title="Options Bias Heatmap"
           subtitle="Color reflects directional evidence — not raw call/put volume alone."
@@ -244,16 +262,15 @@ export function OptionsIntelligenceView() {
         />
       )}
 
-      {!loading && tab === "history" && (
+      {tab === "history" && (
         <div className="grid gap-3">
           {history.map((card) => (
             <OptionsTradeCard key={String(card.idempotency_key ?? card.contract)} card={card} />
           ))}
-          {history.length === 0 && <EmptyState message="No qualified signals persisted yet." />}
         </div>
       )}
 
-      {!loading && tab === "performance" && performance && (
+      {tab === "performance" && performance && (
         <div className="rounded-xl border border-border bg-surface/60 p-4 text-sm">
           <p className="font-medium">Outcome engine ready</p>
           <pre className="mt-3 overflow-x-auto rounded-lg bg-background/60 p-3 text-xs text-muted">
@@ -262,7 +279,7 @@ export function OptionsIntelligenceView() {
         </div>
       )}
 
-      {!loading && tab === "alerts" && (
+      {tab === "alerts" && (
         <div className="overflow-x-auto rounded-xl border border-border">
           <table className="w-full text-left text-sm">
             <thead className="bg-background/40 text-xs text-muted">
@@ -284,19 +301,8 @@ export function OptionsIntelligenceView() {
               ))}
             </tbody>
           </table>
-          <p className="px-3 py-2 text-xs text-muted">
-            Simulated alerts are blocked outside development mode.
-          </p>
         </div>
       )}
-    </div>
-  );
-}
-
-function EmptyState({ message }: { message: string }) {
-  return (
-    <div className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted">
-      {message}
     </div>
   );
 }

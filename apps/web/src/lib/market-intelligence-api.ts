@@ -11,11 +11,18 @@ import {
   CLIENT_WEATHER,
 } from "@/lib/market-intelligence-fixtures";
 
+/** Fail fast so UI never hangs on a cold/missing Render API. */
+const MI_FETCH_TIMEOUT_MS = 8_000;
+
 async function getToken() {
   if (usesBffProxy()) return undefined;
-  const { createClient } = await import("@/lib/supabase/client");
-  const { data } = await createClient().auth.getSession();
-  return data.session?.access_token ?? undefined;
+  try {
+    const { createClient } = await import("@/lib/supabase/client");
+    const { data } = await createClient().auth.getSession();
+    return data.session?.access_token ?? undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function init(token?: string, method = "GET", body?: unknown): RequestInit {
@@ -28,6 +35,7 @@ function init(token?: string, method = "GET", body?: unknown): RequestInit {
     credentials: usesBffProxy() ? "include" : "same-origin",
     cache: "no-store",
     body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(MI_FETCH_TIMEOUT_MS),
   };
 }
 
@@ -43,8 +51,8 @@ export type Freshness = {
 export type MiSource = "api" | "client_fixture";
 
 async function miFetch<T>(path: string, method = "GET", body?: unknown): Promise<T | null> {
-  const token = await getToken();
   try {
+    const token = await getToken();
     const res = await fetch(`${getApiUrl()}/market-intelligence${path}`, init(token, method, body));
     if (!res.ok) return null;
     return (await res.json()) as T;
@@ -85,7 +93,7 @@ export async function fetchOptionsFlow(limit = 50) {
       items: CLIENT_FLOW_CARDS.slice(0, limit),
       freshness: CLIENT_FIXTURE_FRESHNESS,
       disclaimer:
-        "Showing simulated client fixtures because the Market Intelligence API is not reachable yet (PR backend / Render deploy pending).",
+        "Showing simulated fixtures (API unreachable or still deploying). Data is not live.",
     },
     "client_fixture",
   );

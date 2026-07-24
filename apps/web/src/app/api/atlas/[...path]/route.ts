@@ -18,6 +18,8 @@ function proxyTimeoutFor(subpath: string): number {
   if (subpath.startsWith("ai/")) return AI_PROXY_TIMEOUT_MS;
   if (subpath === "signals/sports/events") return INSIGHT_SEARCH_PROXY_TIMEOUT_MS;
   if (subpath === "dashboard") return DASHBOARD_PROXY_TIMEOUT_MS;
+  // Market/Options Intelligence should fail fast to client fixtures instead of hanging.
+  if (subpath.startsWith("market-intelligence")) return 12_000;
   if (
     subpath === "engine/refresh-sports-openai"
     || subpath === "engine/refresh-sports"
