@@ -27,6 +27,20 @@ const MODULES = [
     activeClass: "border-sky-500 bg-sky-500/20 text-sky-200",
   },
   {
+    href: "/options-intelligence",
+    label: "Options Intel",
+    emoji: "◐",
+    color: "hover:border-cyan-500/50 hover:bg-cyan-500/10",
+    activeClass: "border-cyan-500 bg-cyan-500/20 text-cyan-200",
+  },
+  {
+    href: "/market-intelligence",
+    label: "Market Intel",
+    emoji: "▣",
+    color: "hover:border-teal-500/50 hover:bg-teal-500/10",
+    activeClass: "border-teal-500 bg-teal-500/20 text-teal-200",
+  },
+  {
     href: "/stocks",
     label: "Stocks",
     emoji: "📊",

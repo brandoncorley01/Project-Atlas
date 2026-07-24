@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { OptionSignalCard, type OptionSignal } from "@/components/options/OptionSignalCard";
@@ -242,6 +243,16 @@ export function OptionsSignalsView({
             : "Short-dated contracts reprice faster than stocks — size carefully."
         }
       />
+
+      <Link
+        href="/options-intelligence"
+        className="block rounded-xl border border-cyan-500/40 bg-cyan-500/10 px-4 py-3 transition-colors hover:bg-cyan-500/15"
+      >
+        <p className="text-sm font-semibold text-foreground">Options Intelligence →</p>
+        <p className="mt-0.5 text-xs text-muted">
+          Flow scanner, low-premium opportunities, concentrated activity, and options heatmaps.
+        </p>
+      </Link>
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm text-muted">
