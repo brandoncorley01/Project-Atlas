@@ -27,7 +27,7 @@ def _require_enabled() -> None:
 class LowPremiumFilterBody(BaseModel):
     max_contract_price: float = Field(default=5.0, gt=0, le=50)
     max_position_risk: float = Field(default=500.0, gt=0)
-    option_type: str | None = Field(default=None, pattern="^(call|put)$")
+    option_type: str | None = None
     min_dte: int = Field(default=7, ge=1, le=365)
     max_dte: int = Field(default=45, ge=1, le=730)
     min_open_interest: int = Field(default=200, ge=0)
@@ -35,9 +35,16 @@ class LowPremiumFilterBody(BaseModel):
     max_spread_pct: float = Field(default=12.0, gt=0, le=100)
     min_unusual_score: float = Field(default=55.0, ge=0, le=100)
     min_confidence: float = Field(default=45.0, ge=0, le=100)
-    min_delta: float | None = Field(default=0.20, ge=0, le=1)
+    min_delta: float | None = 0.20
     max_otm_pct: float = Field(default=0.12, ge=0, le=1)
     require_catalyst: bool = False
+
+    def normalized(self) -> dict:
+        data = self.model_dump(exclude_none=True)
+        opt = data.get("option_type")
+        if opt is not None and opt not in ("call", "put"):
+            data.pop("option_type", None)
+        return data
 
 
 class PositionEvalBody(BaseModel):
@@ -93,7 +100,7 @@ async def low_premium(
     token: str = Depends(get_access_token),
 ) -> dict:
     _require_enabled()
-    filters = body.model_dump(exclude_none=True) if body else None
+    filters = body.normalized() if body else None
     return await _svc(user_id, token).low_premium(filters)
 
 

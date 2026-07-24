@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
 import { DataStatusBadge, FreshnessLine } from "@/components/market-intelligence/DataStatusBadge";
 import { HeatmapPanel } from "@/components/market-intelligence/HeatmapPanel";
 import {
@@ -15,6 +14,13 @@ import {
   fetchSmartMoneyHeatmap,
   type Freshness,
 } from "@/lib/market-intelligence-api";
+import {
+  CLIENT_EXIT_HEATMAP,
+  CLIENT_FIXTURE_FRESHNESS,
+  CLIENT_HEATMAP,
+  CLIENT_SECTOR_ROTATION,
+  CLIENT_WEATHER,
+} from "@/lib/market-intelligence-fixtures";
 
 const TABS = [
   { id: "heatmap", label: "Market Heatmap" },
@@ -29,20 +35,22 @@ const TABS = [
 type TabId = (typeof TABS)[number]["id"];
 
 export function MarketIntelligenceView() {
-  const search = useSearchParams();
-  const initial = (search.get("tab") as TabId) || "weather";
-  const [tab, setTab] = useState<TabId>(TABS.some((t) => t.id === initial) ? initial : "weather");
+  const [tab, setTab] = useState<TabId>("weather");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [freshness, setFreshness] = useState<Freshness | null>(null);
-  const [heatmap, setHeatmap] = useState<Record<string, unknown> | null>(null);
-  const [rotation, setRotation] = useState<Record<string, unknown>[]>([]);
-  const [optionsBias, setOptionsBias] = useState<Record<string, unknown> | null>(null);
-  const [smartMoney, setSmartMoney] = useState<Record<string, unknown> | null>(null);
-  const [exitMap, setExitMap] = useState<Record<string, unknown> | null>(null);
-  const [weather, setWeather] = useState<Record<string, unknown> | null>(null);
-  const [replay, setReplay] = useState<Record<string, unknown> | null>(null);
-  const [usingFixture, setUsingFixture] = useState(false);
+  const [freshness, setFreshness] = useState<Freshness | null>(CLIENT_FIXTURE_FRESHNESS);
+  const [heatmap, setHeatmap] = useState<Record<string, unknown> | null>(CLIENT_HEATMAP);
+  const [rotation, setRotation] = useState<Record<string, unknown>[]>(CLIENT_SECTOR_ROTATION.items);
+  const [optionsBias, setOptionsBias] = useState<Record<string, unknown> | null>(CLIENT_HEATMAP);
+  const [smartMoney, setSmartMoney] = useState<Record<string, unknown> | null>(CLIENT_HEATMAP);
+  const [exitMap, setExitMap] = useState<Record<string, unknown> | null>(CLIENT_EXIT_HEATMAP);
+  const [weather, setWeather] = useState<Record<string, unknown> | null>(CLIENT_WEATHER);
+  const [replay, setReplay] = useState<Record<string, unknown> | null>({
+    available: false,
+    outcome_engine_ready: true,
+    message: "Historical replay needs persisted snapshots after migration + API deploy.",
+  });
+  const [usingFixture, setUsingFixture] = useState(true);
 
   const load = useCallback(async (active: TabId) => {
     setLoading(true);
@@ -50,48 +58,42 @@ export function MarketIntelligenceView() {
     try {
       if (active === "heatmap") {
         const data = await fetchMarketHeatmap();
-        if (!data) throw new Error("Could not load market heatmap");
-        setHeatmap(data);
-        setFreshness((data.freshness as Freshness) ?? null);
+        setHeatmap(data ?? CLIENT_HEATMAP);
+        setFreshness((data.freshness as Freshness) ?? CLIENT_FIXTURE_FRESHNESS);
         setUsingFixture(data.source === "client_fixture");
       } else if (active === "rotation") {
         const data = await fetchSectorRotation();
-        if (!data) throw new Error("Could not load sector rotation");
-        setRotation(data.items ?? []);
-        setFreshness(data.freshness ?? null);
+        setRotation(data.items ?? CLIENT_SECTOR_ROTATION.items);
+        setFreshness(data.freshness ?? CLIENT_FIXTURE_FRESHNESS);
         setUsingFixture(data.source === "client_fixture");
       } else if (active === "options-bias") {
         const bias = await fetchOptionsHeatmap();
-        if (!bias) throw new Error("Could not load options bias heatmap");
-        setOptionsBias(bias);
-        setFreshness((bias.freshness as Freshness) ?? null);
+        setOptionsBias(bias ?? CLIENT_HEATMAP);
+        setFreshness((bias.freshness as Freshness) ?? CLIENT_FIXTURE_FRESHNESS);
         setUsingFixture(bias.source === "client_fixture");
       } else if (active === "smart-money") {
         const data = await fetchSmartMoneyHeatmap();
-        if (!data) throw new Error("Could not load smart-money heatmap");
-        setSmartMoney(data);
-        setFreshness((data.freshness as Freshness) ?? null);
+        setSmartMoney(data ?? CLIENT_HEATMAP);
+        setFreshness((data.freshness as Freshness) ?? CLIENT_FIXTURE_FRESHNESS);
         setUsingFixture(data.source === "client_fixture");
       } else if (active === "exit") {
         const data = await fetchPortfolioExitHeatmap();
-        if (!data) throw new Error("Could not load portfolio exit heatmap");
-        setExitMap(data);
-        setFreshness((data.freshness as Freshness) ?? null);
+        setExitMap(data ?? CLIENT_EXIT_HEATMAP);
+        setFreshness((data.freshness as Freshness) ?? CLIENT_FIXTURE_FRESHNESS);
         setUsingFixture(data.source === "client_fixture");
       } else if (active === "weather") {
         const data = await fetchMarketWeather();
-        if (!data) throw new Error("Could not load market weather");
-        setWeather(data);
-        setFreshness((data.freshness as Freshness) ?? null);
+        setWeather(data ?? CLIENT_WEATHER);
+        setFreshness((data.freshness as Freshness) ?? CLIENT_FIXTURE_FRESHNESS);
         setUsingFixture(data.source === "client_fixture");
       } else if (active === "replay") {
         const data = await fetchHistoricalReplay();
-        if (!data) throw new Error("Could not load replay status");
         setReplay(data);
         setUsingFixture(data.source === "client_fixture");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Load failed");
+      setUsingFixture(true);
     } finally {
       setLoading(false);
     }
@@ -115,17 +117,8 @@ export function MarketIntelligenceView() {
         </div>
         {usingFixture && (
           <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
-            Preview mode: showing <strong>simulated</strong> fixtures because the Market Intelligence
-            API is not on this environment yet. Open this page on the{" "}
-            <a
-              className="underline"
-              href="https://project-atlas-web-git-cur-e03cfb-brandoncorley01-5410s-projects.vercel.app/market-intelligence"
-              target="_blank"
-              rel="noreferrer"
-            >
-              PR preview
-            </a>{" "}
-            or merge PR #8 and deploy API + migration. Also see{" "}
+            Showing <strong>simulated</strong> fixtures while the Market Intelligence API is
+            unreachable or still deploying. Also see{" "}
             <Link href="/options-intelligence" className="underline">
               Options Intelligence
             </Link>
@@ -151,24 +144,24 @@ export function MarketIntelligenceView() {
         ))}
       </div>
 
-      {loading && <p className="text-sm text-muted">Loading…</p>}
+      {loading && <p className="text-xs text-muted">Refreshing from API…</p>}
       {error && (
         <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">
-          {error}
+          {error} — continuing with simulated fixtures.
         </div>
       )}
 
-      {!loading && tab === "heatmap" && heatmap && (
+      {tab === "heatmap" && heatmap && (
         <HeatmapPanel
           title="Market Heatmap"
-          subtitle="Drill into Options Intelligence from notable names on your watchlist flow."
+          subtitle="Drill into Options Intelligence from notable names."
           sectors={heatmap.sectors as never[]}
           tableFallback={heatmap.table_fallback as never[]}
           legend={heatmap.legend as never}
         />
       )}
 
-      {!loading && tab === "rotation" && (
+      {tab === "rotation" && (
         <div className="overflow-x-auto rounded-xl border border-border">
           <table className="w-full text-left text-sm">
             <thead className="bg-background/40 text-xs text-muted">
@@ -192,19 +185,12 @@ export function MarketIntelligenceView() {
                   </td>
                 </tr>
               ))}
-              {rotation.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="px-3 py-6 text-center text-muted">
-                    Insufficient sector data.
-                  </td>
-                </tr>
-              )}
             </tbody>
           </table>
         </div>
       )}
 
-      {!loading && tab === "options-bias" && optionsBias && (
+      {tab === "options-bias" && optionsBias && (
         <HeatmapPanel
           title="Options Bias Heatmap"
           sectors={optionsBias.sectors as never[]}
@@ -213,7 +199,7 @@ export function MarketIntelligenceView() {
         />
       )}
 
-      {!loading && tab === "smart-money" && smartMoney && (
+      {tab === "smart-money" && smartMoney && (
         <HeatmapPanel
           title="Smart-Money Heatmap"
           subtitle="Tile size = qualifying premium. Not institutional identity."
@@ -223,7 +209,7 @@ export function MarketIntelligenceView() {
         />
       )}
 
-      {!loading && tab === "exit" && exitMap && (
+      {tab === "exit" && exitMap && (
         <div className="space-y-4">
           <HeatmapPanel
             title="Portfolio Exit Heatmap"
@@ -250,7 +236,7 @@ export function MarketIntelligenceView() {
         </div>
       )}
 
-      {!loading && tab === "weather" && weather && (
+      {tab === "weather" && weather && (
         <section className="rounded-xl border border-border bg-surface/60 p-5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-xl font-semibold">{String(weather.label)}</h2>
@@ -289,7 +275,7 @@ export function MarketIntelligenceView() {
         </section>
       )}
 
-      {!loading && tab === "replay" && replay && (
+      {tab === "replay" && replay && (
         <div className="rounded-xl border border-dashed border-border p-5 text-sm text-muted">
           <p className="font-medium text-foreground">Historical Replay</p>
           <p className="mt-2">{String(replay.message)}</p>
