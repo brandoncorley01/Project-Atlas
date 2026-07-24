@@ -1,4 +1,15 @@
 import { apiRequestHeaders, getApiUrl, usesBffProxy } from "@/lib/api-url";
+import {
+  CLIENT_ALERTS,
+  CLIENT_EXIT_HEATMAP,
+  CLIENT_FIXTURE_FRESHNESS,
+  CLIENT_FLOW_CARDS,
+  CLIENT_HEATMAP,
+  CLIENT_PERFORMANCE,
+  CLIENT_SECTOR_ROTATION,
+  CLIENT_SMART_MONEY,
+  CLIENT_WEATHER,
+} from "@/lib/market-intelligence-fixtures";
 
 async function getToken() {
   if (usesBffProxy()) return undefined;
@@ -20,6 +31,17 @@ function init(token?: string, method = "GET", body?: unknown): RequestInit {
   };
 }
 
+export type Freshness = {
+  provider_name?: string;
+  data_timestamp?: string | null;
+  evaluation_timestamp?: string;
+  data_status?: string;
+  data_freshness?: string;
+  missing_fields?: string[];
+};
+
+export type MiSource = "api" | "client_fixture";
+
 async function miFetch<T>(path: string, method = "GET", body?: unknown): Promise<T | null> {
   const token = await getToken();
   try {
@@ -31,83 +53,188 @@ async function miFetch<T>(path: string, method = "GET", body?: unknown): Promise
   }
 }
 
-export type Freshness = {
-  provider_name?: string;
-  data_timestamp?: string | null;
-  evaluation_timestamp?: string;
-  data_status?: string;
-  data_freshness?: string;
-  missing_fields?: string[];
-};
+function withSource<T extends Record<string, unknown>>(payload: T, source: MiSource): T & { source: MiSource } {
+  return { ...payload, source };
+}
 
 export async function fetchMiStatus() {
-  return miFetch<Record<string, unknown>>("/status");
+  const data = await miFetch<Record<string, unknown>>("/status");
+  if (data) return withSource(data, "api");
+  return withSource(
+    {
+      enabled: true,
+      active_provider: {
+        provider_id: "client_fixture",
+        provider_name: "Atlas Client Fixture",
+        default_data_status: "simulated",
+        active: true,
+      },
+      note: "API market-intelligence routes unavailable — using client fixtures.",
+    },
+    "client_fixture",
+  );
 }
 
 export async function fetchOptionsFlow(limit = 50) {
-  return miFetch<{ items: Record<string, unknown>[]; freshness?: Freshness; disclaimer?: string }>(
+  const data = await miFetch<{ items: Record<string, unknown>[]; freshness?: Freshness; disclaimer?: string }>(
     `/options/flow?limit=${limit}`,
+  );
+  if (data?.items?.length) return withSource(data, "api");
+  return withSource(
+    {
+      items: CLIENT_FLOW_CARDS.slice(0, limit),
+      freshness: CLIENT_FIXTURE_FRESHNESS,
+      disclaimer:
+        "Showing simulated client fixtures because the Market Intelligence API is not reachable yet (PR backend / Render deploy pending).",
+    },
+    "client_fixture",
   );
 }
 
 export async function fetchLowPremium(filters?: Record<string, unknown>) {
-  return miFetch<{ items: Record<string, unknown>[]; freshness?: Freshness; disclaimer?: string }>(
+  const data = await miFetch<{ items: Record<string, unknown>[]; freshness?: Freshness; disclaimer?: string }>(
     "/options/low-premium",
     "POST",
     filters ?? {},
   );
+  if (data?.items) return withSource(data, "api");
+  return withSource(
+    {
+      items: CLIENT_FLOW_CARDS.filter((c) => Number(c.current_premium) <= 5).map((card) => ({
+        event: {
+          underlying: card.ticker,
+          expiration: card.expiration,
+          strike: card.strike,
+          option_type: String(card.contract).includes("PUT") ? "put" : "call",
+          contract_price: card.current_premium,
+          midpoint: card.current_premium,
+          estimated_premium: card.estimated_total_premium,
+          contract_volume: card.volume,
+          open_interest: card.open_interest,
+          volume_oi_ratio: card.volume_oi_ratio,
+          data_status: "simulated",
+          idempotency_key: card.idempotency_key,
+        },
+        direction: card.direction,
+        score: card.score,
+        rank_score: card.unusual_score,
+        spread_pct: card.bid_ask_spread_pct,
+        review_zone: card.suggested_review_zone,
+      })),
+      freshness: CLIENT_FIXTURE_FRESHNESS,
+      disclaimer: "Simulated low-premium list (API unavailable).",
+    },
+    "client_fixture",
+  );
 }
 
 export async function fetchSmartMoney() {
-  return miFetch<{ items: Record<string, unknown>[]; freshness?: Freshness; disclaimer?: string }>(
+  const data = await miFetch<{ items: Record<string, unknown>[]; freshness?: Freshness; disclaimer?: string }>(
     "/options/smart-money",
+  );
+  if (data?.items) return withSource(data, "api");
+  return withSource(
+    {
+      items: CLIENT_SMART_MONEY,
+      freshness: CLIENT_FIXTURE_FRESHNESS,
+      disclaimer: "Simulated concentrated-activity watchlist (API unavailable).",
+    },
+    "client_fixture",
   );
 }
 
 export async function fetchOptionsHeatmap() {
-  return miFetch<Record<string, unknown>>("/options/heatmap");
+  const data = await miFetch<Record<string, unknown>>("/options/heatmap");
+  if (data?.sectors) return withSource(data, "api");
+  return withSource({ ...CLIENT_HEATMAP }, "client_fixture");
 }
 
 export async function fetchSignalHistory() {
-  return miFetch<{ items: Record<string, unknown>[]; freshness?: Freshness }>("/options/signals/history");
-}
-
-export async function fetchOptionsPerformance() {
-  return miFetch<Record<string, unknown>>("/options/performance");
-}
-
-export async function fetchAlertSettings() {
-  return miFetch<{ items: Record<string, unknown>[]; allow_simulated_alerts?: boolean }>(
-    "/options/alerts/settings",
+  const data = await miFetch<{ items: Record<string, unknown>[]; freshness?: Freshness }>("/options/signals/history");
+  if (data?.items) return withSource(data, "api");
+  return withSource(
+    {
+      items: CLIENT_FLOW_CARDS,
+      freshness: CLIENT_FIXTURE_FRESHNESS,
+    },
+    "client_fixture",
   );
 }
 
+export async function fetchOptionsPerformance() {
+  const data = await miFetch<Record<string, unknown>>("/options/performance");
+  if (data) return withSource(data, "api");
+  return withSource({ ...CLIENT_PERFORMANCE }, "client_fixture");
+}
+
+export async function fetchAlertSettings() {
+  const data = await miFetch<{ items: Record<string, unknown>[]; allow_simulated_alerts?: boolean }>(
+    "/options/alerts/settings",
+  );
+  if (data?.items) return withSource(data, "api");
+  return withSource({ ...CLIENT_ALERTS }, "client_fixture");
+}
+
 export async function fetchMarketHeatmap() {
-  return miFetch<Record<string, unknown>>("/heatmap");
+  const data = await miFetch<Record<string, unknown>>("/heatmap");
+  if (data?.sectors) return withSource(data, "api");
+  return withSource({ ...CLIENT_HEATMAP, color_by: "daily_return" }, "client_fixture");
 }
 
 export async function fetchSectorRotation() {
-  return miFetch<{ items: Record<string, unknown>[]; freshness?: Freshness }>("/sector-rotation");
+  const data = await miFetch<{ items: Record<string, unknown>[]; freshness?: Freshness }>("/sector-rotation");
+  if (data?.items) return withSource(data, "api");
+  return withSource({ ...CLIENT_SECTOR_ROTATION }, "client_fixture");
 }
 
 export async function fetchSmartMoneyHeatmap() {
-  return miFetch<Record<string, unknown>>("/smart-money-heatmap");
+  const data = await miFetch<Record<string, unknown>>("/smart-money-heatmap");
+  if (data?.sectors) return withSource(data, "api");
+  return withSource({ ...CLIENT_HEATMAP }, "client_fixture");
 }
 
 export async function fetchMarketWeather() {
-  return miFetch<Record<string, unknown>>("/weather");
+  const data = await miFetch<Record<string, unknown>>("/weather");
+  if (data?.label) return withSource(data, "api");
+  return withSource({ ...CLIENT_WEATHER }, "client_fixture");
 }
 
 export async function fetchHistoricalReplay() {
-  return miFetch<Record<string, unknown>>("/replay");
+  const data = await miFetch<Record<string, unknown>>("/replay");
+  if (data) return withSource(data, "api");
+  return withSource(
+    {
+      available: false,
+      outcome_engine_ready: true,
+      message:
+        "Historical replay needs persisted snapshots after the API migration is applied. Preview mode shows this placeholder.",
+    },
+    "client_fixture",
+  );
 }
 
 export async function fetchPortfolioExitHeatmap(positions?: Record<string, unknown>[]) {
-  return miFetch<Record<string, unknown>>("/exit/portfolio-heatmap", "POST", {
+  const data = await miFetch<Record<string, unknown>>("/exit/portfolio-heatmap", "POST", {
     positions: positions ?? null,
   });
+  if (data?.sectors || data?.tiles_detail) return withSource(data, "api");
+  return withSource({ ...CLIENT_EXIT_HEATMAP }, "client_fixture");
 }
 
 export async function evaluateExit(position: Record<string, unknown>) {
-  return miFetch<Record<string, unknown>>("/exit/evaluate", "POST", position);
+  const data = await miFetch<Record<string, unknown>>("/exit/evaluate", "POST", position);
+  if (data) return withSource(data, "api");
+  return withSource(
+    {
+      symbol: position.symbol,
+      exit_urgency: 58,
+      action: "Tighten Stop",
+      thesis_status: "intact",
+      confidence: 64,
+      explanation:
+        "Tighten Stop. Preview fixture — connect Market Intelligence API for live evaluation.",
+      data_status: "simulated",
+    },
+    "client_fixture",
+  );
 }

@@ -28,14 +28,14 @@ const MODULES = [
   },
   {
     href: "/options-intelligence",
-    label: "Opt Intel",
+    label: "Options Intel",
     emoji: "◐",
     color: "hover:border-cyan-500/50 hover:bg-cyan-500/10",
     activeClass: "border-cyan-500 bg-cyan-500/20 text-cyan-200",
   },
   {
     href: "/market-intelligence",
-    label: "Market",
+    label: "Market Intel",
     emoji: "▣",
     color: "hover:border-teal-500/50 hover:bg-teal-500/10",
     activeClass: "border-teal-500 bg-teal-500/20 text-teal-200",

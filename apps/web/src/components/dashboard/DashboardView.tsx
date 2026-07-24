@@ -327,6 +327,31 @@ export function DashboardView() {
             </section>
           </div>
 
+          <div className="mb-5 grid gap-3 sm:grid-cols-2">
+            <Link
+              href="/options-intelligence"
+              className="rounded-xl border border-cyan-500/40 bg-cyan-500/10 p-4 transition-colors hover:border-cyan-400/60 hover:bg-cyan-500/15"
+            >
+              <p className="text-xs font-semibold uppercase tracking-wide text-cyan-300">New</p>
+              <h2 className="mt-1 text-base font-semibold text-foreground">Options Intelligence</h2>
+              <p className="mt-1 text-sm text-muted">
+                Flow scanner, low-premium opportunities, concentrated activity, options heatmap.
+              </p>
+              <p className="mt-3 text-xs font-semibold text-cyan-300">Open Options Intel →</p>
+            </Link>
+            <Link
+              href="/market-intelligence"
+              className="rounded-xl border border-teal-500/40 bg-teal-500/10 p-4 transition-colors hover:border-teal-400/60 hover:bg-teal-500/15"
+            >
+              <p className="text-xs font-semibold uppercase tracking-wide text-teal-300">New</p>
+              <h2 className="mt-1 text-base font-semibold text-foreground">Market Intelligence</h2>
+              <p className="mt-1 text-sm text-muted">
+                Heatmaps, sector rotation, Market Weather, and swing-trade exit guidance.
+              </p>
+              <p className="mt-3 text-xs font-semibold text-teal-300">Open Market Intel →</p>
+            </Link>
+          </div>
+
           {breakingNews.length > 0 && (
             <section className="mb-5">
               <SectionHeader title="News" href="/news" linkLabel="All news →" />

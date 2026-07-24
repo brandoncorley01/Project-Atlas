@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { DataStatusBadge, FreshnessLine } from "@/components/market-intelligence/DataStatusBadge";
@@ -43,6 +44,7 @@ export function OptionsIntelligenceView() {
   const [history, setHistory] = useState<Record<string, unknown>[]>([]);
   const [performance, setPerformance] = useState<Record<string, unknown> | null>(null);
   const [alerts, setAlerts] = useState<Record<string, unknown>[]>([]);
+  const [usingFixture, setUsingFixture] = useState(false);
 
   const load = useCallback(async (active: TabId) => {
     setLoading(true);
@@ -54,37 +56,44 @@ export function OptionsIntelligenceView() {
         setFlow(data.items ?? []);
         setFreshness(data.freshness ?? null);
         setDisclaimer(data.disclaimer ?? null);
+        setUsingFixture(data.source === "client_fixture");
       } else if (active === "low-premium") {
         const data = await fetchLowPremium();
         if (!data) throw new Error("Could not load low-premium opportunities");
         setLowPremium((data.items ?? []).map((i) => ({ ...(i.event as object), ...(i as object) })));
         setFreshness(data.freshness ?? null);
         setDisclaimer(data.disclaimer ?? null);
+        setUsingFixture(data.source === "client_fixture");
       } else if (active === "smart-money") {
         const data = await fetchSmartMoney();
         if (!data) throw new Error("Could not load smart-money watchlist");
         setSmartMoney(data.items ?? []);
         setFreshness(data.freshness ?? null);
         setDisclaimer(data.disclaimer ?? null);
+        setUsingFixture(data.source === "client_fixture");
       } else if (active === "heatmap") {
         const data = await fetchOptionsHeatmap();
         if (!data) throw new Error("Could not load options heatmap");
         setHeatmap(data);
         setFreshness((data.freshness as Freshness) ?? null);
         setDisclaimer(String(data.disclaimer ?? ""));
+        setUsingFixture(data.source === "client_fixture");
       } else if (active === "history") {
         const data = await fetchSignalHistory();
         if (!data) throw new Error("Could not load signal history");
         setHistory(data.items ?? []);
         setFreshness(data.freshness ?? null);
+        setUsingFixture(data.source === "client_fixture");
       } else if (active === "performance") {
         const data = await fetchOptionsPerformance();
         if (!data) throw new Error("Could not load performance analytics");
         setPerformance(data);
+        setUsingFixture(data.source === "client_fixture");
       } else if (active === "alerts") {
         const data = await fetchAlertSettings();
         if (!data) throw new Error("Could not load alert settings");
         setAlerts(data.items ?? []);
+        setUsingFixture(data.source === "client_fixture");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Load failed");
@@ -139,6 +148,20 @@ export function OptionsIntelligenceView() {
           <DataStatusBadge freshness={freshness} />
           <FreshnessLine freshness={freshness} />
         </div>
+        {usingFixture && (
+          <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+            Preview mode: showing <strong>simulated</strong> fixtures because the Market Intelligence
+            API is not on this environment yet. Merge PR #8 and deploy the API (plus apply the
+            Supabase migration) for live/delayed provider data. Direct links:{" "}
+            <Link href="/options-intelligence" className="underline">
+              Options Intelligence
+            </Link>{" "}
+            ·{" "}
+            <Link href="/market-intelligence" className="underline">
+              Market Intelligence
+            </Link>
+          </div>
+        )}
       </header>
 
       <div className="flex gap-1 overflow-x-auto pb-1">

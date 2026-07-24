@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { DataStatusBadge, FreshnessLine } from "@/components/market-intelligence/DataStatusBadge";
@@ -41,6 +42,7 @@ export function MarketIntelligenceView() {
   const [exitMap, setExitMap] = useState<Record<string, unknown> | null>(null);
   const [weather, setWeather] = useState<Record<string, unknown> | null>(null);
   const [replay, setReplay] = useState<Record<string, unknown> | null>(null);
+  const [usingFixture, setUsingFixture] = useState(false);
 
   const load = useCallback(async (active: TabId) => {
     setLoading(true);
@@ -51,35 +53,42 @@ export function MarketIntelligenceView() {
         if (!data) throw new Error("Could not load market heatmap");
         setHeatmap(data);
         setFreshness((data.freshness as Freshness) ?? null);
+        setUsingFixture(data.source === "client_fixture");
       } else if (active === "rotation") {
         const data = await fetchSectorRotation();
         if (!data) throw new Error("Could not load sector rotation");
         setRotation(data.items ?? []);
         setFreshness(data.freshness ?? null);
+        setUsingFixture(data.source === "client_fixture");
       } else if (active === "options-bias") {
         const bias = await fetchOptionsHeatmap();
         if (!bias) throw new Error("Could not load options bias heatmap");
         setOptionsBias(bias);
         setFreshness((bias.freshness as Freshness) ?? null);
+        setUsingFixture(bias.source === "client_fixture");
       } else if (active === "smart-money") {
         const data = await fetchSmartMoneyHeatmap();
         if (!data) throw new Error("Could not load smart-money heatmap");
         setSmartMoney(data);
         setFreshness((data.freshness as Freshness) ?? null);
+        setUsingFixture(data.source === "client_fixture");
       } else if (active === "exit") {
         const data = await fetchPortfolioExitHeatmap();
         if (!data) throw new Error("Could not load portfolio exit heatmap");
         setExitMap(data);
         setFreshness((data.freshness as Freshness) ?? null);
+        setUsingFixture(data.source === "client_fixture");
       } else if (active === "weather") {
         const data = await fetchMarketWeather();
         if (!data) throw new Error("Could not load market weather");
         setWeather(data);
         setFreshness((data.freshness as Freshness) ?? null);
+        setUsingFixture(data.source === "client_fixture");
       } else if (active === "replay") {
         const data = await fetchHistoricalReplay();
         if (!data) throw new Error("Could not load replay status");
         setReplay(data);
+        setUsingFixture(data.source === "client_fixture");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Load failed");
@@ -104,6 +113,25 @@ export function MarketIntelligenceView() {
           <DataStatusBadge freshness={freshness} />
           <FreshnessLine freshness={freshness} />
         </div>
+        {usingFixture && (
+          <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+            Preview mode: showing <strong>simulated</strong> fixtures because the Market Intelligence
+            API is not on this environment yet. Open this page on the{" "}
+            <a
+              className="underline"
+              href="https://project-atlas-web-git-cur-e03cfb-brandoncorley01-5410s-projects.vercel.app/market-intelligence"
+              target="_blank"
+              rel="noreferrer"
+            >
+              PR preview
+            </a>{" "}
+            or merge PR #8 and deploy API + migration. Also see{" "}
+            <Link href="/options-intelligence" className="underline">
+              Options Intelligence
+            </Link>
+            .
+          </div>
+        )}
       </header>
 
       <div className="flex gap-1 overflow-x-auto pb-1">
