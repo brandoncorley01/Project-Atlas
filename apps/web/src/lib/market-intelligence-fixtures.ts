@@ -1,5 +1,4 @@
-/** Client-side simulated fixtures so Options/Market Intelligence pages
- *  remain visible when the API branch is not deployed yet.
+/** Client-side decision fixtures for Market / Options Intelligence.
  *  Always labelled simulated — never presented as live.
  */
 
@@ -32,7 +31,7 @@ export const CLIENT_FLOW_CARDS: Record<string, unknown>[] = [
     risk_level: "moderate",
     liquidity_grade: "A",
     explanation:
-      "Bullish lean with unusual score 78/100. Ask-side call sweep with elevated volume/OI. Simulated fixture for preview.",
+      "Ask-side call activity with elevated volume vs open interest. Worth a closer look if your bullish thesis on AAPL already exists — not a standalone buy signal.",
     warnings: ["Simulated data — not live options tape"],
     suggested_review_zone: { note: "Review zone only — not a guaranteed entry", premium_ref: "3.45" },
     data_status: "simulated",
@@ -43,7 +42,7 @@ export const CLIENT_FLOW_CARDS: Record<string, unknown>[] = [
       final_score: 78,
       confidence: 72,
       data_quality: "medium",
-      positive_contributors: ["Volume/OI elevated", "Sweep classification"],
+      positive_contributors: ["Volume/OI elevated", "Sweep classification", "Tight spread"],
       negative_contributors: [],
       penalties: [],
     },
@@ -67,8 +66,8 @@ export const CLIENT_FLOW_CARDS: Record<string, unknown>[] = [
     risk_level: "moderate",
     liquidity_grade: "B",
     explanation:
-      "Bearish lean (ask-side puts). Intent may still be hedge/spread — labelled carefully. Simulated fixture.",
-    warnings: ["Open/close unknown", "Simulated data — not live options tape"],
+      "Ask-side put activity looks defensive, but large put prints can be hedges. Treat direction as uncertain until price action confirms.",
+    warnings: ["Open/close unknown", "Possible hedge", "Simulated data — not live options tape"],
     suggested_review_zone: { note: "Review zone only — not a guaranteed entry", premium_ref: "1.85" },
     data_status: "simulated",
     provider: "client_fixture",
@@ -78,6 +77,9 @@ export const CLIENT_FLOW_CARDS: Record<string, unknown>[] = [
       final_score: 74,
       confidence: 61,
       data_quality: "medium",
+      positive_contributors: ["Elevated notional", "Block-sized print"],
+      negative_contributors: ["Wider spread", "Intent uncertain"],
+      penalties: [],
     },
   },
   {
@@ -97,13 +99,22 @@ export const CLIENT_FLOW_CARDS: Record<string, unknown>[] = [
     atlas_confidence: 70,
     risk_level: "contained",
     liquidity_grade: "A",
-    explanation: "Index call sweep with strong liquidity. Simulated fixture for UI preview.",
+    explanation:
+      "Liquid index call activity supports a constructive near-term tape. Useful as market-regime confirmation more than a single-name trade.",
     warnings: ["Simulated data — not live options tape"],
     suggested_review_zone: { note: "Review zone only — not a guaranteed entry", premium_ref: "4.20" },
     data_status: "simulated",
     provider: "client_fixture",
     idempotency_key: "client-spy-1",
-    score: { score_version: "options_activity_v1", final_score: 82, confidence: 70, data_quality: "medium" },
+    score: {
+      score_version: "options_activity_v1",
+      final_score: 82,
+      confidence: 70,
+      data_quality: "medium",
+      positive_contributors: ["High liquidity", "Elevated volume/OI"],
+      negative_contributors: [],
+      penalties: [],
+    },
   },
 ];
 
@@ -117,11 +128,11 @@ export const CLIENT_SMART_MONEY: Record<string, unknown>[] = [
     confidence: 72,
     directions: ["bullish"],
     evidence: [
-      "Activity across 2 strikes",
-      "2 related prints",
+      "Repeated call activity across 2 strikes",
       "Combined premium ≈ $450,000",
-      "Large size does not prove smart money or institutional identity",
+      "Liquidity is usable (tight spreads on listed prints)",
     ],
+    takeaway: "Multiple bullish-leaning prints on the same name — review only if your stock thesis already aligns.",
     sector: "Technology",
     data_status: "simulated",
     disclaimer: "Atlas does not identify institutions. Concentrated activity may be hedges or spreads.",
@@ -131,40 +142,74 @@ export const CLIENT_SMART_MONEY: Record<string, unknown>[] = [
 export const CLIENT_HEATMAP = {
   size_by: "market_cap",
   color_by: "options_bias",
+  meaning:
+    "Larger tiles = more options premium in focus. Constructive tiles lean bullish; pressured tiles lean bearish or defensive.",
   sectors: [
     {
       sector: "Technology",
       tiles: [
-        { symbol: "AAPL", sector: "Technology", size_value: 450000, color_value: 0.8, label: "Up / constructive", options_bias: 0.8 },
-        { symbol: "NVDA", sector: "Technology", size_value: 222000, color_value: -0.7, label: "Down / pressured", options_bias: -0.7 },
+        {
+          symbol: "AAPL",
+          sector: "Technology",
+          size_value: 450000,
+          color_value: 0.8,
+          label: "Constructive",
+          options_bias: 0.8,
+          takeaway: "Call-side activity is concentrated — confirm with price holding support.",
+        },
+        {
+          symbol: "NVDA",
+          sector: "Technology",
+          size_value: 222000,
+          color_value: -0.7,
+          label: "Pressured",
+          options_bias: -0.7,
+          takeaway: "Put activity elevated — could be hedge. Wait for confirmation before fading.",
+        },
       ],
     },
     {
       sector: "Index",
       tiles: [
-        { symbol: "SPY", sector: "Index", size_value: 840000, color_value: 0.6, label: "Up / constructive", options_bias: 0.6 },
+        {
+          symbol: "SPY",
+          sector: "Index",
+          size_value: 840000,
+          color_value: 0.6,
+          label: "Constructive",
+          options_bias: 0.6,
+          takeaway: "Broad-market call bias supports risk-on swings — size carefully.",
+        },
       ],
     },
     {
       sector: "Energy",
       tiles: [
-        { symbol: "XOM", sector: "Energy", size_value: 38000, color_value: 0.2, label: "Flat / mixed", options_bias: 0.2 },
+        {
+          symbol: "XOM",
+          sector: "Energy",
+          size_value: 38000,
+          color_value: 0.2,
+          label: "Mixed",
+          options_bias: 0.2,
+          takeaway: "No clear directional edge — skip unless you have a separate catalyst.",
+        },
       ],
     },
   ],
   table_fallback: [
-    { symbol: "AAPL", sector: "Technology", label: "Up / constructive", options_bias: 0.8 },
-    { symbol: "NVDA", sector: "Technology", label: "Down / pressured", options_bias: -0.7 },
-    { symbol: "SPY", sector: "Index", label: "Up / constructive", options_bias: 0.6 },
-    { symbol: "XOM", sector: "Energy", label: "Flat / mixed", options_bias: 0.2 },
+    { symbol: "AAPL", sector: "Technology", label: "Constructive", options_bias: 0.8, takeaway: "Call-side concentration" },
+    { symbol: "NVDA", sector: "Technology", label: "Pressured", options_bias: -0.7, takeaway: "Put activity / possible hedge" },
+    { symbol: "SPY", sector: "Index", label: "Constructive", options_bias: 0.6, takeaway: "Risk-on confirmation" },
+    { symbol: "XOM", sector: "Energy", label: "Mixed", options_bias: 0.2, takeaway: "No clear edge" },
   ],
   legend: {
-    size: "qualifying premium",
-    color: "options_bias",
-    note: "Color encodes directional evidence; labels are color-independent.",
+    size: "options premium in focus",
+    color: "directional lean",
+    note: "Labels are color-independent. This is evidence context, not a forecast.",
   },
   freshness: CLIENT_FIXTURE_FRESHNESS,
-  disclaimer: "Simulated client heatmap for preview when API is unavailable.",
+  disclaimer: "Simulated heatmap for decision-preview when API is unavailable.",
 };
 
 export const CLIENT_SECTOR_ROTATION = {
@@ -175,7 +220,9 @@ export const CLIENT_SECTOR_ROTATION = {
       relative_return: 1.8,
       options_bias: 0.4,
       member_count: 2,
-      evidence: ["Relative return +1.80%", "Breadth above MA 63%", "Options bias +0.40"],
+      posture: "Favor relative strength",
+      guidance: "Prefer long ideas here over lagging groups while leadership holds.",
+      evidence: ["Outperforming the tape", "Options bias constructive", "Breadth supportive"],
     },
     {
       sector: "Index",
@@ -183,7 +230,9 @@ export const CLIENT_SECTOR_ROTATION = {
       relative_return: 0.6,
       options_bias: 0.3,
       member_count: 1,
-      evidence: ["Relative return +0.60%", "Options bias +0.30"],
+      posture: "Constructive backdrop",
+      guidance: "Index call bias helps bullish swing setups — still respect volatility.",
+      evidence: ["Positive relative return", "Options bias mildly bullish"],
     },
     {
       sector: "Energy",
@@ -191,7 +240,9 @@ export const CLIENT_SECTOR_ROTATION = {
       relative_return: -0.2,
       options_bias: 0.1,
       member_count: 1,
-      evidence: ["Relative return -0.20%", "Options bias +0.10"],
+      posture: "Stand aside",
+      guidance: "No clean leadership signal — avoid forcing new swing entries here.",
+      evidence: ["Flat-to-soft relative return", "Weak directional options lean"],
     },
   ],
   freshness: CLIENT_FIXTURE_FRESHNESS,
@@ -203,13 +254,33 @@ export const CLIENT_WEATHER = {
   confidence: 62,
   risk_level: "moderate",
   last_update: new Date().toISOString(),
+  takeaway:
+    "Backdrop supports selective long swings in leading sectors, but keep size modest and exits planned — conviction is not high enough for aggressive adds.",
+  posture: "Selective risk-on",
+  do_now: [
+    "Favor Technology / broad-market strength over lagging groups",
+    "Only take setups with clear invalidation",
+    "Tighten risk on names where options flow turns against you",
+  ],
+  avoid_now: [
+    "Chasing weak sectors without a catalyst",
+    "Oversizing short-dated options in mixed names",
+  ],
   details: {
-    supporting_evidence: ["Options bias leans bullish", "Technology sector leading in fixture set"],
-    main_risks: ["Simulated inputs only", "Volatility regime not live"],
+    supporting_evidence: [
+      "Options bias leans bullish on liquid names",
+      "Technology is leading on relative strength",
+    ],
+    main_risks: [
+      "Confidence is only moderate",
+      "Some put activity may be hedging, not outright bearish conviction",
+      "Data may be delayed or simulated",
+    ],
     strongest_sectors: ["Technology", "Index"],
     areas_to_avoid: ["Energy"],
+    favorable_environments: ["Pullback buys in leaders", "Continuation swings with sector confirmation"],
     disclaimer:
-      "Market Weather describes recent conditions and regime context. It is not a literal forecast. This preview uses simulated fixtures.",
+      "Market Weather describes recent conditions. It is decision support — not a forecast and not a guarantee.",
   },
   score: {
     score_key: "market_weather",
@@ -219,8 +290,8 @@ export const CLIENT_WEATHER = {
     data_quality: "medium",
     component_values: { index: 58, breadth: 55, sectors: 60, options: 62, volatility: 55, news: 50 },
     weights: { index: 0.25, breadth: 0.2, sectors: 0.2, options: 0.15, volatility: 0.1, news: 0.1 },
-    positive_contributors: ["Options bias leans bullish"],
-    negative_contributors: ["Simulated inputs only"],
+    positive_contributors: ["Options bias leans bullish", "Sector leadership present"],
+    negative_contributors: ["Only moderate confidence", "Incomplete live feeds"],
     missing_inputs: ["live_index_feed"],
     penalties: [],
   },
@@ -230,31 +301,37 @@ export const CLIENT_WEATHER = {
 export const CLIENT_EXIT_HEATMAP = {
   ...CLIENT_HEATMAP,
   color_by: "exit_urgency",
+  meaning: "Higher exit urgency means review risk sooner — not an automatic sell order.",
   tiles_detail: [
     {
       symbol: "AAPL",
       sector: "Technology",
       exit_urgency: 58,
+      urgency_band: "Tighten Risk",
       action: "Tighten Stop",
       thesis_status: "intact",
       confidence: 64,
       primary_reason:
-        "Tighten Stop. Urgency band: Tighten Risk. Supporting: Still above primary trend level. Watch: Options flow turning against position. This is decision support, not an order instruction.",
-      main_risk: "Options flow turning against position",
+        "Trend is still intact and the sector is leading, but call support has cooled near resistance — tighten the stop and protect gains.",
+      main_risk: "Options flow turning against the position",
+      supporting: ["Above primary trend level", "Sector still leading"],
+      watching: ["Options support fading", "Momentum flattening"],
       daily_return: 18,
+      takeaway: "Hold the core, but don’t give back the swing — trail risk tighter.",
     },
   ],
   table_fallback: [
     {
       symbol: "AAPL",
       sector: "Technology",
-      label: "Elevated",
+      label: "Tighten risk",
       exit_urgency: 58,
       action: "Tighten Stop",
+      takeaway: "Protect gains while thesis remains intact",
     },
   ],
   freshness: CLIENT_FIXTURE_FRESHNESS,
-  disclaimer: "Simulated exit heatmap — watchlist proxy until API/ledger is live.",
+  disclaimer: "Simulated exit guidance — decision support only.",
 };
 
 export const CLIENT_ALERTS = {
@@ -270,7 +347,7 @@ export const CLIENT_ALERTS = {
 export const CLIENT_PERFORMANCE = {
   summary: {
     signals_tracked: 0,
-    note: "Preview mode — connect API + migration for live outcome tracking.",
+    note: "Outcome tracking fills in after signals persist and settle.",
   },
-  disclaimer: "Example methodology only — not a live performance claim.",
+  disclaimer: "Methodological placeholder — not a live performance claim.",
 };
