@@ -14,6 +14,8 @@ const primaryTabs = [
 ] as const;
 
 const moreItems = [
+  { href: "/options-intelligence", label: "Options Intelligence" },
+  { href: "/market-intelligence", label: "Market Intelligence" },
   { href: "/news", label: "News" },
   { href: "/watchlist", label: "Watchlist" },
   { href: "/alerts", label: "Alerts" },

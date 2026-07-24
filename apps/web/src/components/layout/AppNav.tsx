@@ -8,6 +8,8 @@ const navItems = [
   { href: "/", label: "Home" },
   { href: "/stocks", label: "Stocks" },
   { href: "/options", label: "Options" },
+  { href: "/options-intelligence", label: "Opt Intel" },
+  { href: "/market-intelligence", label: "Market Intel" },
   { href: "/sports", label: "Sports" },
   { href: "/parlays", label: "Parlays" },
   { href: "/news", label: "News" },

@@ -79,8 +79,18 @@ class Settings(BaseSettings):
     atlas_max_news_confidence_adjustment: float = 6.0
     atlas_max_total_intelligence_adjustment: float = 12.0
 
+    # Market & Options Intelligence
+    atlas_market_intelligence_enabled: bool = True
+    atlas_options_flow_provider: str = "fixture"
+    atlas_options_flow_allow_simulated: bool = True
+    atlas_exit_score_version: str = "exit_v1"
+    atlas_options_score_version: str = "options_activity_v1"
+
     def is_intelligence_enabled(self) -> bool:
         return bool(self.atlas_expert_intelligence_enabled)
+
+    def is_market_intelligence_enabled(self) -> bool:
+        return bool(self.atlas_market_intelligence_enabled)
 
     @model_validator(mode="after")
     def _platform_port(self) -> "Settings":
