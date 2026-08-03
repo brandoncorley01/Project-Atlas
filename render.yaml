@@ -34,7 +34,7 @@ services:
       - key: ODDS_SCAN_SCOPE
         value: priority
       - key: ODDS_MAX_SPORTS_PER_SCAN
-        value: "2"
+        value: "6"
       - key: ODDS_CACHE_TTL_MINUTES
         value: "10080"
       - key: ODDS_INCLUDE_FUTURES_ON_LIVE
@@ -42,15 +42,15 @@ services:
       - key: ODDS_SPEND_MODE
         value: cache_only
       - key: ODDS_MIN_CREDITS_RESERVE
-        value: "500"
+        value: "25"
       - key: ODDS_INSIGHT_PROP_EVENTS
-        value: "0"
+        value: "2"
       - key: ODDS_INSIGHT_MIN_CREDITS_RESERVE
-        value: "500"
+        value: "25"
       - key: ODDS_SEARCH_PROP_EVENTS
-        value: "0"
+        value: "2"
       - key: ODDS_SEARCH_MIN_CREDITS_RESERVE
-        value: "500"
+        value: "25"
       - key: ATLAS_EXPERT_INTELLIGENCE_ENABLED
         value: "true"
       - key: ATLAS_MARKET_INTELLIGENCE_ENABLED
@@ -93,7 +93,7 @@ services:
       - key: ODDS_SCAN_SCOPE
         value: priority
       - key: ODDS_MAX_SPORTS_PER_SCAN
-        value: "2"
+        value: "6"
       - key: ODDS_CACHE_TTL_MINUTES
         value: "10080"
       - key: ODDS_INCLUDE_FUTURES_ON_LIVE
@@ -101,15 +101,15 @@ services:
       - key: ODDS_SPEND_MODE
         value: cache_only
       - key: ODDS_MIN_CREDITS_RESERVE
-        value: "500"
+        value: "25"
       - key: ODDS_INSIGHT_PROP_EVENTS
-        value: "0"
+        value: "2"
       - key: ODDS_INSIGHT_MIN_CREDITS_RESERVE
-        value: "500"
+        value: "25"
       - key: ODDS_SEARCH_PROP_EVENTS
-        value: "0"
+        value: "2"
       - key: ODDS_SEARCH_MIN_CREDITS_RESERVE
-        value: "500"
+        value: "25"
       - key: ATLAS_EXPERT_INTELLIGENCE_ENABLED
         value: "true"
       - key: OPENAI_API_KEY

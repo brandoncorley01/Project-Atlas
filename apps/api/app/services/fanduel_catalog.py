@@ -671,7 +671,11 @@ async def build_fanduel_catalog(
     prop_cap = max_prop_events
     if prop_cap is None:
         prop_cap = int(getattr(config.settings, "odds_insight_prop_events", 0) or 0)
-    if not config.settings.odds_live_spending_allowed():
+    # User-initiated Atlas Insight may spend even when auto mode is cache_only.
+    if not (
+        config.settings.odds_live_spending_allowed()
+        or config.settings.odds_intentional_live_allowed()
+    ):
         prop_cap = 0
     prop_cap = max(0, min(prop_cap, 4))
 
@@ -1149,9 +1153,14 @@ async def fetch_verified_markets_for_search(
             matched = preferred + rest
 
     # If the odds cache has no matching game, pull that sport's FanDuel/DK board once.
+    # User-initiated Search may seed live books even under ODDS_SPEND_MODE=cache_only.
     seed_credits = 0
     LIVE_SEED_SPORTS = set(PROP_MARKETS_BY_SPORT) | COMBAT_SPORT_KEYS
-    if not matched and config.settings.odds_live_spending_allowed():
+    allow_search_live = (
+        config.settings.odds_live_spending_allowed()
+        or config.settings.odds_intentional_live_allowed()
+    )
+    if not matched and allow_search_live:
         sk = sport_key or ""
         if not sk and any("portland" in t or t == "fire" or "tempo" in t for t in team_needles):
             sk = "basketball_wnba"
@@ -1163,11 +1172,12 @@ async def fetch_verified_markets_for_search(
                 "basketball_wnba",
                 "baseball_mlb",
                 "americanfootball_nfl",
+                "americanfootball_ncaaf",
                 "icehockey_nhl",
                 "mma_mixed_martial_arts",
                 "soccer_epl",
                 "soccer_usa_mls",
-            ][:4]
+            ][:6]
         for sk in seed_keys:
             if matched:
                 break
@@ -1175,6 +1185,9 @@ async def fetch_verified_markets_for_search(
                 client, _, info = await _select_active_client()
                 rem = info.get("total_remaining")
                 reserve = max(0, int(getattr(config.settings, "odds_search_min_credits_reserve", 4) or 0))
+                # Keep a tiny cushion for intentional search under cache_only.
+                if config.settings.odds_spend_mode_normalized() == "cache_only":
+                    reserve = min(reserve, 10)
                 if client and (rem is None or rem >= 1 + reserve):
                     live = await client.fetch_odds(sk, bookmakers=US_SEARCH_BOOKS)
                     seed_credits += 1
@@ -1187,6 +1200,7 @@ async def fetch_verified_markets_for_search(
                             "basketball_nba": "NBA",
                             "baseball_mlb": "MLB",
                             "americanfootball_nfl": "NFL",
+                            "americanfootball_ncaaf": "NCAAF",
                             "icehockey_nhl": "NHL",
                             "mma_mixed_martial_arts": "MMA",
                             "boxing_boxing": "Boxing",
@@ -1214,11 +1228,34 @@ async def fetch_verified_markets_for_search(
             except Exception as exc:
                 logger.info("Search live seed skipped (%s): %s", sk, exc)
 
+    # Persist live-seeded events so board / later searches see FanDuel lines.
+    if seed_credits > 0 and events:
+        try:
+            from app.providers.sports.odds_api import (
+                _merge_cached_events,
+                _read_cache,
+                _write_cache,
+            )
+
+            existing = list((_read_cache() or {}).get("events") or [])
+            merged = _merge_cached_events(existing, events) if existing else list(events)
+            _write_cache(
+                merged,
+                {
+                    "source": "search_live_seed",
+                    "credits_used": seed_credits,
+                    "events": len(merged),
+                },
+            )
+        except Exception as exc:
+            logger.info("Search cache merge skipped: %s", exc)
+
     matched.sort(key=lambda e: hours_until_event(e.get("commence_time")) or 9999)
     cap = max_events
     if cap is None:
         cap = int(getattr(config.settings, "odds_search_prop_events", 0) or 0)
-    if not config.settings.odds_live_spending_allowed():
+    # Intentional Search may pull props when configured — even under cache_only.
+    if not allow_search_live:
         cap = 0
     # Broad board search keeps more matched games (game lines are free from cache).
     board_cap = 16 if not restrict_sport else 3
@@ -1234,7 +1271,7 @@ async def fetch_verified_markets_for_search(
         _append_game_lines(raw, event, all_preferred_books=True)
 
     remaining_credits: int | None = None
-    if matched and cap > 0 and config.settings.odds_live_spending_allowed():
+    if matched and cap > 0 and allow_search_live:
         client, _, info = await _select_active_client()
         remaining_credits = info.get("total_remaining")
         if remaining_credits is not None and seed_credits:

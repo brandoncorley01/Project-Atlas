@@ -26,13 +26,13 @@ from app.services.sports_ranking import (
 
 logger = logging.getLogger(__name__)
 
-MAX_SIGNALS = 120
-# ~3 scroll pages of cards on the Sports board (desktop ~10–12/viewport).
-TARGET_BOARD_PICKS = 90
-MIN_OPPORTUNITY = 28.0
+MAX_SIGNALS = 160
+# ~4 scroll pages of cards on the Sports board (desktop ~10–12/viewport).
+TARGET_BOARD_PICKS = 120
+MIN_OPPORTUNITY = 24.0
 MIN_BOARD_PICKS = 8
 MIN_PER_SPORT = 1
-MAX_PER_SPORT = 12
+MAX_PER_SPORT = 18
 # Keep both American and international markets on every board — never flip to one side.
 MIN_US_BOARD_SHARE = 0.35
 MIN_GLOBAL_BOARD_SHARE = 0.35
@@ -366,7 +366,7 @@ class SportsRefreshService:
                 0.25, float(slate_cal.get("sports_min_edge_pct") or 0.6)
             )
             slate_cal["sports_min_opportunity"] = min(
-                18.0, float(slate_cal.get("sports_min_opportunity") or 28.0)
+                18.0, float(slate_cal.get("sports_min_opportunity") or 24.0)
             )
             soft = _score_events(slate_cal, float(slate_cal["sports_min_opportunity"]))
             if soft:

@@ -52,14 +52,16 @@ class Settings(BaseSettings):
 
     # Atlas Insight: max soon games to pull FanDuel player props for (each uses ~3 credits).
     # 0 = never spend Odds credits on Insight (use odds/props cache only).
-    odds_insight_prop_events: int = 0
+    # User-initiated Insight may still spend when >0 even if ODDS_SPEND_MODE=cache_only.
+    odds_insight_prop_events: int = 2
 
     # Keep a reserve so Insight prop pulls don't zero the free-tier quota.
     odds_insight_min_credits_reserve: int = 25
 
     # Search: max matching games to pull FanDuel/DK player props for (credit-capped).
-    # 0 = Search uses cache + OpenAI only (0 Odds credits).
-    odds_search_prop_events: int = 0
+    # 0 = Search uses cache + board only (no live prop pulls).
+    # User-initiated Search may still live-seed game lines when cache misses.
+    odds_search_prop_events: int = 2
 
     # Search prop pull reserve — leave credits for Fetch live.
     odds_search_min_credits_reserve: int = 25
@@ -152,6 +154,14 @@ class Settings(BaseSettings):
 
     def odds_explicit_fetch_allowed(self) -> bool:
         """User-initiated Fetch live odds may spend even when auto mode is cache_only."""
+        return bool(self.odds_api_keys)
+
+    def odds_intentional_live_allowed(self) -> bool:
+        """User-initiated Search / Insight may hit Odds APIs even in cache_only.
+
+        Automatic Rescore/Scan stay cache-only. Callers must still honor credit
+        reserves so free-tier keys aren't drained overnight.
+        """
         return bool(self.odds_api_keys)
 
 

@@ -98,6 +98,7 @@ CORE_US_LIVE_KEYS = (
     "baseball_mlb",
     "basketball_wnba",
     "basketball_nba",
+    "basketball_ncaab",
     "americanfootball_nfl",
     "americanfootball_nfl_preseason",
     "americanfootball_ncaaf",
