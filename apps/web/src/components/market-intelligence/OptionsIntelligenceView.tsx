@@ -256,6 +256,7 @@ export function OptionsIntelligenceView() {
         <HeatmapPanel
           title="Options Bias Heatmap"
           subtitle="Color reflects directional evidence — not raw call/put volume alone."
+          meaning={String(heatmap.meaning || CLIENT_HEATMAP.meaning)}
           sectors={heatmap.sectors as Array<{ sector: string; tiles: never[] }>}
           tableFallback={heatmap.table_fallback as never[]}
           legend={heatmap.legend as { size?: string; color?: string; note?: string }}
@@ -271,11 +272,30 @@ export function OptionsIntelligenceView() {
       )}
 
       {tab === "performance" && performance && (
-        <div className="rounded-xl border border-border bg-surface/60 p-4 text-sm">
-          <p className="font-medium">Outcome engine ready</p>
-          <pre className="mt-3 overflow-x-auto rounded-lg bg-background/60 p-3 text-xs text-muted">
-            {JSON.stringify(performance, null, 2)}
-          </pre>
+        <div className="rounded-xl border border-border bg-surface/60 p-4 text-sm space-y-3">
+          <p className="font-medium">Signal outcome tracking</p>
+          <p className="text-muted">
+            {String(
+              (performance.summary as { note?: string } | undefined)?.note ||
+                performance.disclaimer ||
+                "Outcome tracking fills in after signals persist and settle.",
+            )}
+          </p>
+          <dl className="grid gap-2 sm:grid-cols-2 text-sm">
+            <div className="rounded-lg border border-border/60 bg-background/40 px-3 py-2">
+              <dt className="text-xs text-muted">Signals tracked</dt>
+              <dd className="mt-1 font-semibold">
+                {String((performance.summary as { signals_tracked?: number } | undefined)?.signals_tracked ?? 0)}
+              </dd>
+            </div>
+            <div className="rounded-lg border border-border/60 bg-background/40 px-3 py-2">
+              <dt className="text-xs text-muted">Status</dt>
+              <dd className="mt-1 font-semibold">Waiting for settled outcomes</dd>
+            </div>
+          </dl>
+          {performance.disclaimer ? (
+            <p className="text-xs text-amber-200/80">{String(performance.disclaimer)}</p>
+          ) : null}
         </div>
       )}
 
