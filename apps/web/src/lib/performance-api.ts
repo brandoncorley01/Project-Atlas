@@ -103,6 +103,7 @@ export async function logPerformanceOutcome(params: {
   signalSnapshot?: Record<string, unknown>;
 }): Promise<PerformanceEntry | null> {
   const token = await getToken();
+  let saved: PerformanceEntry | null = null;
   try {
     const res = await fetch(`${getApiUrl()}/performance`, {
       method: "POST",
@@ -118,19 +119,26 @@ export async function logPerformanceOutcome(params: {
     });
     const body = await res.json().catch(() => ({}));
     if (res.ok && body.entry) {
-      return body.entry as PerformanceEntry;
+      saved = body.entry as PerformanceEntry;
     }
   } catch {
     /* fall through */
   }
-  return logOutcomeDirect({
-    module: params.module,
-    signalId: params.signalId,
-    outcome: params.outcome,
-    returnPct: params.returnPct,
-    resolutionSource: params.resolutionSource,
-    signalSnapshot: params.signalSnapshot,
-  });
+  if (!saved) {
+    saved = await logOutcomeDirect({
+      module: params.module,
+      signalId: params.signalId,
+      outcome: params.outcome,
+      returnPct: params.returnPct,
+      resolutionSource: params.resolutionSource,
+      signalSnapshot: params.signalSnapshot,
+    });
+  }
+  if (saved && params.outcome !== "pending") {
+    notifyPerformanceUpdated();
+    void syncAtlasLearningAfterOutcome();
+  }
+  return saved;
 }
 
 export async function updatePerformanceOutcome(
@@ -138,6 +146,7 @@ export async function updatePerformanceOutcome(
   updates: { outcome?: string; returnPct?: number | null },
 ): Promise<PerformanceEntry | null> {
   const token = await getToken();
+  let saved: PerformanceEntry | null = null;
   try {
     const body: Record<string, unknown> = {};
     if (updates.outcome) body.outcome = updates.outcome;
@@ -149,12 +158,80 @@ export async function updatePerformanceOutcome(
     });
     const data = await res.json().catch(() => ({}));
     if (res.ok && data.entry) {
-      return data.entry as PerformanceEntry;
+      saved = data.entry as PerformanceEntry;
     }
   } catch {
     /* fall through */
   }
-  return updateOutcomeDirect(outcomeId, updates);
+  if (!saved) {
+    saved = await updateOutcomeDirect(outcomeId, updates);
+  }
+  if (saved) {
+    notifyPerformanceUpdated();
+    void syncAtlasLearningAfterOutcome();
+  }
+  return saved;
+}
+
+/**
+ * Push a newly saved / changed result into Atlas's learning rollup so the next
+ * sports/stocks/options scans and coach insight use the updated win/loss data.
+ */
+let learningSyncInFlight: Promise<{ ok: boolean; message: string }> | null = null;
+let learningSyncTimer: number | null = null;
+
+export async function syncAtlasLearningAfterOutcome(): Promise<{
+  ok: boolean;
+  message: string;
+}> {
+  if (learningSyncInFlight) return learningSyncInFlight;
+
+  learningSyncInFlight = (async () => {
+    if (typeof window !== "undefined") {
+      await new Promise<void>((resolve) => {
+        if (learningSyncTimer) window.clearTimeout(learningSyncTimer);
+        learningSyncTimer = window.setTimeout(() => resolve(), 150);
+      });
+    }
+    const token = await getToken();
+    try {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 20_000);
+      const res = await fetch(`${getApiUrl()}/engine/coach-aggregate`, {
+        method: "POST",
+        ...fetchInit(token),
+        signal: controller.signal,
+      });
+      window.clearTimeout(timeout);
+      const body = await res.json().catch(() => ({}));
+      if (res.ok) {
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new Event("atlas:learning-updated"));
+        }
+        return {
+          ok: true,
+          message: "Saved — Atlas learning updated from this result.",
+        };
+      }
+      return {
+        ok: false,
+        message:
+          typeof body.detail === "string"
+            ? body.detail
+            : "Result saved — learning sync will catch up on the next scan.",
+      };
+    } catch {
+      return {
+        ok: false,
+        message: "Result saved — learning sync will catch up on the next scan.",
+      };
+    } finally {
+      learningSyncInFlight = null;
+      learningSyncTimer = null;
+    }
+  })();
+
+  return learningSyncInFlight;
 }
 
 export async function backfillPerformanceTracking(): Promise<{

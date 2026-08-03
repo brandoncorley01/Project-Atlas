@@ -140,10 +140,13 @@ export function ParlayCard({
   row,
   rank,
   onUpdated,
+  embedded = false,
 }: {
   row: Parlay;
   rank: number;
   onUpdated?: (parlay: Parlay) => void;
+  /** When true (watchlist/performance), stay in place — no origin-page link. */
+  embedded?: boolean;
 }) {
   const [parlay, setParlay] = useState(row);
   const [expanded, setExpanded] = useState(rank === 1);
@@ -292,19 +295,25 @@ export function ParlayCard({
         >
           {addingLeg ? "Hide add a leg" : "Add a leg"}
         </button>
-        <Link href={`/parlays/${parlay.id}`} className="text-sm font-medium text-accent hover:underline">
-          Full detail page →
-        </Link>
-        <AddToWatchlistButton
-          symbol={parlay.id}
-          itemType="parlay"
-          metadata={parlayMetadata({ ...parlay, id: parlay.id, source: "auto" }).metadata}
-          label="Save to watchlist"
-          variant="compact"
-        />
-        <Link href="/watchlist?tab=parlays" className="text-sm font-medium text-muted hover:text-accent">
-          My saved parlays →
-        </Link>
+        {!embedded && (
+          <Link href={`/parlays/${parlay.id}`} className="text-sm font-medium text-accent hover:underline">
+            Full detail page →
+          </Link>
+        )}
+        {!embedded && (
+          <AddToWatchlistButton
+            symbol={parlay.id}
+            itemType="parlay"
+            metadata={parlayMetadata({ ...parlay, id: parlay.id, source: "auto" }).metadata}
+            label="Save to watchlist"
+            variant="compact"
+          />
+        )}
+        {!embedded && (
+          <Link href="/watchlist?tab=parlays" className="text-sm font-medium text-muted hover:text-accent">
+            My saved parlays →
+          </Link>
+        )}
       </div>
 
       {addingLeg && (

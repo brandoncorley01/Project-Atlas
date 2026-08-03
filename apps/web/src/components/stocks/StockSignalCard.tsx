@@ -64,11 +64,14 @@ export function StockSignalCard({
   rank,
   showChart = false,
   lookupMode = false,
+  embedded = false,
 }: {
   row: StockSignal;
   rank: number;
   showChart?: boolean;
   lookupMode?: boolean;
+  /** When true (watchlist/performance), stay in place — no origin-page link. */
+  embedded?: boolean;
 }) {
   const [expanded, setExpanded] = useState(rank === 1 || showChart || lookupMode);
   const tech = row.technicals ?? {};
@@ -220,18 +223,20 @@ export function StockSignalCard({
           >
             {expanded ? "Hide trade plan" : "Show trade plan & chart"}
           </button>
-          {!isLookupId(row.id) && (
+          {!embedded && !isLookupId(row.id) && (
             <Link href={`/stocks/${row.id}`} className="text-sm font-medium text-accent hover:underline">
               Full detail page →
             </Link>
           )}
-          <AddToWatchlistButton
-            symbol={canSaveOutcome ? row.id : row.ticker}
-            itemType={canSaveOutcome ? "stock_signal" : "ticker"}
-            metadata={stockSignalMetadata(row)}
-            label="Save to watchlist"
-            variant="compact"
-          />
+          {!embedded && (
+            <AddToWatchlistButton
+              symbol={canSaveOutcome ? row.id : row.ticker}
+              itemType={canSaveOutcome ? "stock_signal" : "ticker"}
+              metadata={stockSignalMetadata(row)}
+              label="Save to watchlist"
+              variant="compact"
+            />
+          )}
         </div>
       )}
 

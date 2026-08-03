@@ -8,6 +8,10 @@ import {
   performanceEntryKey,
   performanceStatusKey,
 } from "@/components/watchlist/WatchlistPerformanceControls";
+import {
+  WatchlistPickDetail,
+  watchlistItemCanOpenDetails,
+} from "@/components/watchlist/WatchlistPickDetail";
 import { useWatchlist } from "@/components/watchlist/WatchlistProvider";
 import { FilterTabs } from "@/components/ui/FilterTabs";
 import type { PerformanceEntry } from "@/components/performance/PerformanceView";
@@ -66,23 +70,6 @@ function itemSubtitle(item: WatchlistItem): string {
   }
 }
 
-function itemHref(item: WatchlistItem): string | null {
-  const meta = item.metadata ?? {};
-  switch (effectiveItemType(item)) {
-    case "stock_signal":
-      return typeof meta.signal_id === "string" ? `/stocks/${meta.signal_id}` : null;
-    case "option_signal":
-      return typeof meta.signal_id === "string" ? `/options/${meta.signal_id}` : null;
-    case "sport_bet":
-      return typeof meta.signal_id === "string" ? `/sports/${meta.signal_id}` : null;
-    case "parlay":
-      if (typeof meta.parlay_id === "string") return `/parlays/${meta.parlay_id}`;
-      return null;
-    default:
-      return item.item_type === "ticker" ? `/stocks` : null;
-  }
-}
-
 function itemBadge(item: WatchlistItem): string {
   switch (effectiveItemType(item)) {
     case "ticker":
@@ -125,6 +112,7 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
   const [syncing, setSyncing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [statusMap, setStatusMap] = useState<Record<string, PerformanceEntry>>({});
+  const [openDetailId, setOpenDetailId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<WatchlistTab>(
     ["all", "stocks", "options", "bets", "parlays"].includes(initialTab) ? initialTab : "all",
   );
@@ -213,6 +201,7 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
     const result = await removeWatchlistItem(id);
     if (result.ok) {
       markRemoved(id);
+      setOpenDetailId((prev) => (prev === id ? null : prev));
     } else {
       setMessage(result.error);
     }
@@ -247,7 +236,10 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
         allLabel="All"
         items={TAB_ITEMS.map((t) => ({ id: t.id, label: t.label, count: counts[t.id as WatchlistTab] }))}
         activeId={activeTab === "all" ? null : activeTab}
-        onSelect={(id) => setActiveTab((id ?? "all") as WatchlistTab)}
+        onSelect={(id) => {
+          setOpenDetailId(null);
+          setActiveTab((id ?? "all") as WatchlistTab);
+        }}
         accent="accent"
         guideLinks={[
           { href: "/sports", label: "Build a manual parlay on Sports →" },
@@ -308,73 +300,82 @@ export function WatchlistView({ initialItems, watchlistId }: WatchlistViewProps)
       {displayed.length > 0 ? (
         <ul className="divide-y divide-border rounded-xl border border-border bg-surface">
           {displayed.map((item) => {
-            const href = itemHref(item);
             const badge = itemBadge(item);
             const meta = item.metadata ?? {};
             const key = performanceStatusKey(item);
             const entry = key ? statusMap[key] ?? null : null;
+            const canOpen = watchlistItemCanOpenDetails(item);
+            const isOpen = openDetailId === item.id;
             return (
-              <li key={item.id} className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-start sm:justify-between">
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${badgeColor(badge)}`}>
-                      {badge}
-                    </span>
-                    {href ? (
-                      <Link href={href} className="font-medium hover:text-accent">
-                        {itemTitle(item)}
-                      </Link>
-                    ) : (
+              <li key={item.id} className="px-4 py-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${badgeColor(badge)}`}>
+                        {badge}
+                      </span>
                       <span className="font-medium">{itemTitle(item)}</span>
+                      {canOpen && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setOpenDetailId((prev) => (prev === item.id ? null : item.id))
+                          }
+                          className="text-xs font-medium text-accent hover:underline"
+                        >
+                          {isOpen ? "Hide details" : "View details"}
+                        </button>
+                      )}
+                    </div>
+                    <p className="mt-0.5 truncate text-sm text-muted">{itemSubtitle(item)}</p>
+                    {effectiveItemType(item) === "parlay" && Array.isArray(meta.legs) && !isOpen && (
+                      <ul className="mt-2 space-y-0.5 text-xs text-muted">
+                        {(meta.legs as Array<{ selection?: string; odds_american?: number }>)
+                          .slice(0, 4)
+                          .map((leg, i) => (
+                            <li key={i}>
+                              {leg.selection}
+                              {leg.odds_american != null && (
+                                <span className="ml-1 text-fanduel-text">
+                                  {leg.odds_american > 0 ? "+" : ""}
+                                  {leg.odds_american}
+                                </span>
+                              )}
+                            </li>
+                          ))}
+                      </ul>
                     )}
-                    {href && (
-                      <Link href={href} className="text-xs text-accent hover:underline">
-                        View details
-                      </Link>
+                    {meta.opportunity_score != null && (
+                      <p className="mt-1 text-xs text-muted">
+                        Opportunity {Number(meta.opportunity_score).toFixed(0)}
+                      </p>
                     )}
+                    <WatchlistPerformanceControls
+                      item={item}
+                      entry={entry}
+                      onRegistered={(next) => {
+                        const k = performanceStatusKey(item);
+                        if (!k) return;
+                        setStatusMap((prev) => ({ ...prev, [k]: next }));
+                        void refreshStatuses();
+                      }}
+                    />
                   </div>
-                  <p className="mt-0.5 truncate text-sm text-muted">{itemSubtitle(item)}</p>
-                  {effectiveItemType(item) === "parlay" && Array.isArray(meta.legs) && (
-                    <ul className="mt-2 space-y-0.5 text-xs text-muted">
-                      {(meta.legs as Array<{ selection?: string; odds_american?: number }>)
-                        .slice(0, 4)
-                        .map((leg, i) => (
-                          <li key={i}>
-                            {leg.selection}
-                            {leg.odds_american != null && (
-                              <span className="ml-1 text-fanduel-text">
-                                {leg.odds_american > 0 ? "+" : ""}
-                                {leg.odds_american}
-                              </span>
-                            )}
-                          </li>
-                        ))}
-                    </ul>
-                  )}
-                  {meta.opportunity_score != null && (
-                    <p className="mt-1 text-xs text-muted">
-                      Opportunity {Number(meta.opportunity_score).toFixed(0)}
-                    </p>
-                  )}
-                  <WatchlistPerformanceControls
-                    item={item}
-                    entry={entry}
-                    onRegistered={(next) => {
-                      const k = performanceStatusKey(item);
-                      if (!k) return;
-                      setStatusMap((prev) => ({ ...prev, [k]: next }));
-                      void refreshStatuses();
-                    }}
-                  />
+                  <button
+                    type="button"
+                    onClick={() => removeItem(item.id)}
+                    disabled={loading}
+                    className="shrink-0 self-start text-xs text-muted hover:text-danger"
+                  >
+                    Remove
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => removeItem(item.id)}
-                  disabled={loading}
-                  className="shrink-0 self-start text-xs text-muted hover:text-danger"
-                >
-                  Remove
-                </button>
+                {isOpen && (
+                  <WatchlistPickDetail
+                    item={item}
+                    onClose={() => setOpenDetailId(null)}
+                  />
+                )}
               </li>
             );
           })}

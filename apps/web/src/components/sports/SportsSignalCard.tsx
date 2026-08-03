@@ -130,6 +130,7 @@ export function SportsSignalCard({
   onParlayToggle,
   hideSelection = false,
   showAnalystPicks = true,
+  embedded = false,
 }: {
   row: SportsSignal;
   rank: number;
@@ -137,6 +138,8 @@ export function SportsSignalCard({
   onParlayToggle?: (id: string) => void;
   hideSelection?: boolean;
   showAnalystPicks?: boolean;
+  /** When true (watchlist/performance), stay in place — no origin-page link. */
+  embedded?: boolean;
 }) {
   const [expanded, setExpanded] = useState(rank === 1);
   const edge = row.line_movement?.edge_pct ?? row.context?.edge_pct;
@@ -340,16 +343,20 @@ export function SportsSignalCard({
         >
           {expanded ? "Hide details" : "Show analysis"}
         </button>
-        <Link href={`/sports/${row.id}`} className="text-sm font-medium text-accent hover:underline">
-          Full detail page →
-        </Link>
-        <AddToWatchlistButton
-          symbol={row.id}
-          itemType="sport_bet"
-          metadata={sportBetMetadata(row)}
-          label="Save bet"
-          variant="compact"
-        />
+        {!embedded && (
+          <Link href={`/sports/${row.id}`} className="text-sm font-medium text-accent hover:underline">
+            Full detail page →
+          </Link>
+        )}
+        {!embedded && (
+          <AddToWatchlistButton
+            symbol={row.id}
+            itemType="sport_bet"
+            metadata={sportBetMetadata(row)}
+            label="Save bet"
+            variant="compact"
+          />
+        )}
       </div>
 
       {expanded && (
