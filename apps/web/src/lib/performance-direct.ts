@@ -54,6 +54,7 @@ function formatRow(row: Record<string, unknown>): PerformanceEntry {
     leg_outcomes: Array.isArray(snap.leg_outcomes)
       ? (snap.leg_outcomes as NonNullable<PerformanceEntry["leg_outcomes"]>)
       : null,
+    scoring_snapshot: snap,
   };
 }
 
@@ -228,10 +229,15 @@ export async function logOutcomeDirect(params: {
     // Don't downgrade graded picks — but still stamp user origin if watchlist sync.
     if (params.resolutionSource === "watchlist") {
       const { supabase: sb } = await getSession();
+      const existingSnap = existing.scoring_snapshot ?? {};
       const snap = {
-        pick_origin: "user",
-        user_tracked: true,
+        ...existingSnap,
         ...(params.signalSnapshot ?? {}),
+        pick_origin:
+          existingSnap.pick_origin === "atlas" || existingSnap.pick_origin === "both"
+            ? "both"
+            : "user",
+        user_tracked: true,
       };
       await sb
         .from("signal_performance")
@@ -241,7 +247,12 @@ export async function logOutcomeDirect(params: {
           updated_at: new Date().toISOString(),
         })
         .eq("id", existing.id);
-      return { ...existing, resolution_source: "watchlist", pick_origin: "user" };
+      return {
+        ...existing,
+        resolution_source: "watchlist",
+        pick_origin: snap.pick_origin as "user" | "both",
+        scoring_snapshot: snap,
+      };
     }
     return existing;
   }
@@ -255,13 +266,29 @@ export async function logOutcomeDirect(params: {
   }
 
   const now = new Date().toISOString();
-  const snap = { ...(params.signalSnapshot ?? {}) };
+  const existingSnap =
+    existing?.scoring_snapshot && typeof existing.scoring_snapshot === "object"
+      ? { ...existing.scoring_snapshot }
+      : {};
+  const incoming = { ...(params.signalSnapshot ?? {}) };
+  // Nested scoring_snapshot payloads should flatten into the stored snap.
+  const nested = incoming.scoring_snapshot;
+  if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+    Object.assign(incoming, nested as Record<string, unknown>);
+    delete incoming.scoring_snapshot;
+  }
+  const snap: Record<string, unknown> = { ...existingSnap };
+  for (const [k, v] of Object.entries(incoming)) {
+    if (v != null) snap[k] = v;
+  }
   const src = params.resolutionSource ?? "manual";
   if (src === "watchlist" || src === "manual" || src === "manual_edit") {
-    snap.pick_origin = snap.pick_origin === "atlas" || snap.pick_origin === "both" ? "both" : "user";
+    snap.pick_origin =
+      snap.pick_origin === "atlas" || snap.pick_origin === "both" ? "both" : "user";
     snap.user_tracked = true;
   } else if (src === "auto_scan" || String(src).startsWith("auto_")) {
-    snap.pick_origin = snap.pick_origin === "user" || snap.pick_origin === "both" ? "both" : "atlas";
+    snap.pick_origin =
+      snap.pick_origin === "user" || snap.pick_origin === "both" ? "both" : "atlas";
     snap.atlas_tracked = true;
   }
   const row: Record<string, unknown> = {
@@ -274,8 +301,10 @@ export async function logOutcomeDirect(params: {
     updated_at: now,
     resolution_source: src,
     resolved_at: params.outcome !== "pending" ? now : null,
-    signal_label: signalLabel(params.module, snap),
-    scoring_snapshot: snap.scoring_snapshot ?? snap,
+    signal_label:
+      signalLabel(params.module, snap) ||
+      (typeof existing?.signal_label === "string" ? existing.signal_label : null),
+    scoring_snapshot: snap,
   };
 
   let result = await supabase

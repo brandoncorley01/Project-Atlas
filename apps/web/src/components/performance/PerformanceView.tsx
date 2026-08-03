@@ -18,7 +18,6 @@ import {
   fetchPerformanceSummary,
   formatWatchlistSyncMessage,
   syncWatchlistToPerformance,
-  updatePerformanceOutcome,
 } from "@/lib/performance-api";
 import { apiRequestHeaders, getApiUrl, usesBffProxy } from "@/lib/api-url";
 
@@ -34,6 +33,7 @@ export interface PerformanceEntry {
   signal_label?: string | null;
   pick_origin?: string | null;
   graded_by?: string | null;
+  scoring_snapshot?: Record<string, unknown> | null;
   leg_outcomes?: Array<{
     leg_order?: number;
     selection?: string;
@@ -123,7 +123,7 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
   const [coachError, setCoachError] = useState<string | null>(null);
   const [dataSource, setDataSource] = useState<"api" | "direct" | null>(null);
   const [atlasExpanded, setAtlasExpanded] = useState(false);
-  const [showMyGraded, setShowMyGraded] = useState(false);
+  const [showMyGraded, setShowMyGraded] = useState(true);
   const [showAtlasGraded, setShowAtlasGraded] = useState(false);
   const didBootstrap = useRef(false);
   const syncInFlight = useRef(false);
@@ -153,25 +153,39 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
           credentials: creds,
         }),
       ]);
-      if (sumRes.ok && histRes.ok) {
-        setSummary(await sumRes.json());
+
+      // Prefer history even when summary fails (legacy recursion / timeout).
+      if (histRes.ok) {
         const data = await histRes.json();
-        setHistory(data.items ?? []);
-        setDataSource("api");
-        usedApi = true;
+        const items = (data.items ?? []) as PerformanceEntry[];
+        setHistory(items);
+        if (sumRes.ok) {
+          setSummary(await sumRes.json());
+          setDataSource("api");
+          usedApi = true;
+        } else if (items.length > 0) {
+          const { computeSummaryDirect } = await import("@/lib/performance-direct");
+          setSummary(computeSummaryDirect(items, 30));
+          setDataSource("direct");
+          usedApi = true;
+        }
       }
     } catch {
       /* fall through */
     }
 
     if (!usedApi) {
-      const [sum, hist] = await Promise.all([
-        fetchPerformanceSummary(30),
-        fetchPerformanceHistory(HISTORY_LIMIT),
-      ]);
-      setSummary(sum);
-      setHistory(hist);
-      setDataSource("direct");
+      try {
+        const [sum, hist] = await Promise.all([
+          fetchPerformanceSummary(30),
+          fetchPerformanceHistory(HISTORY_LIMIT),
+        ]);
+        setSummary(sum);
+        setHistory(hist);
+        setDataSource("direct");
+      } catch (err) {
+        setMessage(err instanceof Error ? err.message : "Could not load performance data");
+      }
     }
   }, []);
 
@@ -342,12 +356,18 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
     function onWatchlistUpdated() {
       void syncWatchlist(true).then(() => refreshSummary());
     }
+    function onLearningUpdated() {
+      void refreshSummary();
+      void loadCoachInsight(true);
+    }
     window.addEventListener("atlas:performance-updated", onUpdated);
     window.addEventListener("atlas:watchlist-updated", onWatchlistUpdated);
+    window.addEventListener("atlas:learning-updated", onLearningUpdated);
     return () => {
       cancelled = true;
       window.removeEventListener("atlas:performance-updated", onUpdated);
       window.removeEventListener("atlas:watchlist-updated", onWatchlistUpdated);
+      window.removeEventListener("atlas:learning-updated", onLearningUpdated);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -651,13 +671,36 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
         onGrade={(id) => void runResolveSector(id)}
         onUpdated={refreshSummary}
         emptyHint={
-          <>
-            Nothing waiting — save plays from Sports, Stocks, Options, or Parlays to your{" "}
-            <Link href="/watchlist" className="text-accent hover:underline">
-              watchlist
-            </Link>{" "}
-            and they show up here until graded.
-          </>
+          history.length === 0 ? (
+            <>
+              Nothing tracked yet — tap <strong className="text-foreground">Sync watchlist picks</strong>{" "}
+              above, or save plays from Sports, Stocks, Options, or Parlays to your{" "}
+              <Link href="/watchlist" className="text-accent hover:underline">
+                watchlist
+              </Link>
+              .
+            </>
+          ) : userPending.length === 0 && laneStats.atlas.pending > 0 ? (
+            <>
+              No watchlist picks waiting. Open{" "}
+              <strong className="text-foreground">Atlas scan picks</strong> above for{" "}
+              {laneStats.atlas.pending} board pick{laneStats.atlas.pending === 1 ? "" : "s"}, or save
+              more from your{" "}
+              <Link href="/watchlist" className="text-accent hover:underline">
+                watchlist
+              </Link>
+              .
+            </>
+          ) : (
+            <>
+              Nothing waiting — save plays from Sports, Stocks, Options, or Parlays to your{" "}
+              <Link href="/watchlist" className="text-accent hover:underline">
+                watchlist
+              </Link>{" "}
+              and they show up here until graded. Use <strong className="text-foreground">Change result</strong>{" "}
+              on options and parlays anytime.
+            </>
+          )
         }
       />
 
@@ -1101,7 +1144,7 @@ function SectorPickBlock({
           <thead className="bg-background/40 text-xs text-muted">
             <tr>
               <th className="px-3 py-2">Pick</th>
-              <th className="px-3 py-2">Outcome</th>
+              <th className="px-3 py-2">Result / Save</th>
               <th className="px-3 py-2">Return</th>
               <th className="px-3 py-2">Logged</th>
             </tr>
@@ -1175,13 +1218,6 @@ function OutcomeRow({
   sector: SectorId;
   compact?: boolean;
 }) {
-  const [editing, setEditing] = useState(false);
-  const [outcome, setOutcome] = useState(row.outcome);
-  const [returnPct, setReturnPct] = useState(
-    row.return_pct != null ? String(row.return_pct) : "",
-  );
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const origin = resolvePickOrigin(row);
   const isPending = row.outcome === "pending";
   const autoGraded =
@@ -1191,33 +1227,10 @@ function OutcomeRow({
   const cellPad = compact ? "px-3 py-2" : "px-4 py-2";
   const detailHref = performanceDetailHref(sector, row.signal_id);
   const label = row.signal_label ?? row.signal_id.slice(0, 8);
-
-  useEffect(() => {
-    setOutcome(row.outcome);
-    setReturnPct(row.return_pct != null ? String(row.return_pct) : "");
-  }, [row.id, row.outcome, row.return_pct]);
-
-  async function save() {
-    setSaving(true);
-    setError(null);
-    try {
-      const returnVal = returnPct.trim() !== "" ? Number(returnPct) : undefined;
-      const saved = await updatePerformanceOutcome(row.id, {
-        outcome,
-        returnPct: returnVal,
-      });
-      if (!saved) {
-        throw new Error("Update failed");
-      }
-      setEditing(false);
-      await onUpdated();
-      window.dispatchEvent(new CustomEvent("atlas:performance-updated"));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not update outcome");
-    } finally {
-      setSaving(false);
-    }
-  }
+  const snapshot =
+    row.scoring_snapshot && Object.keys(row.scoring_snapshot).length > 0
+      ? row.scoring_snapshot
+      : undefined;
 
   return (
     <tr className="border-b border-border/50 align-top">
@@ -1257,90 +1270,31 @@ function OutcomeRow({
             })}
           </ul>
         )}
-        {isPending && (
-          <LogOutcomeButtons
-            module={sector}
-            signalId={row.signal_id}
-            compact
-            className="mt-2"
-          />
+      </td>
+      <td className={`${cellPad} min-w-[14rem]`}>
+        <LogOutcomeButtons
+          module={sector}
+          signalId={row.signal_id}
+          signalSnapshot={snapshot}
+          initialOutcome={{
+            outcome: row.outcome,
+            resolution_source: row.resolution_source,
+            return_pct: row.return_pct,
+          }}
+          compact
+          onLogged={onUpdated}
+        />
+        {!isPending && autoGraded && (
+          <p className="mt-1 text-[10px] text-muted">Auto-graded — use Change result to correct</p>
         )}
       </td>
       <td className={cellPad}>
-        {editing ? (
-          <select
-            value={outcome}
-            onChange={(e) => setOutcome(e.target.value)}
-            className="rounded border border-border bg-background px-2 py-1 text-sm capitalize"
-          >
-            <option value="win">Win</option>
-            <option value="loss">Loss</option>
-            <option value="scratch">Scratch</option>
-            <option value="pending">Pending</option>
-          </select>
-        ) : (
-          <span className={`capitalize ${isPending ? "text-sky-300" : ""}`}>
-            {row.outcome}
-            {autoGraded && <span className="ml-1 text-xs text-muted">(auto)</span>}
-            {(row.resolution_source === "manual" || row.resolution_source === "manual_edit") && (
-              <span className="ml-1 text-xs text-muted">(you)</span>
-            )}
-          </span>
-        )}
+        <span className="text-sm">{fmtPct(row.return_pct)}</span>
       </td>
       <td className={cellPad}>
-        {editing ? (
-          <input
-            type="number"
-            step="0.1"
-            placeholder="Return %"
-            value={returnPct}
-            onChange={(e) => setReturnPct(e.target.value)}
-            className="w-24 rounded border border-border bg-background px-2 py-1 text-sm"
-          />
-        ) : (
-          fmtPct(row.return_pct)
-        )}
-      </td>
-      <td className={cellPad}>
-        <div className="flex flex-col gap-1">
-          <span className="text-muted text-xs">
-            {row.logged_at ? new Date(row.logged_at).toLocaleDateString() : "—"}
-          </span>
-          {editing ? (
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => void save()}
-                disabled={saving}
-                className="text-xs font-medium text-accent hover:underline disabled:opacity-50"
-              >
-                {saving ? "Saving…" : "Save"}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setEditing(false);
-                  setOutcome(row.outcome);
-                  setReturnPct(row.return_pct != null ? String(row.return_pct) : "");
-                  setError(null);
-                }}
-                className="text-xs text-muted hover:underline"
-              >
-                Cancel
-              </button>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setEditing(true)}
-              className="text-left text-xs font-medium text-accent hover:underline"
-            >
-              Edit
-            </button>
-          )}
-          {error && <span className="text-xs text-danger">{error}</span>}
-        </div>
+        <span className="text-muted text-xs">
+          {row.logged_at ? new Date(row.logged_at).toLocaleDateString() : "—"}
+        </span>
       </td>
     </tr>
   );

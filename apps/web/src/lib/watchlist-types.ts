@@ -17,6 +17,14 @@ export interface WatchlistItem {
   created_at?: string;
 }
 
+/** Detect option contracts even when stored as legacy `ticker` without watchlist_kind. */
+function looksLikeOptionMeta(meta: Record<string, unknown>): boolean {
+  if (meta.option_type != null && String(meta.option_type).trim() !== "") return true;
+  if (meta.underlying != null && (meta.strike != null || meta.expiration != null)) return true;
+  if (meta.signal_id != null && meta.underlying != null) return true;
+  return false;
+}
+
 /** Logical type for UI tabs — reads watchlist_kind when stored as legacy sport_event/ticker. */
 export function effectiveItemType(item: WatchlistItem): WatchlistItemType | string {
   const kind = item.metadata?.watchlist_kind;
@@ -24,13 +32,16 @@ export function effectiveItemType(item: WatchlistItem): WatchlistItemType | stri
 
   const meta = item.metadata ?? {};
   if (item.item_type === "sport_event") {
-    if (Array.isArray(meta.legs)) return "parlay";
-    if (meta.bet_type || meta.signal_id) return "sport_bet";
+    if (Array.isArray(meta.legs) || meta.parlay_id) return "parlay";
+    if (meta.bet_type || meta.signal_id || meta.selection) return "sport_bet";
   }
   if (item.item_type === "ticker") {
-    if (meta.signal_id && meta.underlying) return "option_signal";
-    if (meta.signal_id && meta.ticker) return "stock_signal";
+    // Options first — some legacy rows have ticker-like fields plus option fields.
+    if (looksLikeOptionMeta(meta)) return "option_signal";
+    if (meta.signal_id && (meta.ticker || meta.recommendation)) return "stock_signal";
   }
+  // Last-chance: option fields on any legacy type.
+  if (looksLikeOptionMeta(meta)) return "option_signal";
   return item.item_type;
 }
 
@@ -89,14 +100,26 @@ export function performanceTrackingForItem(
   const kind = effectiveItemType(item);
   const meta = item.metadata ?? {};
 
-  const snapshot = { ...meta, watchlist_item_id: item.id, symbol: item.symbol };
+  const snapshot = {
+    ...meta,
+    watchlist_item_id: item.id,
+    symbol: item.symbol,
+    pick_origin: "user",
+    user_tracked: true,
+  };
 
+  /** Prefer signal UUID; fall back to watchlist row id so legacy options still sync. */
   const signalFromMetaOrSymbol = (): string | null => {
     if (typeof meta.signal_id === "string" && meta.signal_id.trim()) {
-      return normalizeWatchlistSymbol(meta.signal_id);
+      const sid = normalizeWatchlistSymbol(meta.signal_id);
+      if (UUID_RE.test(sid)) return sid;
     }
     if (UUID_RE.test(item.symbol)) {
       return normalizeWatchlistSymbol(item.symbol);
+    }
+    // Legacy option/stock rows sometimes stored the ticker as symbol with no signal_id.
+    if (UUID_RE.test(item.id)) {
+      return normalizeWatchlistSymbol(item.id);
     }
     return null;
   };
@@ -122,9 +145,10 @@ export function performanceTrackingForItem(
     }
     case "parlay":
       if (typeof meta.parlay_id === "string" && meta.parlay_id.trim()) {
+        const pid = normalizeWatchlistSymbol(meta.parlay_id);
         return {
           module: "parlay",
-          signalId: normalizeWatchlistSymbol(meta.parlay_id),
+          signalId: UUID_RE.test(pid) ? pid : normalizeWatchlistSymbol(item.id),
           signalSnapshot: snapshot,
         };
       }

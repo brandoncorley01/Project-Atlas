@@ -305,9 +305,23 @@ class PerformanceService:
         )
 
     @staticmethod
+    def _looks_like_option_meta(meta: dict[str, Any]) -> bool:
+        if meta.get("option_type"):
+            return True
+        if meta.get("underlying") and (
+            meta.get("strike") is not None or meta.get("expiration") is not None
+        ):
+            return True
+        if meta.get("signal_id") and meta.get("underlying"):
+            return True
+        return False
+
+    @staticmethod
     def resolve_watchlist_item(item: dict[str, Any]) -> tuple[str, str, dict[str, Any]] | None:
         """Map a watchlist row to performance module, signal_id, and snapshot."""
         meta = item.get("metadata") or {}
+        if not isinstance(meta, dict):
+            meta = {}
         item_type = str(item.get("item_type") or "")
         kind = str(meta.get("watchlist_kind") or item_type)
 
@@ -327,22 +341,30 @@ class PerformanceService:
                 elif meta.get("signal_id") or meta.get("bet_type") or meta.get("selection"):
                     module = "sports"
             elif item_type == "ticker" or kind == "ticker":
-                if meta.get("signal_id") and (meta.get("underlying") or meta.get("option_type")):
+                # Prefer options when option-like fields exist (legacy rows often lack signal_id).
+                if PerformanceService._looks_like_option_meta(meta):
                     module = "options"
                 elif meta.get("signal_id") and (meta.get("ticker") or meta.get("recommendation")):
                     module = "stock"
             elif meta.get("legs") or meta.get("parlay_id"):
                 module = "parlay"
+            elif PerformanceService._looks_like_option_meta(meta):
+                module = "options"
 
         if not module:
             return None
 
         if module == "parlay":
             signal_id = str(meta.get("parlay_id") or item.get("id") or "")
-        elif meta.get("signal_id"):
+            if signal_id and not _UUID_RE.match(signal_id):
+                signal_id = str(item.get("id") or "")
+        elif meta.get("signal_id") and _UUID_RE.match(str(meta.get("signal_id"))):
             signal_id = str(meta["signal_id"])
         elif _UUID_RE.match(str(item.get("symbol") or "")):
             signal_id = str(item.get("symbol"))
+        elif _UUID_RE.match(str(item.get("id") or "")):
+            # Legacy options/stocks stored under ticker symbol — still track via watchlist row id.
+            signal_id = str(item.get("id"))
         else:
             return None
 
@@ -353,6 +375,8 @@ class PerformanceService:
             **meta,
             "watchlist_item_id": item.get("id"),
             "symbol": item.get("symbol"),
+            "pick_origin": "user",
+            "user_tracked": True,
             "label": meta.get("label")
             or meta.get("recommendation")
             or meta.get("selection")
@@ -534,6 +558,7 @@ class PerformanceService:
         *,
         days: int,
         module: str | None,
+        include_by_module: bool = True,
     ) -> dict[str, Any]:
         closed = [r for r in rows if r.get("outcome") in ("win", "loss", "scratch")]
         wins = [r for r in closed if r.get("outcome") == "win"]
@@ -551,11 +576,19 @@ class PerformanceService:
         decided = len(wins) + len(losses)
         win_rate = round(len(wins) / decided * 100, 1) if decided else None
 
+        # Leaf guard — nested by_module calls must not recurse into by_module again
+        # or summary 500s with RecursionError whenever any rows exist.
         by_module: dict[str, Any] = {}
-        for mod in VALID_MODULES:
-            mod_rows = [r for r in rows if r.get("module") == mod]
-            if mod_rows:
-                by_module[mod] = self._compute_summary(mod_rows, days=days, module=mod)
+        if include_by_module:
+            for mod in VALID_MODULES:
+                mod_rows = [r for r in rows if r.get("module") == mod]
+                if mod_rows:
+                    by_module[mod] = self._compute_summary(
+                        mod_rows,
+                        days=days,
+                        module=mod,
+                        include_by_module=False,
+                    )
 
         auto_resolved = len(
             [
@@ -630,4 +663,5 @@ class PerformanceService:
             "pick_origin": origin,
             "graded_by": snap.get("graded_by"),
             "leg_outcomes": leg_outcomes,
+            "scoring_snapshot": snap,
         }
