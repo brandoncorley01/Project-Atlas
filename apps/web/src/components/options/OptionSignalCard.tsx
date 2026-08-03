@@ -57,7 +57,16 @@ function recommendedStrategy(plan?: TradePlan) {
   );
 }
 
-export function OptionSignalCard({ row, rank }: { row: OptionSignal; rank: number }) {
+export function OptionSignalCard({
+  row,
+  rank,
+  embedded = false,
+}: {
+  row: OptionSignal;
+  rank: number;
+  /** When true (watchlist/performance), stay in place — no origin-page link. */
+  embedded?: boolean;
+}) {
   const [expanded, setExpanded] = useState(rank === 1);
   const tradePlan = row.scoring_snapshot?.trade_plan;
   const strategy = recommendedStrategy(tradePlan);
@@ -233,14 +242,16 @@ export function OptionSignalCard({ row, rank }: { row: OptionSignal; rank: numbe
       <LogOutcomeButtons module="options" signalId={row.id} compact className="mt-4" />
 
       <div className="mt-3 flex flex-wrap gap-3">
-        <AddToWatchlistButton
-          symbol={row.id}
-          itemType="option_signal"
-          metadata={optionSignalMetadata(row)}
-          label="Save to watchlist"
-          variant="compact"
-        />
-        {rank !== 1 && (
+        {!embedded && (
+          <AddToWatchlistButton
+            symbol={row.id}
+            itemType="option_signal"
+            metadata={optionSignalMetadata(row)}
+            label="Save to watchlist"
+            variant="compact"
+          />
+        )}
+        {!embedded && rank !== 1 && (
           <Link
             href={`/options/${row.id}`}
             className="text-sm font-medium text-accent hover:underline"
@@ -248,15 +259,19 @@ export function OptionSignalCard({ row, rank }: { row: OptionSignal; rank: numbe
             Full detail page →
           </Link>
         )}
-        <Link
-          href={`/stocks?ticker=${encodeURIComponent(row.underlying)}`}
-          className="text-xs font-medium text-muted hover:text-accent"
-        >
-          Analyze {row.underlying} stock →
-        </Link>
-        <Link href="/watchlist?tab=options" className="text-xs font-medium text-muted hover:text-accent">
-          View watchlist →
-        </Link>
+        {!embedded && (
+          <>
+            <Link
+              href={`/stocks?ticker=${encodeURIComponent(row.underlying)}`}
+              className="text-xs font-medium text-muted hover:text-accent"
+            >
+              Analyze {row.underlying} stock →
+            </Link>
+            <Link href="/watchlist?tab=options" className="text-xs font-medium text-muted hover:text-accent">
+              View watchlist →
+            </Link>
+          </>
+        )}
       </div>
     </article>
   );

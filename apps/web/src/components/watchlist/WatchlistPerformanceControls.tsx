@@ -145,7 +145,19 @@ export function WatchlistPerformanceControls({
           module={tracking.module}
           signalId={tracking.signalId}
           signalSnapshot={tracking.signalSnapshot}
+          initialOutcome={{
+            outcome: entry.outcome,
+            resolution_source: entry.resolution_source,
+            return_pct: entry.return_pct,
+          }}
           compact
+          onLogged={async () => {
+            onRegistered({
+              ...entry,
+              // Optimistic pending→graded refresh; parent also reloads history.
+              outcome: entry.outcome,
+            });
+          }}
         />
       )}
     </div>

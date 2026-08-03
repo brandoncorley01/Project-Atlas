@@ -1,8 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { LogOutcomeButtons } from "@/components/performance/LogOutcomeButtons";
+import {
+  WatchlistPickDetail,
+  performanceEntryAsWatchlistItem,
+} from "@/components/watchlist/WatchlistPickDetail";
 import { buildClientCoachInsight, type CoachInsight } from "@/lib/performance-coach";
 import {
   groupBySector,
@@ -34,6 +38,7 @@ export interface PerformanceEntry {
   signal_label?: string | null;
   pick_origin?: string | null;
   graded_by?: string | null;
+  scoring_snapshot?: Record<string, unknown>;
   leg_outcomes?: Array<{
     leg_order?: number;
     selection?: string;
@@ -1054,6 +1059,7 @@ function SectorPickBlock({
   accent: "emerald" | "sky";
 }) {
   const [showAll, setShowAll] = useState(!previewLimit);
+  const [openDetailId, setOpenDetailId] = useState<string | null>(null);
   const visible = previewLimit && !showAll ? picks.slice(0, previewLimit) : picks;
   const hidden = picks.length - visible.length;
   const gradedCount = picks.filter((p) => ["win", "loss", "scratch"].includes(p.outcome)).length;
@@ -1107,9 +1113,33 @@ function SectorPickBlock({
             </tr>
           </thead>
           <tbody>
-            {visible.map((row) => (
-              <OutcomeRow key={row.id} row={row} onUpdated={onUpdated} sector={sector.id} compact />
-            ))}
+            {visible.map((row) => {
+              const isOpen = openDetailId === row.id;
+              return (
+                <Fragment key={row.id}>
+                  <OutcomeRow
+                    row={row}
+                    onUpdated={onUpdated}
+                    sector={sector.id}
+                    compact
+                    detailsOpen={isOpen}
+                    onToggleDetails={() =>
+                      setOpenDetailId((prev) => (prev === row.id ? null : row.id))
+                    }
+                  />
+                  {isOpen && (
+                    <tr className="border-b border-border/50 bg-background/30">
+                      <td colSpan={4} className="px-3 pb-3">
+                        <WatchlistPickDetail
+                          item={performanceEntryAsWatchlistItem(row)}
+                          onClose={() => setOpenDetailId(null)}
+                        />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -1148,32 +1178,20 @@ function fmtPct(v: number | null | undefined) {
   return `${sign}${v}%`;
 }
 
-function performanceDetailHref(sector: SectorId, signalId: string): string | null {
-  if (!signalId) return null;
-  switch (sector) {
-    case "sports":
-      return `/sports/${signalId}`;
-    case "stock":
-      return `/stocks/${signalId}`;
-    case "options":
-      return `/options/${signalId}`;
-    case "parlay":
-      return `/parlays/${signalId}`;
-    default:
-      return null;
-  }
-}
-
 function OutcomeRow({
   row,
   onUpdated,
   sector,
   compact = false,
+  detailsOpen = false,
+  onToggleDetails,
 }: {
   row: PerformanceEntry;
   onUpdated: () => Promise<void>;
   sector: SectorId;
   compact?: boolean;
+  detailsOpen?: boolean;
+  onToggleDetails?: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [outcome, setOutcome] = useState(row.outcome);
@@ -1189,7 +1207,7 @@ function OutcomeRow({
     (String(row.resolution_source ?? "").startsWith("auto_") &&
       row.resolution_source !== "auto_scan");
   const cellPad = compact ? "px-3 py-2" : "px-4 py-2";
-  const detailHref = performanceDetailHref(sector, row.signal_id);
+  const canOpenDetails = Boolean(row.signal_id);
   const label = row.signal_label ?? row.signal_id.slice(0, 8);
 
   useEffect(() => {
@@ -1222,13 +1240,18 @@ function OutcomeRow({
   return (
     <tr className="border-b border-border/50 align-top">
       <td className={cellPad}>
-        {detailHref ? (
-          <Link href={detailHref} className="font-medium text-foreground hover:text-accent">
-            {label}
-          </Link>
-        ) : (
-          <p className="text-foreground">{label}</p>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="font-medium text-foreground">{label}</p>
+          {canOpenDetails && onToggleDetails && (
+            <button
+              type="button"
+              onClick={onToggleDetails}
+              className="text-xs font-medium text-accent hover:underline"
+            >
+              {detailsOpen ? "Hide details" : "View details"}
+            </button>
+          )}
+        </div>
         {origin === "both" && (
           <p className="mt-0.5 text-[10px] text-violet-300/90">Also in Atlas scan</p>
         )}
@@ -1261,8 +1284,14 @@ function OutcomeRow({
           <LogOutcomeButtons
             module={sector}
             signalId={row.signal_id}
+            initialOutcome={{
+              outcome: row.outcome,
+              resolution_source: row.resolution_source,
+              return_pct: row.return_pct,
+            }}
             compact
             className="mt-2"
+            onLogged={() => onUpdated()}
           />
         )}
       </td>
