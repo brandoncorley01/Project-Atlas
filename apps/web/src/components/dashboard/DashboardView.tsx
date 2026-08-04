@@ -19,8 +19,10 @@ import { API_START_HINT } from "@/lib/api-config";
 import {
   actionableWarnings,
   normalizeDashboardWarnings,
+  softNotices,
   type DashboardWarning,
 } from "@/lib/dashboard-warnings";
+import { runDashboardFixAll } from "@/lib/dashboard-fix";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SectionHeader } from "@/components/ui/SectionHeader";
 import { StatusPill } from "@/components/ui/StatusPill";
@@ -91,6 +93,8 @@ export function DashboardView() {
   >(undefined);
   const [freshnessMeta, setFreshnessMeta] = useState<DashboardResponse["meta"] | null>(null);
   const [loadWarnings, setLoadWarnings] = useState<DashboardWarning[]>([]);
+  const [fixingAll, setFixingAll] = useState(false);
+  const [fixAllMessage, setFixAllMessage] = useState<string | null>(null);
 
   const loadDashboard = useCallback(async (opts?: { background?: boolean }) => {
     if (loadInFlightRef.current) return;
@@ -136,9 +140,9 @@ export function DashboardView() {
 
       const warnings = normalizeDashboardWarnings(dashboard.meta?.warnings);
       setLoadWarnings(warnings);
-      const actionable = actionableWarnings(warnings);
-      const errorCount = actionable.filter((w) => w.severity === "error").length;
-      const warnCount = actionable.filter((w) => w.severity === "warn").length;
+      const errors = actionableWarnings(warnings);
+      const notices = softNotices(warnings);
+      const loadStatus = dashboard.meta?.load_status;
 
       const total =
         (dashboard.top_opportunities?.length ?? 0) +
@@ -146,25 +150,21 @@ export function DashboardView() {
         (dashboard.stock_opportunities?.length ?? 0) +
         (dashboard.sports_opportunities?.length ?? 0);
 
-      if (errorCount > 0) {
+      // Partial load ONLY when core opportunity loaders fail (error severity / load_status).
+      if (loadStatus === "partial" || errors.length > 0) {
         setApiStatus(
-          `API connected · partial load (${errorCount} error${errorCount === 1 ? "" : "s"} — see details)`,
-        );
-        setApiStatusColor("text-warning");
-      } else if (warnCount > 0 && total === 0) {
-        setApiStatus(
-          `API connected · partial load (${warnCount} warning${warnCount === 1 ? "" : "s"} — see details)`,
+          `API connected · partial load (${errors.length || 1} error${(errors.length || 1) === 1 ? "" : "s"} — Fix all)`,
         );
         setApiStatusColor("text-warning");
       } else if (total > 0) {
         setApiStatus(
-          warnCount > 0
-            ? `API connected · ${total} signals · ${warnCount} notice${warnCount === 1 ? "" : "s"}`
+          notices.length > 0
+            ? `API connected · ${total} signals`
             : `API connected · ${total} signals`,
         );
         setApiStatusColor("text-success");
       } else {
-        setApiStatus("API connected · no signals yet — run a scan");
+        setApiStatus("API connected · no signals yet — Fix all or run a scan");
         setApiStatusColor("text-success");
       }
       hasLoadedOnceRef.current = true;
@@ -238,6 +238,27 @@ export function DashboardView() {
     }
   }, [loadDashboard]);
 
+  const handleFixAll = useCallback(async () => {
+    if (fixingAll) return;
+    setFixingAll(true);
+    setFixAllMessage("Running Fix all — cleaning, grading, refreshing news, scanning empty boards…");
+    setApiStatus("Fix all running…");
+    setApiStatusColor("text-warning");
+    try {
+      const result = await runDashboardFixAll({ scanEmpty: true });
+      setFixAllMessage(result.message);
+      await loadDashboard({ background: false });
+      if (!result.ok) {
+        setApiStatus(`API connected · Fix all needs attention — see details`);
+        setApiStatusColor("text-warning");
+      }
+    } catch (err) {
+      setFixAllMessage(err instanceof Error ? err.message : "Fix all failed");
+    } finally {
+      setFixingAll(false);
+    }
+  }, [fixingAll, loadDashboard]);
+
   useEffect(() => {
     void loadDashboard();
 
@@ -281,9 +302,16 @@ export function DashboardView() {
     sportsOpportunities.length > 0;
 
   const hasActionableWarnings = actionableWarnings(loadWarnings).length > 0;
+  const needsAnyRefresh = Boolean(
+    freshnessMeta?.needs_refresh?.sports
+      || freshnessMeta?.needs_refresh?.stocks
+      || freshnessMeta?.needs_refresh?.options
+      || freshnessMeta?.needs_refresh?.news,
+  );
+  const showFixAll = hasActionableWarnings || needsAnyRefresh || !hasSignals || Boolean(fixAllMessage);
 
   const statusVariant =
-    loading
+    loading || fixingAll
       ? "loading"
       : apiRestarting
         ? "warning"
@@ -301,16 +329,35 @@ export function DashboardView() {
     <>
       <PageHeader
         title="Home"
-        description={<StatusPill label={loading ? "Loading…" : apiStatus} variant={statusVariant} />}
+        description={
+          <StatusPill
+            label={loading ? "Loading…" : fixingAll ? "Fix all running…" : apiStatus}
+            variant={statusVariant}
+          />
+        }
         actions={
-          !loading && apiStatusColor === "text-danger" ? (
-            <button
-              type="button"
-              onClick={() => void loadDashboard()}
-              className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium hover:bg-surface-hover"
-            >
-              Retry connection
-            </button>
+          !loading && (apiStatusColor === "text-danger" || showFixAll) ? (
+            <div className="flex flex-wrap gap-2">
+              {showFixAll && (
+                <button
+                  type="button"
+                  onClick={() => void handleFixAll()}
+                  disabled={fixingAll}
+                  className="rounded-lg bg-amber-500 px-3 py-1.5 text-sm font-semibold text-black hover:bg-amber-400 disabled:opacity-60"
+                >
+                  {fixingAll ? "Fixing…" : "Fix all"}
+                </button>
+              )}
+              {apiStatusColor === "text-danger" && (
+                <button
+                  type="button"
+                  onClick={() => void loadDashboard()}
+                  className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium hover:bg-surface-hover"
+                >
+                  Retry connection
+                </button>
+              )}
+            </div>
           ) : undefined
         }
       />
@@ -327,10 +374,18 @@ export function DashboardView() {
 
           <DashboardLoadWarnings
             warnings={loadWarnings}
+            includeInfo={Boolean(fixAllMessage) || hasActionableWarnings}
+            fixing={fixingAll}
+            fixMessage={fixAllMessage}
+            onFixAll={() => void handleFixAll()}
             onRetry={() => void loadDashboard()}
           />
 
-          <StaleDataBanner meta={freshnessMeta ?? undefined} />
+          <StaleDataBanner
+            meta={freshnessMeta ?? undefined}
+            fixing={fixingAll}
+            onFixAll={() => void handleFixAll()}
+          />
 
           <AtlasBriefingCard
             briefing={atlasBriefing}

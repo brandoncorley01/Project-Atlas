@@ -17,82 +17,133 @@ const SEVERITY_LABEL: Record<DashboardWarning["severity"], string> = {
 
 interface DashboardLoadWarningsProps {
   warnings: DashboardWarning[];
-  /** When true, also show soft info notices (timeouts that did not break the board). */
+  /** Show soft info notices too (e.g. after Fix all). */
   includeInfo?: boolean;
+  fixing?: boolean;
+  fixMessage?: string | null;
+  onFixAll?: () => void;
   onRetry?: () => void;
 }
 
 export function DashboardLoadWarnings({
   warnings,
   includeInfo = false,
+  fixing = false,
+  fixMessage = null,
+  onFixAll,
   onRetry,
 }: DashboardLoadWarningsProps) {
+  const errors = warnings.filter((w) => w.severity === "error");
   const visible = includeInfo
     ? warnings
-    : warnings.filter((w) => w.severity === "warn" || w.severity === "error");
+    : errors.length > 0
+      ? errors
+      : warnings.filter((w) => w.severity === "warn");
 
-  if (visible.length === 0) return null;
+  // Always show the strip when Fix all is available and there is something to show,
+  // or when the parent forces visibility via errors.
+  if (visible.length === 0 && !fixMessage) return null;
 
-  const errors = visible.filter((w) => w.severity === "error").length;
-  const warns = visible.filter((w) => w.severity === "warn").length;
   const title =
-    errors > 0
-      ? `${errors} load error${errors === 1 ? "" : "s"}`
-      : `${warns} warning${warns === 1 ? "" : "s"}`;
+    errors.length > 0
+      ? `${errors.length} load error${errors.length === 1 ? "" : "s"}`
+      : visible.length > 0
+        ? `${visible.length} notice${visible.length === 1 ? "" : "s"}`
+        : "Repair status";
 
   return (
-    <details className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 open:pb-1">
+    <details
+      className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 open:pb-1"
+      open={errors.length > 0 || Boolean(fixMessage)}
+    >
       <summary className="cursor-pointer list-none px-4 py-3 text-sm">
-        <span className="font-medium text-amber-200">{title}</span>
-        <span className="ml-2 text-muted">
-          — tap for what failed and how to fix it
-        </span>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <span className="font-medium text-amber-200">{title}</span>
+            <span className="ml-2 text-muted">— what failed and how to fix it</span>
+          </div>
+          {onFixAll && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onFixAll();
+              }}
+              disabled={fixing}
+              className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-semibold text-black hover:bg-amber-400 disabled:opacity-60"
+            >
+              {fixing ? "Fixing…" : "Fix all"}
+            </button>
+          )}
+        </div>
       </summary>
-      <ul className="space-y-2 px-4 pb-3">
-        {visible.map((w) => (
-          <li
-            key={`${w.code}-${w.message}`}
-            className={`rounded-lg border px-3 py-2.5 ${SEVERITY_STYLES[w.severity]}`}
-          >
-            <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <p className="text-sm font-medium text-foreground">
-                <span className="mr-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
-                  {SEVERITY_LABEL[w.severity]}
-                </span>
-                {w.message}
+
+      {fixMessage && (
+        <p className="mx-4 mb-2 rounded-md border border-border/70 bg-background/40 px-3 py-2 text-xs text-muted">
+          {fixMessage}
+        </p>
+      )}
+
+      {visible.length > 0 && (
+        <ul className="space-y-2 px-4 pb-3">
+          {visible.map((w) => (
+            <li
+              key={`${w.code}-${w.message}`}
+              className={`rounded-lg border px-3 py-2.5 ${SEVERITY_STYLES[w.severity]}`}
+            >
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <p className="text-sm font-medium text-foreground">
+                  <span className="mr-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    {SEVERITY_LABEL[w.severity]}
+                  </span>
+                  {w.message}
+                </p>
+                {w.action && (
+                  <Link
+                    href={w.action.href}
+                    className="text-xs font-semibold text-accent hover:underline"
+                  >
+                    {w.action.label} →
+                  </Link>
+                )}
+              </div>
+              <p className="mt-1 text-xs leading-relaxed text-muted">
+                <span className="font-medium text-foreground/80">How to fix: </span>
+                {w.fix}
               </p>
-              {w.action && (
-                <Link
-                  href={w.action.href}
-                  className="text-xs font-semibold text-accent hover:underline"
-                >
-                  {w.action.label} →
-                </Link>
+              {w.detail && (
+                <p className="mt-1 break-all font-mono text-[10px] text-muted/80">
+                  {w.detail}
+                </p>
               )}
-            </div>
-            <p className="mt-1 text-xs leading-relaxed text-muted">
-              <span className="font-medium text-foreground/80">How to fix: </span>
-              {w.fix}
-            </p>
-            {w.detail && (
-              <p className="mt-1 font-mono text-[10px] text-muted/80 break-all">
-                {w.detail}
-              </p>
-            )}
-          </li>
-        ))}
-      </ul>
-      {onRetry && (
-        <div className="border-t border-border/60 px-4 py-2">
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="flex flex-wrap gap-3 border-t border-border/60 px-4 py-2">
+        {onFixAll && (
+          <button
+            type="button"
+            onClick={onFixAll}
+            disabled={fixing}
+            className="text-xs font-semibold text-accent hover:underline disabled:opacity-60"
+          >
+            {fixing ? "Running Fix all…" : "Run Fix all again"}
+          </button>
+        )}
+        {onRetry && (
           <button
             type="button"
             onClick={onRetry}
-            className="text-xs font-semibold text-accent hover:underline"
+            disabled={fixing}
+            className="text-xs font-semibold text-muted hover:text-foreground hover:underline disabled:opacity-60"
           >
             Retry Home load
           </button>
-        </div>
-      )}
+        )}
+      </div>
     </details>
   );
 }

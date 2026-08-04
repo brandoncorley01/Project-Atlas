@@ -17,8 +17,6 @@ from app.services.news_service import NewsService
 from app.services.parlay_service import ParlayService
 from app.services.performance_service import PerformanceService
 from app.services.signal_service import SignalService
-from app.services.stale_signal_service import StaleSignalService
-from app.jobs.resolve_outcomes import run_resolve_outcomes_job
 from app.services.ai_narrative_service import ai_narrative_service
 from app.services.market_intelligence_service import MarketIntelligenceService
 from app.services.signal_registry_service import SignalRegistryService
@@ -30,7 +28,6 @@ router = APIRouter()
 T = TypeVar("T")
 
 _dashboard_sem = asyncio.Semaphore(1)
-_EXPIRE_BUDGET_SEC = 10.0
 
 
 async def _safe(
@@ -48,6 +45,15 @@ async def _safe(
         return default
 
 
+async def _soft(label: str, coro: Coroutine[Any, Any, T], default: T) -> T:
+    """Best-effort helper that never emits dashboard warnings."""
+    try:
+        return await coro
+    except Exception as exc:
+        logger.info("Dashboard soft %s skipped: %s", label, exc)
+        return default
+
+
 @router.get("/dashboard")
 async def get_dashboard(
     user_id: str = Depends(get_current_user_id),
@@ -59,6 +65,11 @@ async def get_dashboard(
 
 
 async def _build_dashboard(user_id: str, token: str, limit: int) -> dict:
+    """Fast Home payload — no heavy maintenance on the critical path.
+
+    Expire / backfill / resolve / news refresh live behind POST /engine/fix-all
+    so soft timeouts never look like a broken partial load.
+    """
     warnings: list[dict[str, Any]] = []
     db = SupabaseClient(token)
     signal_service = SignalService(db, user_id)
@@ -66,60 +77,7 @@ async def _build_dashboard(user_id: str, token: str, limit: int) -> dict:
     parlay_service = ParlayService(db, user_id)
     alert_service = AlertService(db, user_id)
     performance_service = PerformanceService(db, user_id)
-
-    news_refreshed = False
-    try:
-        refreshed = await asyncio.wait_for(
-            news_service.maybe_refresh_if_stale(max_age_minutes=20),
-            timeout=30.0,
-        )
-        # Success is expected — do NOT treat as a load warning (was causing false "partial load").
-        news_refreshed = refreshed is not None
-    except TimeoutError:
-        append_warning(warnings, "news_auto_refresh_timeout")
-    except Exception as exc:
-        msg = str(exc).strip() or exc.__class__.__name__
-        logger.warning("Dashboard news auto-refresh failed: %s", msg)
-        append_warning(warnings, "news_auto_refresh", detail=msg)
-
-    try:
-        expired_counts = await asyncio.wait_for(
-            StaleSignalService(db, user_id).expire_all(),
-            timeout=_EXPIRE_BUDGET_SEC,
-        )
-    except TimeoutError:
-        logger.warning("Dashboard expire_stale timed out after %.0fs", _EXPIRE_BUDGET_SEC)
-        append_warning(warnings, "expire_stale", detail="timed out (skipped)")
-        expired_counts = {}
-    except Exception as exc:
-        msg = str(exc).strip() or exc.__class__.__name__
-        logger.warning("Dashboard expire_stale failed: %s", msg)
-        append_warning(warnings, "expire_stale", detail=msg)
-        expired_counts = {}
-
-    resolve_stats: dict[str, Any] = {}
     registry = SignalRegistryService(db, user_id)
-
-    try:
-        await asyncio.wait_for(registry.backfill_all(limit_per_module=80), timeout=6.0)
-    except TimeoutError:
-        append_warning(warnings, "signal_backfill", detail="timed out (skipped)")
-    except Exception as exc:
-        msg = str(exc).strip() or exc.__class__.__name__
-        logger.warning("Dashboard signal_backfill failed: %s", msg)
-        append_warning(warnings, "signal_backfill", detail=msg)
-
-    try:
-        resolve_stats = await asyncio.wait_for(
-            run_resolve_outcomes_job(user_id, token, limit=35),
-            timeout=18.0,
-        )
-    except TimeoutError:
-        append_warning(warnings, "resolve_outcomes", detail="timed out (skipped)")
-    except Exception as exc:
-        msg = str(exc).strip() or exc.__class__.__name__
-        logger.warning("Dashboard resolve_outcomes failed: %s", msg)
-        append_warning(warnings, "resolve_outcomes", detail=msg)
 
     (
         top,
@@ -141,7 +99,6 @@ async def _build_dashboard(user_id: str, token: str, limit: int) -> dict:
             [],
             warnings,
         ),
-        # Week window so Home shows near-term + this-week board (not only ≤48h).
         _safe(
             "sports_opportunities",
             signal_service.sports_opportunities(limit=8, skip_expire=True, window="week"),
@@ -164,11 +121,10 @@ async def _build_dashboard(user_id: str, token: str, limit: int) -> dict:
         for opp in all_opps
         if (sym := SignalService._summary_symbol_from_title(opp.get("title")))
     ]
-    catalyst_map = await _safe(
+    catalyst_map = await _soft(
         "catalyst_match",
         news_service.catalysts_for_symbols(symbols),
         {},
-        warnings,
     )
     top = signal_service.apply_live_catalysts(top, catalyst_map)
     budget = signal_service.apply_live_catalysts(budget, catalyst_map)
@@ -185,22 +141,18 @@ async def _build_dashboard(user_id: str, token: str, limit: int) -> dict:
     }
 
     calibration = perf_summary.get("calibration") if isinstance(perf_summary, dict) else {}
-    market_intelligence: dict[str, Any] = {}
-    try:
-        market_intelligence = await asyncio.wait_for(
+    market_intelligence: dict[str, Any] = await _soft(
+        "market_intelligence",
+        asyncio.wait_for(
             MarketIntelligenceService(db, user_id).generate(
                 tracking_stats=tracking_stats if isinstance(tracking_stats, dict) else {},
                 perf_summary=perf_summary if isinstance(perf_summary, dict) else {},
                 calibration=calibration if isinstance(calibration, dict) else {},
             ),
-            timeout=8.0,
-        )
-    except TimeoutError:
-        append_warning(warnings, "market_intelligence", detail="timed out (skipped)")
-    except Exception as exc:
-        msg = str(exc).strip() or exc.__class__.__name__
-        logger.warning("Dashboard market_intelligence failed: %s", msg)
-        append_warning(warnings, "market_intelligence", detail=msg)
+            timeout=5.0,
+        ),
+        {},
+    )
 
     needs_refresh = {
         "sports": len(sports) == 0,
@@ -222,27 +174,17 @@ async def _build_dashboard(user_id: str, token: str, limit: int) -> dict:
         "market_intelligence": market_intelligence,
     }
 
-    atlas_briefing: dict[str, Any] = {}
     try:
         atlas_briefing = await asyncio.wait_for(
             ai_narrative_service.daily_briefing(
                 user_id=user_id,
                 ctx=briefing_ctx,
-                refresh=news_refreshed,
+                refresh=False,
             ),
-            timeout=12.0,
-        )
-    except TimeoutError:
-        append_warning(warnings, "atlas_briefing", detail="timed out (template only)")
-        atlas_briefing = await ai_narrative_service.daily_briefing(
-            user_id=user_id,
-            ctx=briefing_ctx,
-            use_llm=False,
+            timeout=8.0,
         )
     except Exception as exc:
-        msg = str(exc).strip() or exc.__class__.__name__
-        logger.warning("Dashboard atlas_briefing failed: %s", msg)
-        append_warning(warnings, "atlas_briefing", detail=msg)
+        logger.info("Dashboard atlas_briefing soft fallback: %s", exc)
         atlas_briefing = await ai_narrative_service.daily_briefing(
             user_id=user_id,
             ctx=briefing_ctx,
@@ -270,13 +212,13 @@ async def _build_dashboard(user_id: str, token: str, limit: int) -> dict:
             "limit": limit,
             "status": "live" if signal_total else "no_signals",
             "load_status": load_status,
-            "news_refreshed": news_refreshed,
+            "news_refreshed": False,
             "warnings": warnings,
             "warning_counts": counts,
-            "expired_purged": expired_counts,
-            "outcomes_resolved": resolve_stats.get("resolved", 0),
-            "outcomes_by_module": resolve_stats.get("by_module"),
+            "expired_purged": {},
+            "outcomes_resolved": 0,
             "needs_refresh": needs_refresh,
+            "fix_all_available": True,
         },
     }
 
