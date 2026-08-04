@@ -179,6 +179,24 @@ async def refresh_news(
     return {"status": "ok", "module": "news", **result}
 
 
+@router.post("/fix-all")
+async def fix_all(
+    user_id: str = Depends(get_current_user_id),
+    token: str = Depends(get_access_token),
+    scan_empty: bool = True,
+) -> dict:
+    """Proactive Home repair: expire, backfill, grade, refresh news, scan empty boards.
+
+    Use when Home shows warnings, empty modules, or after a partial load.
+    Scans only modules that currently have no live signals (unless scan_empty=false).
+    """
+    from app.services.dashboard_fix_service import run_fix_all
+
+    result = await run_fix_all(user_id, token, scan_empty=scan_empty)
+    set_last_job("fix_all")
+    return result
+
+
 @router.post("/refresh-options")
 async def refresh_live_options(
     user_id: str = Depends(get_current_user_id),
