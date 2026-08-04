@@ -365,8 +365,14 @@ class SignalService:
             "items": [self.format_sports_item(row) for row in filtered],
         }
 
-    async def sports_opportunities(self, limit: int = 8, *, skip_expire: bool = False) -> list[dict]:
-        sports = await self.list_sports(limit=limit, skip_expire=skip_expire)
+    async def sports_opportunities(
+        self,
+        limit: int = 8,
+        *,
+        skip_expire: bool = False,
+        window: str = "soon",
+    ) -> list[dict]:
+        sports = await self.list_sports(limit=limit, skip_expire=skip_expire, window=window)
         return [self._format_summary(row, "sports") for row in sports]
 
     async def top_opportunities(self, limit: int = 10) -> list[dict]:

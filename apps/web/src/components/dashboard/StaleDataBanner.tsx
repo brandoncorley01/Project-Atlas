@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 interface FreshnessMeta {
   needs_refresh?: {
     sports?: boolean;
@@ -9,6 +11,29 @@ interface FreshnessMeta {
   };
   expired_purged?: Record<string, number>;
 }
+
+const MODULE_FIX: Record<string, { href: string; label: string; how: string }> = {
+  sports: {
+    href: "/sports",
+    label: "Sports",
+    how: "Open Sports → Scan sports odds",
+  },
+  stocks: {
+    href: "/stocks",
+    label: "Stocks",
+    how: "Open Stocks → Scan stock swings",
+  },
+  options: {
+    href: "/options",
+    label: "Options",
+    how: "Open Options → run a deep scan",
+  },
+  news: {
+    href: "/news",
+    label: "News",
+    how: "Open News and pull to refresh",
+  },
+};
 
 export function StaleDataBanner({ meta }: { meta?: FreshnessMeta }) {
   const needs = meta?.needs_refresh;
@@ -36,14 +61,30 @@ export function StaleDataBanner({ meta }: { meta?: FreshnessMeta }) {
           </>
         )}
         {staleModules.length > 0 ? (
-          <>
-            No current {staleModules.join(", ")} data — run a fresh scan to see today&apos;s
-            opportunities.
-          </>
+          <>No current {staleModules.join(", ")} data — run a fresh scan for today&apos;s board.</>
         ) : (
           <>Showing only actionable, up-to-date plays.</>
         )}
       </p>
+      {staleModules.length > 0 && (
+        <ul className="mt-2 space-y-1.5">
+          {staleModules.map((mod) => {
+            const fix = MODULE_FIX[mod];
+            if (!fix) return null;
+            return (
+              <li key={mod} className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                <span className="text-muted">
+                  <span className="font-medium text-foreground/85">How to fix: </span>
+                  {fix.how}
+                </span>
+                <Link href={fix.href} className="font-semibold text-accent hover:underline">
+                  {fix.label} →
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }
