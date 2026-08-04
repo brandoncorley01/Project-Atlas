@@ -14,7 +14,13 @@ import { createClient } from "@/lib/supabase/client";
 import type { Parlay } from "@/components/parlays/ParlayCard";
 import { ParlayCard } from "@/components/parlays/ParlayCard";
 import { StaleDataBanner } from "@/components/dashboard/StaleDataBanner";
+import { DashboardLoadWarnings } from "@/components/dashboard/DashboardLoadWarnings";
 import { API_START_HINT } from "@/lib/api-config";
+import {
+  actionableWarnings,
+  normalizeDashboardWarnings,
+  type DashboardWarning,
+} from "@/lib/dashboard-warnings";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SectionHeader } from "@/components/ui/SectionHeader";
 import { StatusPill } from "@/components/ui/StatusPill";
@@ -48,7 +54,9 @@ interface DashboardResponse {
   meta: {
     user_id: string;
     status: string;
-    warnings?: string[];
+    load_status?: string;
+    warnings?: Array<string | DashboardWarning>;
+    warning_counts?: { info?: number; warn?: number; error?: number };
     needs_refresh?: {
       sports?: boolean;
       stocks?: boolean;
@@ -82,6 +90,7 @@ export function DashboardView() {
     DashboardResponse["performance_summary"] | undefined
   >(undefined);
   const [freshnessMeta, setFreshnessMeta] = useState<DashboardResponse["meta"] | null>(null);
+  const [loadWarnings, setLoadWarnings] = useState<DashboardWarning[]>([]);
 
   const loadDashboard = useCallback(async (opts?: { background?: boolean }) => {
     if (loadInFlightRef.current) return;
@@ -125,20 +134,39 @@ export function DashboardView() {
       setPerformanceSummary(dashboard.performance_summary ?? undefined);
       setFreshnessMeta(dashboard.meta ?? null);
 
+      const warnings = normalizeDashboardWarnings(dashboard.meta?.warnings);
+      setLoadWarnings(warnings);
+      const actionable = actionableWarnings(warnings);
+      const errorCount = actionable.filter((w) => w.severity === "error").length;
+      const warnCount = actionable.filter((w) => w.severity === "warn").length;
+
       const total =
         (dashboard.top_opportunities?.length ?? 0) +
         (dashboard.budget_opportunities?.length ?? 0) +
         (dashboard.stock_opportunities?.length ?? 0) +
         (dashboard.sports_opportunities?.length ?? 0);
 
-      setApiStatus(
-        total > 0
-          ? `API connected · ${total} signals`
-          : dashboard.meta?.warnings?.length
-            ? `API connected · partial load (${dashboard.meta.warnings.length} warnings)`
-            : "API connected · no signals yet",
-      );
-      setApiStatusColor("text-success");
+      if (errorCount > 0) {
+        setApiStatus(
+          `API connected · partial load (${errorCount} error${errorCount === 1 ? "" : "s"} — see details)`,
+        );
+        setApiStatusColor("text-warning");
+      } else if (warnCount > 0 && total === 0) {
+        setApiStatus(
+          `API connected · partial load (${warnCount} warning${warnCount === 1 ? "" : "s"} — see details)`,
+        );
+        setApiStatusColor("text-warning");
+      } else if (total > 0) {
+        setApiStatus(
+          warnCount > 0
+            ? `API connected · ${total} signals · ${warnCount} notice${warnCount === 1 ? "" : "s"}`
+            : `API connected · ${total} signals`,
+        );
+        setApiStatusColor("text-success");
+      } else {
+        setApiStatus("API connected · no signals yet — run a scan");
+        setApiStatusColor("text-success");
+      }
       hasLoadedOnceRef.current = true;
       apiRestartingRef.current = false;
       setApiRestarting(false);
@@ -252,13 +280,17 @@ export function DashboardView() {
     stockOpportunities.length > 0 ||
     sportsOpportunities.length > 0;
 
+  const hasActionableWarnings = actionableWarnings(loadWarnings).length > 0;
+
   const statusVariant =
     loading
       ? "loading"
       : apiRestarting
         ? "warning"
         : apiStatusColor === "text-success"
-          ? "success"
+          ? hasActionableWarnings
+            ? "warning"
+            : "success"
           : apiStatusColor === "text-danger"
             ? "danger"
             : "warning";
@@ -292,6 +324,11 @@ export function DashboardView() {
               <QuickStartGuide compact />
             </div>
           )}
+
+          <DashboardLoadWarnings
+            warnings={loadWarnings}
+            onRetry={() => void loadDashboard()}
+          />
 
           <StaleDataBanner meta={freshnessMeta ?? undefined} />
 

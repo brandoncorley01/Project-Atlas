@@ -8,6 +8,11 @@ from fastapi.encoders import jsonable_encoder
 from app.db.supabase_client import SupabaseClient
 from app.dependencies import get_access_token, get_current_user_id
 from app.services.alert_service import AlertService
+from app.services.dashboard_warnings import (
+    append_warning,
+    load_status_for,
+    warning_summary,
+)
 from app.services.news_service import NewsService
 from app.services.parlay_service import ParlayService
 from app.services.performance_service import PerformanceService
@@ -28,13 +33,18 @@ _dashboard_sem = asyncio.Semaphore(1)
 _EXPIRE_BUDGET_SEC = 10.0
 
 
-async def _safe(label: str, coro: Coroutine[Any, Any, T], default: T, warnings: list[str]) -> T:
+async def _safe(
+    label: str,
+    coro: Coroutine[Any, Any, T],
+    default: T,
+    warnings: list[dict[str, Any]],
+) -> T:
     try:
         return await coro
     except Exception as exc:
         msg = str(exc).strip() or exc.__class__.__name__
         logger.warning("Dashboard %s failed: %s", label, msg)
-        warnings.append(f"{label}: {msg}")
+        append_warning(warnings, label, detail=msg)
         return default
 
 
@@ -49,7 +59,7 @@ async def get_dashboard(
 
 
 async def _build_dashboard(user_id: str, token: str, limit: int) -> dict:
-    warnings: list[str] = []
+    warnings: list[dict[str, Any]] = []
     db = SupabaseClient(token)
     signal_service = SignalService(db, user_id)
     news_service = NewsService(db, user_id)
@@ -63,15 +73,14 @@ async def _build_dashboard(user_id: str, token: str, limit: int) -> dict:
             news_service.maybe_refresh_if_stale(max_age_minutes=20),
             timeout=30.0,
         )
+        # Success is expected — do NOT treat as a load warning (was causing false "partial load").
         news_refreshed = refreshed is not None
-        if news_refreshed:
-            warnings.append("news: auto-refreshed stale headlines for briefing")
     except TimeoutError:
-        warnings.append("news_auto_refresh: timed out (using cached headlines)")
+        append_warning(warnings, "news_auto_refresh_timeout")
     except Exception as exc:
         msg = str(exc).strip() or exc.__class__.__name__
         logger.warning("Dashboard news auto-refresh failed: %s", msg)
-        warnings.append(f"news_auto_refresh: {msg}")
+        append_warning(warnings, "news_auto_refresh", detail=msg)
 
     try:
         expired_counts = await asyncio.wait_for(
@@ -80,12 +89,12 @@ async def _build_dashboard(user_id: str, token: str, limit: int) -> dict:
         )
     except TimeoutError:
         logger.warning("Dashboard expire_stale timed out after %.0fs", _EXPIRE_BUDGET_SEC)
-        warnings.append("expire_stale: timed out (skipped)")
+        append_warning(warnings, "expire_stale", detail="timed out (skipped)")
         expired_counts = {}
     except Exception as exc:
         msg = str(exc).strip() or exc.__class__.__name__
         logger.warning("Dashboard expire_stale failed: %s", msg)
-        warnings.append(f"expire_stale: {msg}")
+        append_warning(warnings, "expire_stale", detail=msg)
         expired_counts = {}
 
     resolve_stats: dict[str, Any] = {}
@@ -94,11 +103,11 @@ async def _build_dashboard(user_id: str, token: str, limit: int) -> dict:
     try:
         await asyncio.wait_for(registry.backfill_all(limit_per_module=80), timeout=6.0)
     except TimeoutError:
-        warnings.append("signal_backfill: timed out (skipped)")
+        append_warning(warnings, "signal_backfill", detail="timed out (skipped)")
     except Exception as exc:
         msg = str(exc).strip() or exc.__class__.__name__
         logger.warning("Dashboard signal_backfill failed: %s", msg)
-        warnings.append(f"signal_backfill: {msg}")
+        append_warning(warnings, "signal_backfill", detail=msg)
 
     try:
         resolve_stats = await asyncio.wait_for(
@@ -106,11 +115,11 @@ async def _build_dashboard(user_id: str, token: str, limit: int) -> dict:
             timeout=18.0,
         )
     except TimeoutError:
-        warnings.append("resolve_outcomes: timed out (skipped)")
+        append_warning(warnings, "resolve_outcomes", detail="timed out (skipped)")
     except Exception as exc:
         msg = str(exc).strip() or exc.__class__.__name__
         logger.warning("Dashboard resolve_outcomes failed: %s", msg)
-        warnings.append(f"resolve_outcomes: {msg}")
+        append_warning(warnings, "resolve_outcomes", detail=msg)
 
     (
         top,
@@ -126,8 +135,19 @@ async def _build_dashboard(user_id: str, token: str, limit: int) -> dict:
     ) = await asyncio.gather(
         _safe("top_opportunities", signal_service.top_opportunities(limit=limit), [], warnings),
         _safe("budget_opportunities", signal_service.budget_opportunities(limit=8), [], warnings),
-        _safe("stock_opportunities", signal_service.stock_opportunities(limit=8, skip_expire=True), [], warnings),
-        _safe("sports_opportunities", signal_service.sports_opportunities(limit=8, skip_expire=True), [], warnings),
+        _safe(
+            "stock_opportunities",
+            signal_service.stock_opportunities(limit=8, skip_expire=True),
+            [],
+            warnings,
+        ),
+        # Week window so Home shows near-term + this-week board (not only ≤48h).
+        _safe(
+            "sports_opportunities",
+            signal_service.sports_opportunities(limit=8, skip_expire=True, window="week"),
+            [],
+            warnings,
+        ),
         _safe("list_parlays", parlay_service.list_parlays(limit=1), [], warnings),
         _safe("breaking_news", news_service.breaking_news(limit=5, include_quotes=False), [], warnings),
         _safe("briefing_news", news_service.briefing_news(limit=6), [], warnings),
@@ -176,11 +196,11 @@ async def _build_dashboard(user_id: str, token: str, limit: int) -> dict:
             timeout=8.0,
         )
     except TimeoutError:
-        warnings.append("market_intelligence: timed out (skipped)")
+        append_warning(warnings, "market_intelligence", detail="timed out (skipped)")
     except Exception as exc:
         msg = str(exc).strip() or exc.__class__.__name__
         logger.warning("Dashboard market_intelligence failed: %s", msg)
-        warnings.append(f"market_intelligence: {msg}")
+        append_warning(warnings, "market_intelligence", detail=msg)
 
     needs_refresh = {
         "sports": len(sports) == 0,
@@ -213,7 +233,7 @@ async def _build_dashboard(user_id: str, token: str, limit: int) -> dict:
             timeout=12.0,
         )
     except TimeoutError:
-        warnings.append("atlas_briefing: timed out (template only)")
+        append_warning(warnings, "atlas_briefing", detail="timed out (template only)")
         atlas_briefing = await ai_narrative_service.daily_briefing(
             user_id=user_id,
             ctx=briefing_ctx,
@@ -222,12 +242,16 @@ async def _build_dashboard(user_id: str, token: str, limit: int) -> dict:
     except Exception as exc:
         msg = str(exc).strip() or exc.__class__.__name__
         logger.warning("Dashboard atlas_briefing failed: %s", msg)
-        warnings.append(f"atlas_briefing: {msg}")
+        append_warning(warnings, "atlas_briefing", detail=msg)
         atlas_briefing = await ai_narrative_service.daily_briefing(
             user_id=user_id,
             ctx=briefing_ctx,
             use_llm=False,
         )
+
+    load_status = load_status_for(warnings)
+    counts = warning_summary(warnings)
+    signal_total = len(top) + len(budget) + len(stocks) + len(sports)
 
     payload = {
         "top_opportunities": top,
@@ -244,8 +268,11 @@ async def _build_dashboard(user_id: str, token: str, limit: int) -> dict:
         "meta": {
             "user_id": user_id,
             "limit": limit,
-            "status": "live" if top else "no_signals",
+            "status": "live" if signal_total else "no_signals",
+            "load_status": load_status,
+            "news_refreshed": news_refreshed,
             "warnings": warnings,
+            "warning_counts": counts,
             "expired_purged": expired_counts,
             "outcomes_resolved": resolve_stats.get("resolved", 0),
             "outcomes_by_module": resolve_stats.get("by_module"),
