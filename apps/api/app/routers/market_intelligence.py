@@ -217,6 +217,38 @@ async def historical_replay(
     return await _svc(user_id, token).historical_replay()
 
 
+class EarningsOutcomeBody(BaseModel):
+    recommendation: dict[str, Any] = Field(default_factory=dict)
+    actual_direction: str | None = None
+    actual_move_pct: float | None = None
+    actual_iv_crush_pct: float | None = None
+    paper_entry: float | None = None
+    paper_exit: float | None = None
+    mfe_pct: float | None = None
+    mae_pct: float | None = None
+    net_result_after_costs: float | None = None
+
+
+@router.get("/earnings/desk")
+async def earnings_desk(
+    user_id: str = Depends(get_current_user_id),
+    token: str = Depends(get_access_token),
+) -> dict:
+    """Earnings Intelligence desk — paper-only; never enables live trading."""
+    _require_enabled()
+    return await _svc(user_id, token).earnings_desk()
+
+
+@router.post("/earnings/outcomes")
+async def earnings_outcomes(
+    body: EarningsOutcomeBody,
+    user_id: str = Depends(get_current_user_id),
+    token: str = Depends(get_access_token),
+) -> dict:
+    _require_enabled()
+    return await _svc(user_id, token).record_earnings_outcome(body.model_dump())
+
+
 @router.post("/exit/evaluate")
 async def evaluate_exit(
     body: PositionEvalBody,

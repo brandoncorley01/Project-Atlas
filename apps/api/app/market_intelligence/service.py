@@ -563,3 +563,79 @@ class MarketIntelligenceService:
                 "data_status": "simulated",
             }
         ]
+
+    # ----- Earnings Intelligence (paper-only) -----
+
+    async def earnings_desk(self) -> dict[str, Any]:
+        from app.market_intelligence.earnings.service_api import build_earnings_desk
+
+        desk = build_earnings_desk(
+            normal_paper_risk_usd=float(getattr(settings, "atlas_earnings_paper_risk_usd", 100.0)),
+            micro_fraction=float(getattr(settings, "atlas_earnings_micro_coattail_fraction", 0.18)),
+            allow_simulated=bool(getattr(settings, "atlas_earnings_allow_simulated", True)),
+        )
+        # Best-effort persist reviewed recommendations for learning (never enables live trading)
+        if self.db and desk.get("recently_reviewed"):
+            try:
+                await self._persist_earnings_reviews(desk["recently_reviewed"])
+            except Exception as exc:
+                logger.debug("earnings persist skipped: %s", exc)
+        return desk
+
+    async def record_earnings_outcome(self, body: dict[str, Any]) -> dict[str, Any]:
+        from app.market_intelligence.earnings.service_api import record_earnings_outcome_payload
+
+        payload = record_earnings_outcome_payload(
+            recommendation=body.get("recommendation") or {},
+            actual_direction=body.get("actual_direction"),
+            actual_move_pct=body.get("actual_move_pct"),
+            actual_iv_crush_pct=body.get("actual_iv_crush_pct"),
+            paper_entry=body.get("paper_entry"),
+            paper_exit=body.get("paper_exit"),
+            mfe_pct=body.get("mfe_pct"),
+            mae_pct=body.get("mae_pct"),
+            net_result_after_costs=body.get("net_result_after_costs"),
+        )
+        payload["user_id"] = self.user_id
+        payload["policy_auto_update"] = False
+        payload["live_trading_enabled"] = False
+        if self.db:
+            try:
+                await self.db.insert("earnings_setup_outcomes", payload)
+            except Exception as exc:
+                logger.debug("earnings outcome insert skipped: %s", exc)
+                payload["persisted"] = False
+            else:
+                payload["persisted"] = True
+        else:
+            payload["persisted"] = False
+        return payload
+
+    async def _persist_earnings_reviews(self, reviews: list[dict[str, Any]]) -> None:
+        assert self.db is not None
+        for rec in reviews[:20]:
+            row = {
+                "user_id": self.user_id,
+                "symbol": rec.get("symbol"),
+                "recommendation": rec.get("recommendation"),
+                "direction": rec.get("direction"),
+                "phase": rec.get("phase"),
+                "strategy": rec.get("strategy"),
+                "confidence": rec.get("confidence"),
+                "expected_move_pct": rec.get("expected_move_pct"),
+                "expected_value": rec.get("expected_value"),
+                "paper_position_size_usd": rec.get("paper_position_size_usd"),
+                "paper_only": True,
+                "evidence": rec,
+                "data_status": rec.get("data_status") or "simulated",
+                "score_version": "earnings_setup_v1",
+            }
+            try:
+                await self.db.upsert(
+                    "earnings_setup_signals",
+                    row,
+                    on_conflict="user_id,symbol,evaluated_day",
+                )
+            except Exception:
+                # Table may not be migrated yet — non-fatal
+                return

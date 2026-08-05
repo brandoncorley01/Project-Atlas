@@ -7,6 +7,7 @@ from typing import Any
 OPTIONS_ACTIVITY_V1 = "options_activity_v1"
 EXIT_V1 = "exit_v1"
 WEATHER_V1 = "weather_v1"
+EARNINGS_SETUP_V1 = "earnings_setup_v1"
 
 OPTIONS_ACTIVITY_WEIGHTS: dict[str, float] = {
     "volume_oi": 0.22,
@@ -41,6 +42,16 @@ WEATHER_WEIGHTS: dict[str, float] = {
     "news": 0.10,
 }
 
+EARNINGS_SETUP_WEIGHTS: dict[str, float] = {
+    "expected_move": 0.22,
+    "historical_move": 0.14,
+    "liquidity": 0.16,
+    "breakeven_reach": 0.16,
+    "expected_value": 0.18,
+    "sentiment_sector": 0.08,
+    "iv_crush_risk": 0.06,
+}
+
 SCORE_CATALOG: dict[str, dict[str, Any]] = {
     "options_activity": {
         "version": OPTIONS_ACTIVITY_V1,
@@ -56,6 +67,11 @@ SCORE_CATALOG: dict[str, dict[str, Any]] = {
         "version": WEATHER_V1,
         "weights": WEATHER_WEIGHTS,
         "summary": "Index, breadth, sectors, options bias, volatility, news",
+    },
+    "earnings_setup": {
+        "version": EARNINGS_SETUP_V1,
+        "weights": EARNINGS_SETUP_WEIGHTS,
+        "summary": "Expected move, historical move, liquidity, breakeven reach, EV after costs, sentiment/sector, IV crush",
     },
 }
 

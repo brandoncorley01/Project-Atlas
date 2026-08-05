@@ -3,6 +3,7 @@ import {
   CLIENT_ALERTS,
   CLIENT_CONGRESS_TRADES,
   CLIENT_DARK_POOL,
+  CLIENT_EARNINGS_DESK,
   CLIENT_EXIT_HEATMAP,
   CLIENT_FIXTURE_FRESHNESS,
   CLIENT_FLOW_CARDS,
@@ -243,6 +244,19 @@ export async function fetchCongressTrades(limit = 40) {
     },
     "client_fixture",
   );
+}
+
+export async function fetchEarningsDesk() {
+  const data = await miFetch<Record<string, unknown>>(
+    "/earnings/desk",
+    "GET",
+    undefined,
+    MI_HEAVY_TIMEOUT_MS,
+  );
+  if (data && (data.upcoming || data.recently_reviewed || data.micro_coattails)) {
+    return withSource(data, "api");
+  }
+  return withSource({ ...CLIENT_EARNINGS_DESK }, "client_fixture");
 }
 
 export async function fetchSectorRotation() {

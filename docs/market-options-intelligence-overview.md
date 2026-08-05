@@ -59,12 +59,28 @@ Every score payload includes version, weights, components, missing inputs, penal
 - 71–85 Scale Out
 - 86–100 Exit Review
 
-## Routes
+## Earnings Intelligence (paper-only)
 
-### Web
+Nested under Market Intelligence (`/market-intelligence?tab=earnings`).
 
-- `/options-intelligence`
-- `/market-intelligence`
+### Behavior
+
+- Recommendation types: `AVOID`, `WATCH`, `MICRO_COATTAIL`, `QUALIFIED_TRADE`, `INSUFFICIENT_DATA`
+- OTM/Micro-Coattail require liquidity, reachable breakeven, positive EV after spread/slippage/IV-crush costs, and defined max loss
+- Large theoretical % return cannot override failed gates
+- Micro-Coattail size = `ATLAS_EARNINGS_PAPER_RISK_USD * ATLAS_EARNINGS_MICRO_COATTAIL_FRACTION` (default $18)
+- `paper_only=true` and `live_trading_enabled=false` on every payload
+- Learning outcomes stored in `earnings_setup_outcomes` without auto policy updates
+
+### API
+
+- `GET /api/v1/market-intelligence/earnings/desk`
+- `POST /api/v1/market-intelligence/earnings/outcomes`
+
+### Score version
+
+- `earnings_setup_v1`
+
 
 ### API (`/api/v1/market-intelligence`)
 

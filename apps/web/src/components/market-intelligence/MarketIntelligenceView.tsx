@@ -4,8 +4,10 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { DataStatusBadge, FreshnessLine } from "@/components/market-intelligence/DataStatusBadge";
 import { DecisionBrief } from "@/components/market-intelligence/DecisionBrief";
+import { EarningsRecommendationCard } from "@/components/market-intelligence/EarningsRecommendationCard";
 import { HeatmapPanel } from "@/components/market-intelligence/HeatmapPanel";
 import {
+  fetchEarningsDesk,
   fetchHistoricalReplay,
   fetchMarketHeatmap,
   fetchMarketWeather,
@@ -17,6 +19,7 @@ import {
 } from "@/lib/market-intelligence-api";
 import { buildMarketTodayBrief, exitBand } from "@/lib/market-intelligence-decisions";
 import {
+  CLIENT_EARNINGS_DESK,
   CLIENT_EXIT_HEATMAP,
   CLIENT_FIXTURE_FRESHNESS,
   CLIENT_HEATMAP,
@@ -26,6 +29,7 @@ import {
 
 const TABS = [
   { id: "heatmap", label: "Stock Heatmap" },
+  { id: "earnings", label: "Earnings" },
   { id: "weather", label: "Market Weather" },
   { id: "exit", label: "Exit Guidance" },
   { id: "rotation", label: "Sector Rotation" },
@@ -68,6 +72,7 @@ export function MarketIntelligenceView() {
   const [smartMoney, setSmartMoney] = useState<Record<string, unknown> | null>(CLIENT_HEATMAP);
   const [exitMap, setExitMap] = useState<Record<string, unknown> | null>(CLIENT_EXIT_HEATMAP);
   const [weather, setWeather] = useState<Record<string, unknown> | null>(CLIENT_WEATHER);
+  const [earnings, setEarnings] = useState<Record<string, unknown> | null>(CLIENT_EARNINGS_DESK);
   const [replay, setReplay] = useState<Record<string, unknown> | null>({
     available: false,
     outcome_engine_ready: true,
@@ -128,6 +133,11 @@ export function MarketIntelligenceView() {
           await loadDesk();
         } else if (active === "weather" || active === "exit" || active === "rotation") {
           await loadDesk();
+        } else if (active === "earnings") {
+          const data = await fetchEarningsDesk();
+          setEarnings(data ?? CLIENT_EARNINGS_DESK);
+          setFreshness((data.freshness as Freshness) ?? CLIENT_FIXTURE_FRESHNESS);
+          setUsingFixture(data.source === "client_fixture");
         } else if (active === "options-bias") {
           const bias = await fetchOptionsHeatmap();
           setOptionsBias(bias ?? CLIENT_HEATMAP);
@@ -183,8 +193,8 @@ export function MarketIntelligenceView() {
       <header className="space-y-2">
         <h1 className="text-2xl font-semibold tracking-tight">Market Intelligence</h1>
         <p className="max-w-3xl text-sm text-muted">
-          Live-session stock market heatmap (delayed quotes), regime context, sector lean, and swing
-          exit guidance. Decision support only — not a forecast or order instruction.
+          Stock heatmap, Earnings Intelligence (paper-only), regime context, and swing exit guidance.
+          Decision support only — not a forecast or live order routing.
         </p>
         <div className="flex flex-wrap items-center gap-2">
           <DataStatusBadge freshness={freshness} />
@@ -319,6 +329,129 @@ export function MarketIntelligenceView() {
           }
           colorBy={String(heatmap.color_by ?? "daily_return")}
         />
+      )}
+
+      {tab === "earnings" && earnings && (
+        <div className="space-y-5">
+          <div className="rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-sm text-sky-50">
+            Paper-only desk. Micro-Coattail uses{" "}
+            {String((earnings.config as { micro_max_risk_usd?: number } | undefined)?.micro_max_risk_usd ?? 18)}{" "}
+            USD max risk (
+            {String(
+              Math.round(
+                Number(
+                  (earnings.config as { micro_coattail_fraction?: number } | undefined)
+                    ?.micro_coattail_fraction ?? 0.18,
+                ) * 100,
+              ),
+            )}
+            % of normal paper size). Live trading is disabled.
+          </div>
+          {earnings.disclaimer ? (
+            <p className="text-xs text-amber-200/80">{String(earnings.disclaimer)}</p>
+          ) : null}
+
+          <section className="space-y-2">
+            <h2 className="text-sm font-semibold">Upcoming earnings</h2>
+            <div className="overflow-x-auto rounded-xl border border-border">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-background/40 text-xs text-muted">
+                  <tr>
+                    <th className="px-3 py-2">Symbol</th>
+                    <th className="px-3 py-2">Date</th>
+                    <th className="px-3 py-2">Time</th>
+                    <th className="px-3 py-2">Phase</th>
+                    <th className="px-3 py-2">EPS est.</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {((earnings.upcoming as Record<string, unknown>[]) || []).map((row) => (
+                    <tr key={String(row.symbol)} className="border-t border-border/60">
+                      <td className="px-3 py-2 font-medium">{String(row.symbol)}</td>
+                      <td className="px-3 py-2">{String(row.report_date)}</td>
+                      <td className="px-3 py-2">{String(row.release_time)}</td>
+                      <td className="px-3 py-2">{String(row.phase)}</td>
+                      <td className="px-3 py-2">
+                        {row.eps_estimate != null ? String(row.eps_estimate) : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="space-y-2">
+            <h2 className="text-sm font-semibold">Active earnings watchlist</h2>
+            <ul className="space-y-1 text-sm text-muted">
+              {((earnings.watchlist as Record<string, unknown>[]) || []).map((w) => (
+                <li key={`${String(w.symbol)}-${String(w.report_date)}`}>
+                  <span className="font-medium text-foreground">{String(w.symbol)}</span> ·{" "}
+                  {String(w.phase)} · {String(w.report_date)}
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          <section className="space-y-3">
+            <h2 className="text-sm font-semibold">Pre-earnings opportunities</h2>
+            <div className="grid gap-3">
+              {((earnings.pre_earnings as Record<string, unknown>[]) || []).map((rec) => (
+                <EarningsRecommendationCard
+                  key={`pre-${String(rec.symbol)}-${String(rec.recommendation)}`}
+                  rec={rec}
+                />
+              ))}
+              {((earnings.pre_earnings as unknown[]) || []).length === 0 && (
+                <p className="text-sm text-muted">No pre-earnings setups scored yet.</p>
+              )}
+            </div>
+          </section>
+
+          <section className="space-y-3">
+            <h2 className="text-sm font-semibold">Post-earnings opportunities</h2>
+            <div className="grid gap-3">
+              {((earnings.post_earnings as Record<string, unknown>[]) || []).map((rec) => (
+                <EarningsRecommendationCard
+                  key={`post-${String(rec.symbol)}-${String(rec.recommendation)}`}
+                  rec={rec}
+                />
+              ))}
+              {((earnings.post_earnings as unknown[]) || []).length === 0 && (
+                <p className="text-sm text-muted">No post-earnings setups scored yet.</p>
+              )}
+            </div>
+          </section>
+
+          <section className="space-y-3">
+            <h2 className="text-sm font-semibold">Micro-Coattail recommendations</h2>
+            <div className="grid gap-3">
+              {((earnings.micro_coattails as Record<string, unknown>[]) || []).map((rec) => (
+                <EarningsRecommendationCard
+                  key={`micro-${String(rec.symbol)}-${String(rec.strategy)}`}
+                  rec={rec}
+                />
+              ))}
+              {((earnings.micro_coattails as unknown[]) || []).length === 0 && (
+                <p className="text-sm text-muted">No Micro-Coattail edges cleared EV gates.</p>
+              )}
+            </div>
+          </section>
+
+          <details className="rounded-xl border border-border bg-surface/40 p-4">
+            <summary className="cursor-pointer text-sm font-semibold">
+              Recently reviewed earnings predictions
+            </summary>
+            <div className="mt-3 grid gap-3">
+              {((earnings.recently_reviewed as Record<string, unknown>[]) || []).map((rec) => (
+                <EarningsRecommendationCard
+                  key={`rev-${String(rec.symbol)}-${String(rec.recommendation)}`}
+                  rec={rec}
+                />
+              ))}
+            </div>
+          </details>
+        </div>
       )}
 
       {tab === "rotation" && (
