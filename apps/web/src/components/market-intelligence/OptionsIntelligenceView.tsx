@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { DataStatusBadge, FreshnessLine } from "@/components/market-intelligence/DataStatusBadge";
+import { DecisionBrief } from "@/components/market-intelligence/DecisionBrief";
 import { HeatmapPanel } from "@/components/market-intelligence/HeatmapPanel";
 import { OptionsTradeCard } from "@/components/market-intelligence/OptionsTradeCard";
 import {
@@ -15,6 +16,7 @@ import {
   fetchSmartMoney,
   type Freshness,
 } from "@/lib/market-intelligence-api";
+import { buildOptionsTodayBrief } from "@/lib/market-intelligence-decisions";
 import {
   CLIENT_ALERTS,
   CLIENT_FIXTURE_FRESHNESS,
@@ -25,25 +27,31 @@ import {
 } from "@/lib/market-intelligence-fixtures";
 
 const TABS = [
+  { id: "today", label: "Today" },
   { id: "flow", label: "Flow Scanner" },
   { id: "low-premium", label: "Low-Premium" },
-  { id: "smart-money", label: "Smart-Money Watchlist" },
-  { id: "heatmap", label: "Options Heatmap" },
-  { id: "history", label: "Signal History" },
+  { id: "smart-money", label: "Smart-Money" },
+  { id: "heatmap", label: "Heatmap" },
+  { id: "history", label: "History" },
   { id: "performance", label: "Performance" },
-  { id: "alerts", label: "Alert Settings" },
+  { id: "alerts", label: "Alerts" },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
 
+function readInitialTab(): TabId {
+  if (typeof window === "undefined") return "today";
+  const raw = new URLSearchParams(window.location.search).get("tab");
+  if (TABS.some((t) => t.id === raw)) return raw as TabId;
+  return "today";
+}
+
 export function OptionsIntelligenceView() {
-  const [tab, setTab] = useState<TabId>("flow");
+  const [tab, setTab] = useState<TabId>("today");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [freshness, setFreshness] = useState<Freshness | null>(CLIENT_FIXTURE_FRESHNESS);
-  const [disclaimer, setDisclaimer] = useState<string | null>(
-    "Loading live provider… showing simulated fixtures until API responds.",
-  );
+  const [disclaimer, setDisclaimer] = useState<string | null>(null);
   const [flow, setFlow] = useState<Record<string, unknown>[]>(CLIENT_FLOW_CARDS);
   const [lowPremium, setLowPremium] = useState<Record<string, unknown>[]>([]);
   const [smartMoney, setSmartMoney] = useState<Record<string, unknown>[]>(CLIENT_SMART_MONEY);
@@ -53,11 +61,49 @@ export function OptionsIntelligenceView() {
   const [alerts, setAlerts] = useState<Record<string, unknown>[]>(CLIENT_ALERTS.items);
   const [usingFixture, setUsingFixture] = useState(true);
 
+  useEffect(() => {
+    setTab(readInitialTab());
+  }, []);
+
+  const setTabAndUrl = useCallback((next: TabId) => {
+    setTab(next);
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      if (next === "today") url.searchParams.delete("tab");
+      else url.searchParams.set("tab", next);
+      window.history.replaceState({}, "", url.toString());
+    }
+  }, []);
+
+  const loadDesk = useCallback(async () => {
+    try {
+      const [flowData, smartData, perfData] = await Promise.all([
+        fetchOptionsFlow(),
+        fetchSmartMoney(),
+        fetchOptionsPerformance(),
+      ]);
+      setFlow(flowData.items ?? CLIENT_FLOW_CARDS);
+      setSmartMoney(smartData.items ?? CLIENT_SMART_MONEY);
+      setPerformance(perfData ?? CLIENT_PERFORMANCE);
+      setFreshness(flowData.freshness ?? CLIENT_FIXTURE_FRESHNESS);
+      setDisclaimer(flowData.disclaimer ?? null);
+      setUsingFixture(
+        flowData.source === "client_fixture" ||
+          smartData.source === "client_fixture" ||
+          perfData.source === "client_fixture",
+      );
+    } catch {
+      setUsingFixture(true);
+    }
+  }, []);
+
   const load = useCallback(async (active: TabId) => {
     setLoading(true);
     setError(null);
     try {
-      if (active === "flow") {
+      if (active === "today") {
+        await loadDesk();
+      } else if (active === "flow") {
         const data = await fetchOptionsFlow();
         setFlow(data.items ?? CLIENT_FLOW_CARDS);
         setFreshness(data.freshness ?? CLIENT_FIXTURE_FRESHNESS);
@@ -101,11 +147,16 @@ export function OptionsIntelligenceView() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [loadDesk]);
 
   useEffect(() => {
     void load(tab);
   }, [tab, load]);
+
+  const brief = useMemo(
+    () => buildOptionsTodayBrief({ flow, smartMoney, performance, usingFixture }),
+    [flow, smartMoney, performance, usingFixture],
+  );
 
   const lowPremiumCards = useMemo(() => {
     const rows = lowPremium.length
@@ -162,37 +213,42 @@ export function OptionsIntelligenceView() {
     });
   }, [lowPremium]);
 
+  const perfSummary = (performance?.summary as Record<string, unknown> | undefined) ?? {};
+
   return (
     <div className="space-y-6">
       <header className="space-y-2">
         <h1 className="text-2xl font-semibold tracking-tight">Options Intelligence</h1>
         <p className="max-w-3xl text-sm text-muted">
-          Affordable retail options decision support — unusual activity, liquidity filters, and
-          explainable scores. Activity does not prove intent; large trades may be hedges or spreads.
+          Decide what to review, size, watch, or pass — unusual activity with liquidity filters and
+          explainable scores. Activity does not prove intent.
         </p>
         <div className="flex flex-wrap items-center gap-2">
           <DataStatusBadge freshness={freshness} />
           <FreshnessLine freshness={freshness} />
+          <Link href="/market-intelligence" className="text-xs font-semibold text-accent hover:underline">
+            Market Intelligence →
+          </Link>
+          <Link href="/options" className="text-xs font-semibold text-accent hover:underline">
+            Options board →
+          </Link>
         </div>
         {usingFixture && (
           <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
-            Showing <strong>simulated</strong> fixtures while the Market Intelligence API is
-            unreachable or still deploying. Content below is intentional demo data — not live tape.
-            Also open{" "}
-            <Link href="/market-intelligence" className="underline">
-              Market Intelligence
-            </Link>
-            .
+            Showing <strong>simulated</strong> fixtures while the API is unreachable or still
+            deploying. Learn the workflow here — do not treat this as live tape.
           </div>
         )}
       </header>
+
+      <DecisionBrief eyebrow="Options decision desk" stance={brief.stance} actions={brief.actions} />
 
       <div className="flex gap-1 overflow-x-auto pb-1">
         {TABS.map((t) => (
           <button
             key={t.id}
             type="button"
-            onClick={() => setTab(t.id)}
+            onClick={() => setTabAndUrl(t.id)}
             className={`shrink-0 rounded-md px-3 py-1.5 text-sm ${
               tab === t.id
                 ? "bg-accent/20 font-medium text-accent"
@@ -204,7 +260,7 @@ export function OptionsIntelligenceView() {
         ))}
       </div>
 
-      {loading && <p className="text-xs text-muted">Refreshing from API…</p>}
+      {loading && <p className="text-xs text-muted">Refreshing…</p>}
       {error && (
         <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">
           {error} — continuing with simulated fixtures.
@@ -212,8 +268,43 @@ export function OptionsIntelligenceView() {
       )}
       {disclaimer && <p className="text-xs text-muted">{disclaimer}</p>}
 
+      {tab === "today" && (
+        <div className="space-y-4" id="flow-board">
+          <div>
+            <h2 className="text-sm font-semibold text-foreground">Top prints to decide on</h2>
+            <p className="mt-1 text-xs text-muted">
+              Ranked by unusual score — each card tells you take, size small, watch, or pass.
+            </p>
+          </div>
+          <div className="grid gap-3">
+            {brief.topCards.map((card) => (
+              <OptionsTradeCard key={String(card.idempotency_key ?? card.contract)} card={card} />
+            ))}
+          </div>
+          {smartMoney[0] && (
+            <article className="rounded-xl border border-border bg-surface/60 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-base font-semibold">{String(smartMoney[0].underlying)}</h3>
+                <button
+                  type="button"
+                  onClick={() => setTabAndUrl("smart-money")}
+                  className="text-xs font-semibold text-accent hover:underline"
+                >
+                  Full watchlist →
+                </button>
+              </div>
+              <p className="mt-1 text-sm">{String(smartMoney[0].label)}</p>
+              <p className="mt-2 text-xs text-muted">
+                Score {String(smartMoney[0].unusual_score)} · Confidence{" "}
+                {String(smartMoney[0].confidence)} · not institutional identity
+              </p>
+            </article>
+          )}
+        </div>
+      )}
+
       {tab === "flow" && (
-        <div className="grid gap-3">
+        <div className="grid gap-3" id="flow-board">
           {flow.map((card) => (
             <OptionsTradeCard key={String(card.idempotency_key ?? card.contract)} card={card} />
           ))}
@@ -222,6 +313,9 @@ export function OptionsIntelligenceView() {
 
       {tab === "low-premium" && (
         <div className="grid gap-3">
+          <p className="text-xs text-muted">
+            Affordable contracts only — cheap alone does not qualify; unusualness must confirm.
+          </p>
           {lowPremiumCards.map((card, idx) => (
             <OptionsTradeCard key={String(card.idempotency_key ?? idx)} card={card} />
           ))}
@@ -265,18 +359,40 @@ export function OptionsIntelligenceView() {
       {tab === "history" && (
         <div className="grid gap-3">
           {history.map((card) => (
-            <OptionsTradeCard key={String(card.idempotency_key ?? card.contract)} card={card} />
+            <OptionsTradeCard key={String(card.idempotency_key ?? card.contract)} card={card} compact />
           ))}
         </div>
       )}
 
       {tab === "performance" && performance && (
-        <div className="rounded-xl border border-border bg-surface/60 p-4 text-sm">
-          <p className="font-medium">Outcome engine ready</p>
-          <pre className="mt-3 overflow-x-auto rounded-lg bg-background/60 p-3 text-xs text-muted">
-            {JSON.stringify(performance, null, 2)}
-          </pre>
-        </div>
+        <section className="rounded-xl border border-border bg-surface/60 p-4 sm:p-5">
+          <h2 className="text-base font-semibold">Options intel track record</h2>
+          <p className="mt-1 text-sm text-muted">
+            {String(perfSummary.note ?? performance.disclaimer ?? "Outcome tracking for intel signals.")}
+          </p>
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            <div className="rounded-lg border border-border/70 bg-background/30 px-3 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">Signals tracked</p>
+              <p className="mt-1 text-2xl font-semibold">{String(perfSummary.signals_tracked ?? 0)}</p>
+            </div>
+            <div className="rounded-lg border border-border/70 bg-background/30 px-3 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">Hit rate</p>
+              <p className="mt-1 text-2xl font-semibold">
+                {perfSummary.hit_rate != null ? `${String(perfSummary.hit_rate)}%` : "—"}
+              </p>
+            </div>
+            <div className="rounded-lg border border-border/70 bg-background/30 px-3 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">Avg return</p>
+              <p className="mt-1 text-2xl font-semibold">
+                {perfSummary.avg_return != null ? `${String(perfSummary.avg_return)}%` : "—"}
+              </p>
+            </div>
+          </div>
+          <p className="mt-4 text-xs text-amber-200/80">{String(performance.disclaimer ?? "")}</p>
+          <Link href="/performance" className="mt-3 inline-block text-xs font-semibold text-accent hover:underline">
+            Full Atlas learning loop →
+          </Link>
+        </section>
       )}
 
       {tab === "alerts" && (
@@ -293,7 +409,7 @@ export function OptionsIntelligenceView() {
             <tbody>
               {alerts.map((a) => (
                 <tr key={String(a.alert_type)} className="border-t border-border/60">
-                  <td className="px-3 py-2">{String(a.alert_type)}</td>
+                  <td className="px-3 py-2">{String(a.alert_type).replaceAll("_", " ")}</td>
                   <td className="px-3 py-2">{a.enabled ? "On" : "Off"}</td>
                   <td className="px-3 py-2">{a.threshold != null ? String(a.threshold) : "—"}</td>
                   <td className="px-3 py-2">{String(a.cooldown_minutes)}m</td>
