@@ -14,7 +14,7 @@ const ENGINE_LONG_PROXY_TIMEOUT_MS = 180_000;
 export const maxDuration = 300;
 export const dynamic = "force-dynamic";
 
-def proxyTimeoutFor(subpath: string): number {
+function proxyTimeoutFor(subpath: string): number {
   if (subpath.startsWith("ai/")) return AI_PROXY_TIMEOUT_MS;
   if (subpath === "signals/sports/events") return INSIGHT_SEARCH_PROXY_TIMEOUT_MS;
   if (subpath === "dashboard") return DASHBOARD_PROXY_TIMEOUT_MS;
