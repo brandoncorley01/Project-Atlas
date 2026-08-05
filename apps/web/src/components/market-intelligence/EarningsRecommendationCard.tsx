@@ -105,12 +105,14 @@ export function EarningsRecommendationCard({ rec }: { rec: Rec }) {
           <li>Entry: {String(rec.entry_condition ?? "—")}</li>
           <li>Invalidation: {String(rec.invalidation_condition ?? "—")}</li>
           <li>Holding: {String(rec.expected_holding_period ?? "—")}</li>
-          <li>Suggested size: ${Number(rec.position_size_usd ?? rec.paper_position_size_usd ?? 0).toFixed(0)}</li>
+          <li>Suggested size: ${Number(rec.position_size_usd ?? 0).toFixed(0)}</li>
           {targets.length > 0 && <li>Targets: {targets.join(" · ")}</li>}
-          {rec.confirmation_condition && (
+          {Boolean(rec.confirmation_condition) && (
             <li>Confirmation: {String(rec.confirmation_condition)}</li>
           )}
-          {rec.watch_expires_at && <li>Watch expires: {String(rec.watch_expires_at)}</li>}
+          {Boolean(rec.watch_expires_at) && (
+            <li>Watch expires: {String(rec.watch_expires_at)}</li>
+          )}
           <li>Upgrade: {String(rec.upgrade_condition ?? "—")}</li>
           <li>Downgrade: {String(rec.downgrade_condition ?? "—")}</li>
           <li>Cancel: {String(rec.cancel_condition ?? "—")}</li>
