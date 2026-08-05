@@ -222,6 +222,9 @@ class EarningsOutcomeBody(BaseModel):
     actual_direction: str | None = None
     actual_move_pct: float | None = None
     actual_iv_crush_pct: float | None = None
+    entry: float | None = None
+    exit: float | None = None
+    # Compat aliases
     paper_entry: float | None = None
     paper_exit: float | None = None
     mfe_pct: float | None = None
@@ -234,7 +237,7 @@ async def earnings_desk(
     user_id: str = Depends(get_current_user_id),
     token: str = Depends(get_access_token),
 ) -> dict:
-    """Earnings Intelligence desk — paper-only; never enables live trading."""
+    """Earnings Intelligence desk — live Yahoo calendar/quotes/chains."""
     _require_enabled()
     return await _svc(user_id, token).earnings_desk()
 

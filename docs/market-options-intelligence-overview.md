@@ -59,17 +59,18 @@ Every score payload includes version, weights, components, missing inputs, penal
 - 71–85 Scale Out
 - 86–100 Exit Review
 
-## Earnings Intelligence (paper-only)
+## Earnings Intelligence
 
 Nested under Market Intelligence (`/market-intelligence?tab=earnings`).
 
 ### Behavior
 
+- Live Yahoo earnings calendar, quotes, and options chains (delayed)
 - Recommendation types: `AVOID`, `WATCH`, `MICRO_COATTAIL`, `QUALIFIED_TRADE`, `INSUFFICIENT_DATA`
 - OTM/Micro-Coattail require liquidity, reachable breakeven, positive EV after spread/slippage/IV-crush costs, and defined max loss
 - Large theoretical % return cannot override failed gates
-- Micro-Coattail size = `ATLAS_EARNINGS_PAPER_RISK_USD * ATLAS_EARNINGS_MICRO_COATTAIL_FRACTION` (default $18)
-- `paper_only=true` and `live_trading_enabled=false` on every payload
+- Micro-Coattail size = `ATLAS_EARNINGS_NORMAL_RISK_USD * ATLAS_EARNINGS_MICRO_COATTAIL_FRACTION` (default $18)
+- Decision support only — does not route broker orders
 - Learning outcomes stored in `earnings_setup_outcomes` without auto policy updates
 
 ### API

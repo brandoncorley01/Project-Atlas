@@ -564,17 +564,22 @@ class MarketIntelligenceService:
             }
         ]
 
-    # ----- Earnings Intelligence (paper-only) -----
+    # ----- Earnings Intelligence (live Yahoo data) -----
 
     async def earnings_desk(self) -> dict[str, Any]:
         from app.market_intelligence.earnings.service_api import build_earnings_desk
 
-        desk = build_earnings_desk(
-            normal_paper_risk_usd=float(getattr(settings, "atlas_earnings_paper_risk_usd", 100.0)),
+        desk = await build_earnings_desk(
+            normal_risk_usd=float(
+                getattr(settings, "atlas_earnings_normal_risk_usd", None)
+                or getattr(settings, "atlas_earnings_paper_risk_usd", 100.0)
+            ),
             micro_fraction=float(getattr(settings, "atlas_earnings_micro_coattail_fraction", 0.18)),
-            allow_simulated=bool(getattr(settings, "atlas_earnings_allow_simulated", True)),
+            allow_fixture_fallback=bool(
+                getattr(settings, "atlas_earnings_allow_fixture_fallback", False)
+                or getattr(settings, "atlas_earnings_allow_simulated", False)
+            ),
         )
-        # Best-effort persist reviewed recommendations for learning (never enables live trading)
         if self.db and desk.get("recently_reviewed"):
             try:
                 await self._persist_earnings_reviews(desk["recently_reviewed"])
@@ -585,23 +590,32 @@ class MarketIntelligenceService:
     async def record_earnings_outcome(self, body: dict[str, Any]) -> dict[str, Any]:
         from app.market_intelligence.earnings.service_api import record_earnings_outcome_payload
 
+        entry = body.get("entry", body.get("paper_entry"))
+        exit_px = body.get("exit", body.get("paper_exit"))
         payload = record_earnings_outcome_payload(
             recommendation=body.get("recommendation") or {},
             actual_direction=body.get("actual_direction"),
             actual_move_pct=body.get("actual_move_pct"),
             actual_iv_crush_pct=body.get("actual_iv_crush_pct"),
-            paper_entry=body.get("paper_entry"),
-            paper_exit=body.get("paper_exit"),
+            entry=entry,
+            exit=exit_px,
             mfe_pct=body.get("mfe_pct"),
             mae_pct=body.get("mae_pct"),
             net_result_after_costs=body.get("net_result_after_costs"),
         )
         payload["user_id"] = self.user_id
         payload["policy_auto_update"] = False
-        payload["live_trading_enabled"] = False
+        # Map to existing DB column names
+        db_row = {
+            **{k: v for k, v in payload.items() if k not in ("entry", "exit")},
+            "paper_entry": entry,
+            "paper_exit": exit_px,
+            "paper_only": False,
+            "live_trading_enabled": False,
+        }
         if self.db:
             try:
-                await self.db.insert("earnings_setup_outcomes", payload)
+                await self.db.insert("earnings_setup_outcomes", db_row)
             except Exception as exc:
                 logger.debug("earnings outcome insert skipped: %s", exc)
                 payload["persisted"] = False
@@ -614,6 +628,7 @@ class MarketIntelligenceService:
     async def _persist_earnings_reviews(self, reviews: list[dict[str, Any]]) -> None:
         assert self.db is not None
         for rec in reviews[:20]:
+            size = rec.get("position_size_usd", rec.get("paper_position_size_usd"))
             row = {
                 "user_id": self.user_id,
                 "symbol": rec.get("symbol"),
@@ -624,10 +639,10 @@ class MarketIntelligenceService:
                 "confidence": rec.get("confidence"),
                 "expected_move_pct": rec.get("expected_move_pct"),
                 "expected_value": rec.get("expected_value"),
-                "paper_position_size_usd": rec.get("paper_position_size_usd"),
-                "paper_only": True,
+                "paper_position_size_usd": size,
+                "paper_only": False,
                 "evidence": rec,
-                "data_status": rec.get("data_status") or "simulated",
+                "data_status": rec.get("data_status") or "delayed",
                 "score_version": "earnings_setup_v1",
             }
             try:

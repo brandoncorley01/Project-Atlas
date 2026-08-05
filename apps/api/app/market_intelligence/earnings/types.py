@@ -1,4 +1,4 @@
-"""Earnings Intelligence types — paper-only decision support."""
+"""Earnings Intelligence types — real-data decision support."""
 
 from __future__ import annotations
 
@@ -125,7 +125,7 @@ class EarningsRecommendation:
     probability_of_profit: float | None
     expected_value: float | None
     max_loss: float | None
-    paper_position_size_usd: float
+    position_size_usd: float
     entry_condition: str
     invalidation_condition: str
     profit_targets: list[str]
@@ -140,8 +140,7 @@ class EarningsRecommendation:
     alternatives: list[StrategyComparison] = field(default_factory=list)
     contract: ContractCandidate | None = None
     score: dict[str, Any] | None = None
-    data_status: str = "simulated"
-    paper_only: bool = True
+    data_status: str = "delayed"
     evaluated_at: datetime | None = None
     watch_expires_at: str | None = None
     confirmation_condition: str | None = None
@@ -161,7 +160,7 @@ class EarningsRecommendation:
             "probability_of_profit": self.probability_of_profit,
             "expected_value": self.expected_value,
             "max_loss": self.max_loss,
-            "paper_position_size_usd": self.paper_position_size_usd,
+            "position_size_usd": self.position_size_usd,
             "entry_condition": self.entry_condition,
             "invalidation_condition": self.invalidation_condition,
             "profit_targets": self.profit_targets,
@@ -177,7 +176,6 @@ class EarningsRecommendation:
             "contract": self.contract.to_dict() if self.contract else None,
             "score": self.score,
             "data_status": self.data_status,
-            "paper_only": True,
             "evaluated_at": self.evaluated_at.isoformat() if self.evaluated_at else None,
             "watch_expires_at": self.watch_expires_at,
             "confirmation_condition": self.confirmation_condition,

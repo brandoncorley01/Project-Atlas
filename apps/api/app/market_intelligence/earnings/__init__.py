@@ -1,4 +1,4 @@
-"""Earnings Intelligence package — paper-only setups inside Market Intelligence."""
+"""Earnings Intelligence — live Yahoo setups inside Market Intelligence."""
 
 from app.market_intelligence.earnings.engine import evaluate_earnings_setup
 from app.market_intelligence.earnings.service_api import build_earnings_desk

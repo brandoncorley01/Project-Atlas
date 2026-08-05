@@ -18,7 +18,6 @@ from app.market_intelligence.earnings.expected_move import (
     historical_avg_move,
 )
 from app.market_intelligence.earnings.fixture_data import FIXTURE_CHAINS, FIXTURE_EVENTS
-from app.market_intelligence.earnings.service_api import build_earnings_desk
 from app.market_intelligence.earnings.types import EarningsRecType, EarningsStrategy
 
 
@@ -40,14 +39,13 @@ def test_expected_move_and_ev_math():
 def test_weak_otm_rejected():
     event = next(e for e in FIXTURE_EVENTS if e.symbol == "WEAK")
     chain = FIXTURE_CHAINS["WEAK"]
-    rec = evaluate_earnings_setup(event, chain, normal_paper_risk_usd=100, micro_fraction=0.18)
+    rec = evaluate_earnings_setup(event, chain, normal_risk_usd=100, micro_fraction=0.18)
     assert rec.recommendation in (
         EarningsRecType.AVOID,
         EarningsRecType.WATCH,
         EarningsRecType.INSUFFICIENT_DATA,
     )
     assert rec.recommendation != EarningsRecType.QUALIFIED_TRADE
-    # Liquidity gate must fail on the weak contract
     c = chain["contracts"][0]
     ok, reasons = liquidity_ok(volume=c.volume, open_interest=c.open_interest, spread=c.spread_pct)
     assert ok is False
@@ -57,21 +55,20 @@ def test_weak_otm_rejected():
 def test_valid_otm_can_qualify_or_micro():
     event = next(e for e in FIXTURE_EVENTS if e.symbol == "AAPL")
     chain = FIXTURE_CHAINS["AAPL"]
-    rec = evaluate_earnings_setup(event, chain, normal_paper_risk_usd=100, micro_fraction=0.18)
+    rec = evaluate_earnings_setup(event, chain, normal_risk_usd=100, micro_fraction=0.18)
     assert rec.recommendation in (
         EarningsRecType.MICRO_COATTAIL,
         EarningsRecType.QUALIFIED_TRADE,
         EarningsRecType.WATCH,
     )
-    assert rec.paper_only is True
+    assert not hasattr(rec, "paper_only") or getattr(rec, "paper_only", None) is None
     assert rec.expected_move_pct is not None
     assert rec.estimated_iv_crush_pct is not None
-    # OTM on AAPL should pass liquidity
     c = next(x for x in chain["contracts"] if x.moneyness == "otm")
     ok, _ = liquidity_ok(volume=c.volume, open_interest=c.open_interest, spread=c.spread_pct)
     assert ok is True
     reach_ok, _ = reachable_breakeven(
-        breakeven_pct= ((c.strike + c.premium) / event.price - 1) * 100,
+        breakeven_pct=((c.strike + c.premium) / event.price - 1) * 100,
         expected_move_pct=rec.expected_move_pct,
         historical_avg_pct=rec.historical_avg_move_pct,
     )
@@ -80,32 +77,39 @@ def test_valid_otm_can_qualify_or_micro():
 
 def test_micro_coattail_sizing_respects_limits():
     size = micro_coattail_size(
-        normal_paper_risk_usd=100,
+        normal_risk_usd=100,
         fraction=0.18,
         max_loss_per_contract=18,
     )
-    assert size["paper_only"] is True
-    assert size["live_trading_enabled"] is False
-    assert size["paper_position_size_usd"] == 18.0
+    assert "paper_only" not in size
+    assert size["position_size_usd"] == 18.0
     assert size["fraction"] == 0.18
 
 
 def test_missing_stale_cannot_produce_qualified_trade():
     event = next(e for e in FIXTURE_EVENTS if e.symbol == "STALE")
-    rec = evaluate_earnings_setup(event, None, normal_paper_risk_usd=100, micro_fraction=0.18)
+    rec = evaluate_earnings_setup(event, None, normal_risk_usd=100, micro_fraction=0.18)
     assert rec.recommendation == EarningsRecType.INSUFFICIENT_DATA
     assert rec.strategy == EarningsStrategy.NO_TRADE
-    assert rec.paper_position_size_usd == 0
+    assert rec.position_size_usd == 0
 
 
-def test_feature_remains_paper_only():
-    desk = build_earnings_desk(normal_paper_risk_usd=100, micro_fraction=0.18)
-    assert desk["paper_only"] is True
-    assert desk["live_trading_enabled"] is False
-    assert desk["audit"]["live_trading_enabled"] is False
+def test_desk_payload_has_real_data_shape():
+    from app.market_intelligence.earnings.service_api import _pack_desk
+
+    desk = _pack_desk(
+        FIXTURE_EVENTS,
+        FIXTURE_CHAINS,
+        normal_risk_usd=100,
+        micro_fraction=0.18,
+        meta={"provider": "test", "data_status": "delayed", "symbol_count": len(FIXTURE_EVENTS)},
+    )
+    assert "paper_only" not in desk
+    assert "normal_risk_usd" in desk["config"]
+    assert desk["config"]["micro_max_risk_usd"] == 18.0
     for rec in desk["recently_reviewed"]:
-        assert rec["paper_only"] is True
-    # Large theoretical return cannot override failed gates
+        assert "paper_only" not in rec
+        assert "position_size_usd" in rec
     gates = {
         "liquidity_ok": False,
         "breakeven_reachable": True,

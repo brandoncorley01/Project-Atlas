@@ -193,7 +193,7 @@ export function MarketIntelligenceView() {
       <header className="space-y-2">
         <h1 className="text-2xl font-semibold tracking-tight">Market Intelligence</h1>
         <p className="max-w-3xl text-sm text-muted">
-          Stock heatmap, Earnings Intelligence (paper-only), regime context, and swing exit guidance.
+          Stock heatmap, Earnings Intelligence (Yahoo live data), regime context, and swing exit guidance.
           Decision support only — not a forecast or live order routing.
         </p>
         <div className="flex flex-wrap items-center gap-2">
@@ -334,7 +334,7 @@ export function MarketIntelligenceView() {
       {tab === "earnings" && earnings && (
         <div className="space-y-5">
           <div className="rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-sm text-sky-50">
-            Paper-only desk. Micro-Coattail uses{" "}
+            Real-data desk. Micro-Coattail uses{" "}
             {String((earnings.config as { micro_max_risk_usd?: number } | undefined)?.micro_max_risk_usd ?? 18)}{" "}
             USD max risk (
             {String(
@@ -345,7 +345,7 @@ export function MarketIntelligenceView() {
                 ) * 100,
               ),
             )}
-            % of normal paper size). Live trading is disabled.
+            % of normal risk). Decision support only — not order routing.
           </div>
           {earnings.disclaimer ? (
             <p className="text-xs text-amber-200/80">{String(earnings.disclaimer)}</p>

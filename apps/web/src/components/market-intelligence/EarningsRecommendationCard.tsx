@@ -40,7 +40,6 @@ export function EarningsRecommendationCard({ rec }: { rec: Rec }) {
           </div>
           <p className="mt-1 text-xs text-muted">
             Phase {String(rec.phase ?? "—")} · Strategy {String(rec.strategy ?? "—").replaceAll("_", " ")}
-            {rec.paper_only !== false ? " · Paper only" : ""}
           </p>
         </div>
         <DataStatusBadge status={String(rec.data_status ?? "simulated")} />
@@ -80,7 +79,7 @@ export function EarningsRecommendationCard({ rec }: { rec: Rec }) {
           </dd>
         </div>
         <div>
-          <dt className="text-muted">Max paper risk</dt>
+          <dt className="text-muted">Max risk</dt>
           <dd className="font-medium">
             {rec.max_loss != null ? `$${Number(rec.max_loss).toFixed(0)}` : "—"}
           </dd>
@@ -106,7 +105,7 @@ export function EarningsRecommendationCard({ rec }: { rec: Rec }) {
           <li>Entry: {String(rec.entry_condition ?? "—")}</li>
           <li>Invalidation: {String(rec.invalidation_condition ?? "—")}</li>
           <li>Holding: {String(rec.expected_holding_period ?? "—")}</li>
-          <li>Paper size: ${Number(rec.paper_position_size_usd ?? 0).toFixed(0)}</li>
+          <li>Suggested size: ${Number(rec.position_size_usd ?? rec.paper_position_size_usd ?? 0).toFixed(0)}</li>
           {targets.length > 0 && <li>Targets: {targets.join(" · ")}</li>}
           {rec.confirmation_condition && (
             <li>Confirmation: {String(rec.confirmation_condition)}</li>

@@ -358,7 +358,7 @@ export const CLIENT_EARNINGS_DESK = {
       probability_of_profit: 48,
       expected_value: 4.2,
       max_loss: 18,
-      paper_position_size_usd: 18,
+      position_size_usd: 18,
       summary: "Atlas found a small positive edge, but earnings uncertainty remains elevated.",
       why_strategy: "Debit spread caps max loss when IV crush is elevated.",
       why_not_full_size: "Guidance uncertainty and weak sector confirmation.",
@@ -370,8 +370,7 @@ export const CLIENT_EARNINGS_DESK = {
       upgrade_condition: "Post-print confirmation → QUALIFIED_TRADE",
       downgrade_condition: "EV turns negative",
       cancel_condition: "Thesis invalidated",
-      paper_only: true,
-      data_status: "simulated",
+      data_status: "delayed",
       alternatives: [
         { strategy: "otm_option", rank: 2, expected_value: 3.1, note: "OTM alternative", rejected: false },
         { strategy: "no_trade", rank: 99, expected_value: 0, note: "Baseline", rejected: false },
@@ -379,11 +378,9 @@ export const CLIENT_EARNINGS_DESK = {
     },
   ],
   recently_reviewed: [],
-  paper_only: true,
-  live_trading_enabled: false,
   counts: { upcoming: 2, pre: 0, post: 0, micro: 1, reviewed: 1 },
-  config: { normal_paper_risk_usd: 100, micro_coattail_fraction: 0.18, micro_max_risk_usd: 18 },
+  config: { normal_risk_usd: 100, micro_coattail_fraction: 0.18, micro_max_risk_usd: 18 },
   freshness: CLIENT_FIXTURE_FRESHNESS,
   disclaimer:
-    "Earnings Intelligence preview fixtures — paper-only. OTM requires positive EV after costs.",
+    "Earnings Intelligence uses Yahoo calendar, quotes, and options chains (delayed). OTM requires positive EV after costs.",
 };

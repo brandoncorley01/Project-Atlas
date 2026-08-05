@@ -1,4 +1,4 @@
-"""Expected-value and liquidity gates for earnings option strategies (paper-only)."""
+"""Expected-value and liquidity gates for earnings option strategies."""
 
 from __future__ import annotations
 
@@ -115,23 +115,20 @@ def otm_passes_gates(checks: dict[str, Any]) -> tuple[bool, list[str]]:
 
 def micro_coattail_size(
     *,
-    normal_paper_risk_usd: float,
+    normal_risk_usd: float,
     fraction: float,
     max_loss_per_contract: float | None,
 ) -> dict[str, Any]:
-    """Configurable small fraction of normal paper risk. Always paper-only."""
+    """Configurable small fraction of normal position risk."""
     frac = max(0.01, min(0.5, float(fraction)))
-    budget = round(float(normal_paper_risk_usd) * frac, 2)
+    budget = round(float(normal_risk_usd) * frac, 2)
     contracts = 1
     if max_loss_per_contract and max_loss_per_contract > 0:
         contracts = max(1, int(budget // max_loss_per_contract))
         if contracts < 1:
             contracts = 1
-        # If even 1 contract exceeds budget, still allow 1 but flag oversized
     return {
-        "paper_position_size_usd": budget,
+        "position_size_usd": budget,
         "contracts": contracts,
         "fraction": frac,
-        "paper_only": True,
-        "live_trading_enabled": False,
     }

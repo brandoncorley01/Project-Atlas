@@ -1,4 +1,4 @@
-"""Earnings recommendation engine — paper-only, EV-disciplined."""
+"""Earnings recommendation engine — EV-disciplined real-data decision support."""
 
 from __future__ import annotations
 
@@ -76,14 +76,13 @@ def evaluate_earnings_setup(
     event: EarningsEvent,
     chain: dict[str, Any] | None,
     *,
-    normal_paper_risk_usd: float = 100.0,
+    normal_risk_usd: float = 100.0,
     micro_fraction: float = 0.18,
     max_spread_pct: float = 12.0,
 ) -> EarningsRecommendation:
     """
     Produce an explainable recommendation.
     Missing/stale critical data → INSUFFICIENT_DATA (never invent a qualified trade).
-    Paper-only — live_trading_enabled is always False.
     """
     now = utcnow()
     critical_missing = [
@@ -158,7 +157,7 @@ def evaluate_earnings_setup(
         expected_move=expected_move,
         hist=hist,
         direction=direction,
-        normal_paper_risk_usd=normal_paper_risk_usd,
+        normal_risk_usd=normal_risk_usd,
         micro_fraction=micro_fraction,
         max_spread_pct=max_spread_pct,
         iv_crush=iv_crush,
@@ -169,7 +168,7 @@ def evaluate_earnings_setup(
         expected_move=expected_move,
         hist=hist,
         direction=direction,
-        normal_paper_risk_usd=normal_paper_risk_usd,
+        normal_risk_usd=normal_risk_usd,
         micro_fraction=micro_fraction,
         max_spread_pct=max_spread_pct,
         iv_crush=iv_crush,
@@ -191,7 +190,7 @@ def evaluate_earnings_setup(
             rank=3 if spread_ev and spread_ev > 0 else 40,
             expected_value=spread_ev,
             probability_of_profit=otm_eval.get("pop"),
-            max_loss=round(normal_paper_risk_usd * micro_fraction, 2),
+            max_loss=round(normal_risk_usd * micro_fraction, 2),
             breakeven_pct=otm_eval.get("breakeven"),
             note="Defined-risk debit spread often ranks above naked OTM when IV crush is elevated.",
             rejected=spread_ev is None or spread_ev <= 0,
@@ -210,7 +209,7 @@ def evaluate_earnings_setup(
             breakeven_pct=0.0,
             note="Shares avoid IV crush but require larger capital and gap risk.",
             rejected=True,
-            reject_reason="Capital and gap risk exceed paper Micro-Coattail mandate for this desk",
+            reject_reason="Capital and gap risk exceed Micro-Coattail mandate for this desk",
         )
     )
 
@@ -233,7 +232,7 @@ def evaluate_earnings_setup(
             confirmation="Price holds opening range with RVOL > 1.5 and sector confirmation",
             expires_hours=6,
             alternatives=alternatives,
-            paper_size=round(normal_paper_risk_usd * micro_fraction, 2),
+            position_size=round(normal_risk_usd * micro_fraction, 2),
         )
 
     if event.phase == EarningsPhase.WAITING_FOR_REPORT:
@@ -249,7 +248,7 @@ def evaluate_earnings_setup(
             confirmation="Numbers + guidance released; AH move not treated as confirmed",
             expires_hours=12,
             alternatives=alternatives,
-            paper_size=0.0,
+            position_size=0.0,
         )
 
     # Choose best actionable
@@ -263,8 +262,6 @@ def evaluate_earnings_setup(
         "expected_move_source": blended.get("source"),
         "expected_move_inputs": blended.get("inputs"),
         "otm_gates": otm_eval.get("gates"),
-        "paper_only": True,
-        "live_trading_enabled": False,
     }
 
     if not otm_ok and not atm_ok and not spread_ok:
@@ -307,7 +304,7 @@ def evaluate_earnings_setup(
             confirmation="Positive EV structure with acceptable spread and reachable breakeven",
             expires_hours=48,
             alternatives=alternatives,
-            paper_size=0.0,
+            position_size=0.0,
             score=score,
         )
 
@@ -315,9 +312,9 @@ def evaluate_earnings_setup(
     prefer_spread = bool(iv_crush and iv_crush >= 30 and spread_ok)
     if prefer_spread or (spread_ok and not otm_ok):
         size = micro_coattail_size(
-            normal_paper_risk_usd=normal_paper_risk_usd,
+            normal_risk_usd=normal_risk_usd,
             fraction=micro_fraction,
-            max_loss_per_contract=normal_paper_risk_usd * micro_fraction,
+            max_loss_per_contract=normal_risk_usd * micro_fraction,
         )
         return EarningsRecommendation(
             symbol=event.symbol,
@@ -334,8 +331,8 @@ def evaluate_earnings_setup(
             breakeven_pct=otm_eval.get("breakeven"),
             probability_of_profit=otm_eval.get("pop"),
             expected_value=spread_ev,
-            max_loss=size["paper_position_size_usd"],
-            paper_position_size_usd=size["paper_position_size_usd"],
+            max_loss=size["position_size_usd"],
+            position_size_usd=size["position_size_usd"],
             entry_condition="Enter only if spread mid is within 5% of evaluated mark and sector confirms.",
             invalidation_condition="Break of pre-earnings support or guidance cut after print.",
             profit_targets=["1× credit width", "Close 50% at +40% of debit"],
@@ -351,7 +348,6 @@ def evaluate_earnings_setup(
             contract=otm,
             score=score,
             data_status=event.data_status,
-            paper_only=True,
             evaluated_at=now,
         )
 
@@ -364,7 +360,7 @@ def evaluate_earnings_setup(
         else EarningsRecType.MICRO_COATTAIL
     )
     size = micro_coattail_size(
-        normal_paper_risk_usd=normal_paper_risk_usd,
+        normal_risk_usd=normal_risk_usd,
         fraction=micro_fraction if rec_type == EarningsRecType.MICRO_COATTAIL else min(0.35, micro_fraction * 2),
         max_loss_per_contract=chosen.get("max_loss"),
     )
@@ -382,7 +378,7 @@ def evaluate_earnings_setup(
         probability_of_profit=chosen.get("pop"),
         expected_value=chosen.get("ev"),
         max_loss=chosen.get("max_loss"),
-        paper_position_size_usd=size["paper_position_size_usd"],
+        position_size_usd=size["position_size_usd"],
         entry_condition="Fill near evaluated mid; abort if spread widens beyond limit.",
         invalidation_condition="Move envelope fails (price stalls inside breakeven) or guidance shock opposite thesis.",
         profit_targets=["+40% of debit", "+80% of debit or expected-move touch"],
@@ -396,13 +392,12 @@ def evaluate_earnings_setup(
         summary=(
             "Atlas found a small positive edge, but earnings uncertainty remains elevated."
             if rec_type == EarningsRecType.MICRO_COATTAIL
-            else "Setup clears EV, liquidity, and breakeven checks for a qualified paper trade."
+            else "Setup clears EV, liquidity, and breakeven checks for a qualified trade."
         ),
         alternatives=_rank_alts(alternatives),
         contract=chosen.get("contract"),
         score=score,
         data_status=event.data_status,
-        paper_only=True,
         evaluated_at=now,
     )
 
@@ -414,7 +409,7 @@ def _evaluate_contract(
     expected_move: float,
     hist: float | None,
     direction: EarningsDirection,
-    normal_paper_risk_usd: float,
+    normal_risk_usd: float,
     micro_fraction: float,
     max_spread_pct: float,
     iv_crush: float | None,
@@ -466,7 +461,7 @@ def _evaluate_contract(
         avg_loss=avg_loss,
         estimated_costs=costs,
     )
-    within_risk = max_loss <= normal_paper_risk_usd
+    within_risk = max_loss <= normal_risk_usd
     gates = {
         "liquidity_ok": liq_ok,
         "breakeven_reachable": reach_ok,
@@ -537,7 +532,7 @@ def _insufficient(event: EarningsEvent, now: datetime, reason: str) -> EarningsR
         probability_of_profit=None,
         expected_value=None,
         max_loss=0.0,
-        paper_position_size_usd=0.0,
+        position_size_usd=0.0,
         entry_condition="n/a",
         invalidation_condition="n/a",
         profit_targets=[],
@@ -551,7 +546,6 @@ def _insufficient(event: EarningsEvent, now: datetime, reason: str) -> EarningsR
         summary=reason,
         alternatives=[],
         data_status=event.data_status,
-        paper_only=True,
         evaluated_at=now,
     )
 
@@ -583,7 +577,7 @@ def _avoid(
         probability_of_profit=None,
         expected_value=0.0,
         max_loss=0.0,
-        paper_position_size_usd=0.0,
+        position_size_usd=0.0,
         entry_condition="Do not enter.",
         invalidation_condition="n/a",
         profit_targets=[],
@@ -598,7 +592,6 @@ def _avoid(
         alternatives=_rank_alts(alternatives),
         score=score,
         data_status=event.data_status,
-        paper_only=True,
         evaluated_at=now,
     )
 
@@ -616,7 +609,7 @@ def _watch(
     confirmation: str,
     expires_hours: int,
     alternatives: list[StrategyComparison],
-    paper_size: float,
+    position_size: float,
     score: dict[str, Any] | None = None,
 ) -> EarningsRecommendation:
     expires = (now + timedelta(hours=expires_hours)).isoformat()
@@ -637,7 +630,7 @@ def _watch(
         probability_of_profit=None,
         expected_value=None,
         max_loss=0.0,
-        paper_position_size_usd=paper_size,
+        position_size_usd=position_size,
         entry_condition="No entry until confirmation condition hits.",
         invalidation_condition="Opposite guidance shock or sector breakdown.",
         profit_targets=[],
@@ -652,7 +645,6 @@ def _watch(
         alternatives=_rank_alts(alternatives),
         score=score,
         data_status=event.data_status,
-        paper_only=True,
         evaluated_at=now,
         watch_expires_at=expires,
         confirmation_condition=confirmation,

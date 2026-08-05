@@ -87,9 +87,11 @@ class Settings(BaseSettings):
     atlas_options_flow_allow_simulated: bool = True
     atlas_exit_score_version: str = "exit_v1"
     atlas_options_score_version: str = "options_activity_v1"
-    atlas_earnings_paper_risk_usd: float = 100.0
+    atlas_earnings_normal_risk_usd: float = 100.0
+    atlas_earnings_paper_risk_usd: float = 100.0  # legacy alias
     atlas_earnings_micro_coattail_fraction: float = 0.18
-    atlas_earnings_allow_simulated: bool = True
+    atlas_earnings_allow_fixture_fallback: bool = False
+    atlas_earnings_allow_simulated: bool = False  # legacy alias
 
     def is_intelligence_enabled(self) -> bool:
         return bool(self.atlas_expert_intelligence_enabled)
