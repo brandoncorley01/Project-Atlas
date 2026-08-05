@@ -5,15 +5,13 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-import yfinance as yf
-
 logger = logging.getLogger(__name__)
 
 # Always include liquid names with deep options markets.
 CORE_LIQUID = [
     "AAPL", "NVDA", "MSFT", "AMZN", "META", "TSLA", "AMD", "GOOGL",
     "AVGO", "NFLX", "CRM", "UBER", "COIN", "PLTR", "SOFI", "INTC",
-    "SPY", "QQQ", "IWM",
+    "SPY", "QQQ", "IWM", "JPM", "XOM", "V", "MA", "COST",
 ]
 
 SCREENER_BUCKETS: list[tuple[str, int]] = [
@@ -30,6 +28,7 @@ class DiscoveredSymbol:
     symbol: str
     sources: list[str] = field(default_factory=list)
     change_pct: float | None = None
+    market_cap: float | None = None
 
 
 def _extract_quotes(payload: object) -> list[dict]:
@@ -40,6 +39,11 @@ def _extract_quotes(payload: object) -> list[dict]:
 
 
 def _run_screener(query: str, count: int) -> list[dict]:
+    try:
+        import yfinance as yf
+    except Exception as exc:
+        logger.warning("yfinance unavailable for screener %s: %s", query, exc)
+        return []
     try:
         return _extract_quotes(yf.screen(query, count=count))
     except Exception as exc:
@@ -70,6 +74,12 @@ def discover_market_symbols(*, max_symbols: int = 55) -> tuple[list[DiscoveredSy
             if change is not None:
                 try:
                     entry.change_pct = float(change)
+                except (TypeError, ValueError):
+                    pass
+            cap = row.get("marketCap") or row.get("market_cap")
+            if cap is not None:
+                try:
+                    entry.market_cap = float(cap)
                 except (TypeError, ValueError):
                     pass
 

@@ -551,6 +551,7 @@ export function MarketIntelligenceView() {
             sectors={exitMap.sectors as never[]}
             tableFallback={(exitMap.tiles_detail as never[]) || (exitMap.table_fallback as never[])}
             legend={exitMap.legend as never}
+            colorBy="exit_urgency"
           />
         </div>
       )}

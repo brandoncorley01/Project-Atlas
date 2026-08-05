@@ -1,8 +1,6 @@
 import asyncio
 import logging
 
-import yfinance as yf
-
 from app.config import settings
 from app.db.supabase_client import SupabaseClient, explained_to_options_row
 from app.engine.pipeline import run_options_pipeline
@@ -28,6 +26,10 @@ PARALLEL_SYMBOL_FETCHES = 6
 
 async def _yahoo_last_price(symbol: str) -> float:
     def _fetch() -> float:
+        try:
+            import yfinance as yf
+        except Exception:
+            return 0.0
         ticker = yf.Ticker(symbol.upper())
         price = getattr(ticker, "fast_info", {}).get("lastPrice")  # type: ignore[attr-defined]
         if price:

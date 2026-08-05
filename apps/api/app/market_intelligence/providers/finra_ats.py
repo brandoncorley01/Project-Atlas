@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import csv
+import io
+import json
 import logging
+import time
 from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -16,6 +20,36 @@ logger = logging.getLogger(__name__)
 
 FINRA_WEEKLY_URL = "https://api.finra.org/data/group/otcMarket/name/weeklySummary"
 
+# In-process cache — FINRA weekly data barely changes intra-day.
+_CACHE: dict[str, Any] = {"at": 0.0, "payload": None}
+_CACHE_TTL_SECONDS = 45 * 60
+
+
+def _parse_rows(body: str, content_type: str | None) -> list[dict[str, Any]]:
+    """FINRA may return JSON array or CSV depending on Accept negotiation."""
+    text = (body or "").strip()
+    if not text:
+        return []
+
+    ctype = (content_type or "").lower()
+    if "json" in ctype or text.startswith("[") or text.startswith("{"):
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            data = None
+        if isinstance(data, list):
+            return [r for r in data if isinstance(r, dict)]
+        if isinstance(data, dict):
+            for key in ("data", "dataset", "rows", "result"):
+                nested = data.get(key)
+                if isinstance(nested, list):
+                    return [r for r in nested if isinstance(r, dict)]
+            return []
+
+    # CSV fallback
+    reader = csv.DictReader(io.StringIO(text))
+    return [dict(row) for row in reader]
+
 
 async def fetch_dark_pool_summary(*, lookback_days: int = 45, limit: int = 40) -> dict[str, Any]:
     """
@@ -24,6 +58,15 @@ async def fetch_dark_pool_summary(*, lookback_days: int = 45, limit: int = 40) -
     This is official OTC/ATS transparency data with a regulatory lag (typically ~2 weeks
     for Tier 1). It is NOT real-time dark-pool prints and does NOT identify institutions.
     """
+    cache_key = f"{lookback_days}:{limit}"
+    cached = _CACHE.get("payload")
+    if (
+        cached
+        and cached.get("_cache_key") == cache_key
+        and (time.monotonic() - float(_CACHE.get("at") or 0)) < _CACHE_TTL_SECONDS
+    ):
+        return {k: v for k, v in cached.items() if k != "_cache_key"}
+
     end = date.today()
     start = end - timedelta(days=lookback_days)
     payload = {
@@ -42,14 +85,17 @@ async def fetch_dark_pool_summary(*, lookback_days: int = 45, limit: int = 40) -
     }
 
     try:
-        async with httpx.AsyncClient(timeout=45.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             res = await client.post(
                 FINRA_WEEKLY_URL,
                 json=payload,
-                headers={"Content-Type": "application/json", "Accept": "application/json"},
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
             )
             res.raise_for_status()
-            rows = res.json()
+            rows = _parse_rows(res.text, res.headers.get("content-type"))
     except Exception as exc:
         logger.warning("FINRA ATS fetch failed: %s", exc)
         return {
@@ -70,7 +116,7 @@ async def fetch_dark_pool_summary(*, lookback_days: int = 45, limit: int = 40) -
             "available": False,
         }
 
-    if not isinstance(rows, list) or not rows:
+    if not rows:
         return {
             "items": [],
             "count": 0,
@@ -89,6 +135,22 @@ async def fetch_dark_pool_summary(*, lookback_days: int = 45, limit: int = 40) -
         {str(r.get("weekStartDate")) for r in rows if r.get("weekStartDate")},
         reverse=True,
     )
+    if not weeks:
+        return {
+            "items": [],
+            "count": 0,
+            "week_start": None,
+            "freshness": build_freshness(
+                provider_name="FINRA ATS Transparency",
+                data_timestamp=None,
+                data_status=DataStatus.PARTIAL,
+                missing_fields=["weekStartDate"],
+            ).to_dict(),
+            "disclaimer": "FINRA ATS response missing weekStartDate fields.",
+            "source": "finra_ats",
+            "available": False,
+        }
+
     latest_week = weeks[0]
     week_rows = [r for r in rows if str(r.get("weekStartDate")) == latest_week]
 
@@ -146,7 +208,7 @@ async def fetch_dark_pool_summary(*, lookback_days: int = 45, limit: int = 40) -
     except Exception:
         data_ts = datetime.now(UTC) - timedelta(days=14)
 
-    return {
+    result = {
         "items": items,
         "count": len(items),
         "week_start": latest_week,
@@ -163,4 +225,8 @@ async def fetch_dark_pool_summary(*, lookback_days: int = 45, limit: int = 40) -
         ),
         "source": "finra_ats",
         "available": True,
+        "_cache_key": cache_key,
     }
+    _CACHE["at"] = time.monotonic()
+    _CACHE["payload"] = result
+    return {k: v for k, v in result.items() if k != "_cache_key"}

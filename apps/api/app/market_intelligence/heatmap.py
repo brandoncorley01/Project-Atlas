@@ -58,18 +58,32 @@ def build_market_heatmap(
     sectors: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in universe:
         sector = row.get("sector") or SECTOR_MAP.get(str(row.get("symbol", "")).upper(), "Other")
+        raw_color = row.get(color_by)
+        if raw_color is None:
+            raw_color = row.get("daily_return")
+        color_value = float(raw_color if raw_color is not None else 0)
+        size_raw = row.get(size_by)
+        if size_raw is None:
+            size_raw = row.get("market_cap")
+        if size_raw is None:
+            size_raw = row.get("volume")
         tile = {
             "symbol": row.get("symbol"),
             "sector": sector,
             "industry": row.get("industry") or "General",
-            "size_value": float(row.get(size_by) or row.get("market_cap") or row.get("volume") or 1),
-            "color_value": float(row.get(color_by) or row.get("daily_return") or 0),
+            "size_value": float(size_raw if size_raw is not None else 1),
+            "color_value": color_value,
             "daily_return": row.get("daily_return"),
             "momentum_score": row.get("momentum_score"),
             "options_bias": row.get("options_bias"),
             "exit_urgency": row.get("exit_urgency"),
-            "label": _color_label(float(row.get(color_by) or row.get("daily_return") or 0), color_by),
+            "label": _color_label(color_value, color_by),
         }
+        # Drop null options_bias so equity heatmaps don't look like options bias maps.
+        if tile["options_bias"] is None:
+            tile.pop("options_bias", None)
+        if tile["exit_urgency"] is None:
+            tile.pop("exit_urgency", None)
         sectors[sector].append(tile)
 
     return {

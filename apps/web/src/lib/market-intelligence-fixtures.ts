@@ -309,7 +309,7 @@ export const CLIENT_CONGRESS_TRADES: Record<string, unknown>[] = [
     asset_name: "Apple Inc.",
     transaction_type: "Purchase",
     transaction_date: "2026-06-01",
-    filing_date: "2026-07-01",
+    filing_date: "2026-07-15",
     amount: "$1,001-$15,000",
     ptr_url: "https://disclosures-clerk.house.gov/",
     data_status: "simulated",

@@ -330,7 +330,6 @@ class MarketIntelligenceService:
                         "dollar_volume": float(e.estimated_premium or 1),
                         "daily_return": float(e.raw_metadata.get("daily_return") or 0),
                         "momentum_score": 0.0,
-                        "options_bias": 0.0,
                     }
                 )
             if not universe:

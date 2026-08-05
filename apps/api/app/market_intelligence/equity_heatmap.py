@@ -145,14 +145,17 @@ async def build_equity_market_heatmap(
     for sym in ordered:
         q = quotes.get(sym) or {}
         change_pct = q.get("change_pct")
-        if change_pct is None:
-            # Fall back to screener-discovered change when quote missing
-            match = next((d for d in discovered if d.symbol == sym), None)
-            change_pct = match.change_pct if match else None
+        match = next((d for d in discovered if d.symbol == sym), None)
+        screener_pct = getattr(match, "change_pct", None) if match else None
+        # Treat missing OR exact 0.0 from incomplete Yahoo fast_info as unresolved —
+        # prefer screener % so tiles aren't uniformly flat.
+        if change_pct is None or (change_pct == 0 and screener_pct not in (None, 0, 0.0)):
+            change_pct = screener_pct if screener_pct is not None else change_pct
         if change_pct is None and not q:
             continue
         price = float(q.get("price") or 0)
         market_cap = caps.get(sym) or (abs(float(change_pct or 0)) + 1) * 1e9
+        # Do NOT set options_bias on equity tiles — UI would prefer it over daily %.
         universe.append(
             {
                 "symbol": sym,
@@ -165,7 +168,6 @@ async def build_equity_market_heatmap(
                 "price": price or None,
                 "change": q.get("change"),
                 "momentum_score": float(change_pct or 0) / 10.0,
-                "options_bias": 0.0,
             }
         )
 

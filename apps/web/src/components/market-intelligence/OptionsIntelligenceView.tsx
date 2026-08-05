@@ -21,8 +21,6 @@ import {
 import { buildOptionsTodayBrief } from "@/lib/market-intelligence-decisions";
 import {
   CLIENT_ALERTS,
-  CLIENT_CONGRESS_TRADES,
-  CLIENT_DARK_POOL,
   CLIENT_FIXTURE_FRESHNESS,
   CLIENT_FLOW_CARDS,
   CLIENT_HEATMAP,
@@ -65,9 +63,9 @@ export function OptionsIntelligenceView() {
   const [history, setHistory] = useState<Record<string, unknown>[]>(CLIENT_FLOW_CARDS);
   const [performance, setPerformance] = useState<Record<string, unknown> | null>(CLIENT_PERFORMANCE);
   const [alerts, setAlerts] = useState<Record<string, unknown>[]>(CLIENT_ALERTS.items);
-  const [darkPool, setDarkPool] = useState<Record<string, unknown>[]>(CLIENT_DARK_POOL);
+  const [darkPool, setDarkPool] = useState<Record<string, unknown>[]>([]);
   const [darkPoolMeta, setDarkPoolMeta] = useState<{ week_start?: string | null; disclaimer?: string }>({});
-  const [congress, setCongress] = useState<Record<string, unknown>[]>(CLIENT_CONGRESS_TRADES);
+  const [congress, setCongress] = useState<Record<string, unknown>[]>([]);
   const [congressDisclaimer, setCongressDisclaimer] = useState<string | null>(null);
   const [usingFixture, setUsingFixture] = useState(true);
 

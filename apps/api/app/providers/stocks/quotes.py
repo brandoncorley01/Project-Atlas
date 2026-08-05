@@ -41,10 +41,12 @@ def _read_fast_info(ticker: Any) -> dict[str, float]:
     change = _num("regularMarketChange", "regular_market_change")
     change_pct = _num("regularMarketChangePercent", "regular_market_change_percent")
 
-    if change == 0 and price and prev:
-        change = price - prev
-    if change_pct == 0 and prev > 0:
-        change_pct = (change / prev) * 100
+    if price and prev:
+        derived_change = price - prev
+        if change == 0:
+            change = derived_change
+        if change_pct == 0 and prev > 0:
+            change_pct = (derived_change / prev) * 100
 
     if price <= 0:
         return {}
@@ -111,7 +113,12 @@ def _fetch_yahoo_quotes_sync(symbols: list[str]) -> dict[str, dict[str, Any]]:
                     ticker = tickers.tickers.get(yahoo_sym) or tickers.tickers.get(original)
                     if ticker is None:
                         continue
-                    quote = _read_fast_info(ticker) or _quote_from_history(ticker)
+                    quote = _read_fast_info(ticker)
+                    # Prefer history when fast_info has a price but no usable session move.
+                    if not quote or (quote.get("change_pct") == 0 and quote.get("change") == 0):
+                        hist = _quote_from_history(ticker)
+                        if hist:
+                            quote = hist
                     if quote:
                         out[original] = quote
                 except Exception as exc:

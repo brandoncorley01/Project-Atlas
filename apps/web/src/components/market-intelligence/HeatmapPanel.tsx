@@ -27,16 +27,35 @@ function tone(value: number, kind: "return" | "bias" | "urgency") {
   return "bg-slate-500/25 border-slate-400/30 text-slate-100";
 }
 
+function metricKind(colorBy?: string, tiles: Tile[] = []): "return" | "bias" | "urgency" {
+  if (colorBy === "exit_urgency" || tiles.some((t) => t.exit_urgency != null)) {
+    return "urgency";
+  }
+  if (colorBy === "options_bias") return "bias";
+  return "return";
+}
+
 function formatMetric(tile: Tile, colorBy?: string) {
-  if (tile.exit_urgency != null || colorBy === "exit_urgency") {
+  const kind = metricKind(colorBy, [tile]);
+  if (kind === "urgency") {
     return `Exit ${Number(tile.exit_urgency ?? tile.color_value ?? 0).toFixed(0)}`;
   }
-  if (colorBy === "options_bias" || tile.options_bias != null) {
+  if (kind === "bias") {
     const v = Number(tile.options_bias ?? tile.color_value ?? 0);
     return `Bias ${v >= 0 ? "+" : ""}${v.toFixed(2)}`;
   }
   const ret = Number(tile.daily_return ?? tile.color_value ?? 0);
   return `${ret >= 0 ? "+" : ""}${ret.toFixed(2)}%`;
+}
+
+function colorValue(tile: Tile, kind: "return" | "bias" | "urgency") {
+  if (kind === "urgency") {
+    return Number(tile.exit_urgency ?? tile.color_value ?? 0);
+  }
+  if (kind === "bias") {
+    return Number(tile.options_bias ?? tile.color_value ?? 0);
+  }
+  return Number(tile.daily_return ?? tile.color_value ?? 0);
 }
 
 export function HeatmapPanel({
@@ -58,12 +77,7 @@ export function HeatmapPanel({
     ? tableFallback
     : (sectors ?? []).flatMap((s) => s.tiles);
 
-  const kind: "return" | "bias" | "urgency" =
-    colorBy === "exit_urgency" || flat.some((t) => t.exit_urgency != null)
-      ? "urgency"
-      : colorBy === "options_bias"
-        ? "bias"
-        : "return";
+  const kind = metricKind(colorBy, flat);
 
   return (
     <div className="space-y-4">
@@ -77,21 +91,19 @@ export function HeatmapPanel({
         )}
       </div>
 
-      <div className="hidden gap-3 md:block">
+      <div className="space-y-3">
         {(sectors ?? []).map((sector) => (
-          <div key={sector.sector} className="mb-4">
+          <div key={sector.sector}>
             <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
               {sector.sector}
             </p>
             <div className="flex flex-wrap gap-2">
               {sector.tiles.map((tile) => {
                 const size = Math.max(
-                  72,
-                  Math.min(168, Math.sqrt(Number(tile.size_value || 1)) / 80_000 + 72),
+                  64,
+                  Math.min(168, Math.sqrt(Number(tile.size_value || 1)) / 80_000 + 64),
                 );
-                const colorVal = Number(
-                  tile.color_value ?? tile.daily_return ?? tile.options_bias ?? tile.exit_urgency ?? 0,
-                );
+                const colorVal = colorValue(tile, kind);
                 return (
                   <div
                     key={`${sector.sector}-${tile.symbol}`}
@@ -113,7 +125,7 @@ export function HeatmapPanel({
       </div>
 
       <div className="overflow-x-auto rounded-xl border border-border">
-        <table className="w-full text-left text-sm">
+        <table className="w-full min-w-[32rem] text-left text-sm">
           <thead className="bg-background/50 text-xs text-muted">
             <tr>
               <th className="px-3 py-2">Symbol</th>
@@ -124,15 +136,24 @@ export function HeatmapPanel({
             </tr>
           </thead>
           <tbody>
-            {flat.map((tile) => (
-              <tr key={`${tile.sector}-${tile.symbol}`} className="border-t border-border/60">
-                <td className="px-3 py-2 font-medium">{tile.symbol}</td>
-                <td className="px-3 py-2 text-muted">{tile.sector}</td>
-                <td className="px-3 py-2">{tile.label || "—"}</td>
-                <td className="px-3 py-2">{formatMetric(tile, colorBy)}</td>
-                <td className="px-3 py-2 text-muted">{tile.action || tile.why || "—"}</td>
-              </tr>
-            ))}
+            {flat.map((tile) => {
+              const colorVal = colorValue(tile, kind);
+              return (
+                <tr key={`${tile.sector}-${tile.symbol}`} className="border-t border-border/60">
+                  <td className="px-3 py-2 font-medium">{tile.symbol}</td>
+                  <td className="px-3 py-2 text-muted">{tile.sector}</td>
+                  <td className="px-3 py-2">
+                    <span
+                      className={`inline-block rounded border px-1.5 py-0.5 text-[11px] ${tone(colorVal, kind)}`}
+                    >
+                      {tile.label || "—"}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2">{formatMetric(tile, colorBy)}</td>
+                  <td className="px-3 py-2 text-muted">{tile.action || tile.why || "—"}</td>
+                </tr>
+              );
+            })}
             {flat.length === 0 && (
               <tr>
                 <td colSpan={5} className="px-3 py-6 text-center text-muted">

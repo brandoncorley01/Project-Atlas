@@ -2,7 +2,6 @@ import { apiRequestHeaders, getApiUrl, usesBffProxy } from "@/lib/api-url";
 import {
   CLIENT_ALERTS,
   CLIENT_CONGRESS_TRADES,
-  CLIENT_DARK_POOL,
   CLIENT_EARNINGS_DESK,
   CLIENT_EXIT_HEATMAP,
   CLIENT_FIXTURE_FRESHNESS,
@@ -16,7 +15,7 @@ import {
 
 /** Fail soft so UI never hangs forever on a cold/missing Render API. */
 const MI_FETCH_TIMEOUT_MS = 8_000;
-const MI_HEAVY_TIMEOUT_MS = 55_000;
+const MI_HEAVY_TIMEOUT_MS = 85_000;
 
 async function getToken() {
   if (usesBffProxy()) return undefined;
@@ -202,7 +201,44 @@ export async function fetchAlertSettings() {
 export async function fetchMarketHeatmap() {
   const data = await miFetch<Record<string, unknown>>("/heatmap", "GET", undefined, MI_HEAVY_TIMEOUT_MS);
   if (data?.sectors) return withSource(data, "api");
-  return withSource({ ...CLIENT_HEATMAP, color_by: "daily_return", heatmap_kind: "fixture" }, "client_fixture");
+  // Equity heatmap fixture must use daily_return metrics — not options bias labels.
+  const equityFixture = {
+    ...CLIENT_HEATMAP,
+    color_by: "daily_return",
+    heatmap_kind: "fixture",
+    size_by: "market_cap",
+    sectors: (CLIENT_HEATMAP.sectors as Array<{ sector: string; tiles: Record<string, unknown>[] }>).map(
+      (sector) => ({
+        ...sector,
+        tiles: sector.tiles.map((tile) => {
+          const ret = Number(tile.color_value ?? tile.options_bias ?? 0) * 1.5;
+          return {
+            symbol: tile.symbol,
+            sector: tile.sector,
+            size_value: tile.size_value,
+            daily_return: ret,
+            color_value: ret,
+            label:
+              ret >= 1 ? "Up" : ret <= -1 ? "Down" : Math.abs(ret) >= 0.25 ? "Slightly up" : "Flat",
+          };
+        }),
+      }),
+    ),
+    table_fallback: (CLIENT_HEATMAP.table_fallback as Record<string, unknown>[]).map((tile) => {
+      const ret = Number(tile.color_value ?? tile.options_bias ?? 0) * 1.5;
+      return {
+        symbol: tile.symbol,
+        sector: tile.sector,
+        size_value: tile.size_value,
+        daily_return: ret,
+        color_value: ret,
+        label: ret >= 1 ? "Up" : ret <= -1 ? "Down" : "Flat",
+        action: `${ret >= 0 ? "+" : ""}${ret.toFixed(2)}%`,
+      };
+    }),
+    disclaimer: "Simulated equity heatmap preview — connect Market Intelligence API for live quotes.",
+  };
+  return withSource(equityFixture, "client_fixture");
 }
 
 export async function fetchDarkPool(limit = 40) {
@@ -213,15 +249,17 @@ export async function fetchDarkPool(limit = 40) {
     week_start?: string;
     available?: boolean;
   }>(`/dark-pool?limit=${limit}`, "GET", undefined, MI_HEAVY_TIMEOUT_MS);
-  if (data?.items) return withSource(data, "api");
+  // Empty arrays are valid FINRA responses — only fixture when the call itself fails.
+  if (data && Array.isArray(data.items)) return withSource(data, "api");
   return withSource(
     {
-      items: CLIENT_DARK_POOL,
+      items: [],
       week_start: null,
       available: false,
       freshness: CLIENT_FIXTURE_FRESHNESS,
       disclaimer:
-        "FINRA ATS dark-pool volume unavailable — API still deploying or unreachable. Not fabricated.",
+        "FINRA ATS dark-pool volume unavailable — Atlas API unreachable or timed out. "
+        + "Retry in a moment. No fabricated volume is shown.",
     },
     "client_fixture",
   );
@@ -234,14 +272,18 @@ export async function fetchCongressTrades(limit = 40) {
     disclaimer?: string;
     available?: boolean;
   }>(`/congress-trades?limit=${limit}`, "GET", undefined, MI_HEAVY_TIMEOUT_MS);
-  if (data?.items) return withSource(data, "api");
+  if (data && Array.isArray(data.items)) return withSource(data, "api");
   return withSource(
     {
-      items: CLIENT_CONGRESS_TRADES,
+      items: CLIENT_CONGRESS_TRADES.map((row) => ({
+        ...row,
+        data_status: "simulated",
+        note: "Simulated STOCK Act preview — live House Clerk PTR feed unreachable.",
+      })),
       available: false,
       freshness: CLIENT_FIXTURE_FRESHNESS,
       disclaimer:
-        "Congress TRADE disclosures unavailable — showing preview placeholders until API responds.",
+        "Congress TRADE disclosures unavailable — showing one labelled preview placeholder until the API responds.",
     },
     "client_fixture",
   );

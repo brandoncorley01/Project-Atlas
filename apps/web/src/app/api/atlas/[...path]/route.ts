@@ -28,7 +28,7 @@ function proxyTimeoutFor(subpath: string): number {
     || subpath === "market-intelligence/dark-pool"
     || subpath === "market-intelligence/congress-trades"
   ) {
-    return 55_000;
+    return 90_000;
   }
   if (subpath.startsWith("market-intelligence")) return 25_000;
   if (

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import re
+import time
 import zipfile
 from datetime import UTC, datetime
 from typing import Any
@@ -30,6 +32,11 @@ _TX_RE = re.compile(
     re.IGNORECASE,
 )
 
+_CACHE: dict[str, Any] = {"at": 0.0, "payload": None}
+_CACHE_TTL_SECONDS = 30 * 60
+_PDF_TIMEOUT = 12.0
+_ZIP_TIMEOUT = 25.0
+
 
 def _parse_date(value: str | None) -> datetime | None:
     if not value:
@@ -49,14 +56,17 @@ def _side_label(side: str, sub: str | None) -> str:
     return base
 
 
-async def _download_bytes(url: str) -> bytes | None:
+async def _download_bytes(client: httpx.AsyncClient, url: str, *, timeout: float) -> bytes | None:
     try:
-        async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
-            res = await client.get(url, headers={"User-Agent": "AtlasCongressTracker/1.0"})
-            if res.status_code != 200:
-                logger.warning("Congress fetch %s -> %s", url, res.status_code)
-                return None
-            return res.content
+        res = await client.get(
+            url,
+            headers={"User-Agent": "AtlasCongressTracker/1.0"},
+            timeout=timeout,
+        )
+        if res.status_code != 200:
+            logger.warning("Congress fetch %s -> %s", url, res.status_code)
+            return None
+        return res.content
     except Exception as exc:
         logger.warning("Congress fetch failed %s: %s", url, exc)
         return None
@@ -167,7 +177,18 @@ def _extract_trades_from_pdf(pdf_bytes: bytes, filing: dict[str, Any]) -> list[d
     return unique
 
 
-async def fetch_congress_trades(*, limit: int = 40, max_filings: int = 12) -> dict[str, Any]:
+def _filing_stub(filing: dict[str, Any], *, note: str) -> dict[str, Any]:
+    return {
+        **filing,
+        "ticker": None,
+        "transaction_type": "PTR filed",
+        "amount": None,
+        "note": note,
+        "data_status": DataStatus.DELAYED.value,
+    }
+
+
+async def fetch_congress_trades(*, limit: int = 40, max_filings: int = 8) -> dict[str, Any]:
     """
     Public STOCK Act tracker:
     - House Periodic Transaction Reports from the Clerk of the House (official)
@@ -175,52 +196,62 @@ async def fetch_congress_trades(*, limit: int = 40, max_filings: int = 12) -> di
 
     Disclosures can lag trades by up to ~45 days by law. Always labelled delayed.
     """
+    cache_key = f"{limit}:{max_filings}"
+    cached = _CACHE.get("payload")
+    if (
+        cached
+        and cached.get("_cache_key") == cache_key
+        and (time.monotonic() - float(_CACHE.get("at") or 0)) < _CACHE_TTL_SECONDS
+    ):
+        return {k: v for k, v in cached.items() if k != "_cache_key"}
+
     year = utcnow().year
     filings: list[dict[str, Any]] = []
-    for y in (year, year - 1):
-        blob = await _download_bytes(HOUSE_FD_ZIP.format(year=y))
-        if not blob:
-            continue
-        try:
-            with zipfile.ZipFile(io.BytesIO(blob)) as zf:
-                xml_name = next((n for n in zf.namelist() if n.lower().endswith(".xml")), None)
-                if not xml_name:
-                    continue
-                filings.extend(_parse_house_index(zf.read(xml_name), y))
-        except Exception as exc:
-            logger.warning("House FD zip parse failed for %s: %s", y, exc)
 
-    filings = sorted(filings, key=lambda f: f.get("filing_date") or "", reverse=True)
+    async with httpx.AsyncClient(follow_redirects=True) as client:
+        for y in (year, year - 1):
+            blob = await _download_bytes(client, HOUSE_FD_ZIP.format(year=y), timeout=_ZIP_TIMEOUT)
+            if not blob:
+                continue
+            try:
+                with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+                    xml_name = next((n for n in zf.namelist() if n.lower().endswith(".xml")), None)
+                    if not xml_name:
+                        continue
+                    filings.extend(_parse_house_index(zf.read(xml_name), y))
+            except Exception as exc:
+                logger.warning("House FD zip parse failed for %s: %s", y, exc)
+
+        filings = sorted(filings, key=lambda f: f.get("filing_date") or "", reverse=True)
+        selected = filings[:max_filings]
+
+        async def _one(filing: dict[str, Any]) -> list[dict[str, Any]]:
+            pdf = await _download_bytes(client, str(filing["ptr_url"]), timeout=_PDF_TIMEOUT)
+            if not pdf:
+                return [
+                    _filing_stub(
+                        filing,
+                        note="Open the official PTR PDF for line-item trades.",
+                    )
+                ]
+            parsed = await asyncio.to_thread(_extract_trades_from_pdf, pdf, filing)
+            if parsed:
+                return parsed
+            return [
+                _filing_stub(
+                    filing,
+                    note="PDF indexed; text extraction incomplete — use official link.",
+                )
+            ]
+
+        batches = await asyncio.gather(*[_one(f) for f in selected], return_exceptions=True)
+
     trades: list[dict[str, Any]] = []
-    for filing in filings[:max_filings]:
-        pdf = await _download_bytes(str(filing["ptr_url"]))
-        if not pdf:
-            # Still surface the filing itself for transparency
-            trades.append(
-                {
-                    **filing,
-                    "ticker": None,
-                    "transaction_type": "PTR filed",
-                    "amount": None,
-                    "note": "Open the official PTR PDF for line-item trades.",
-                    "data_status": DataStatus.DELAYED.value,
-                }
-            )
+    for batch in batches:
+        if isinstance(batch, Exception):
+            logger.warning("Congress PTR batch failed: %s", batch)
             continue
-        parsed = _extract_trades_from_pdf(pdf, filing)
-        if parsed:
-            trades.extend(parsed)
-        else:
-            trades.append(
-                {
-                    **filing,
-                    "ticker": None,
-                    "transaction_type": "PTR filed",
-                    "amount": None,
-                    "note": "PDF indexed; text extraction incomplete — use official link.",
-                    "data_status": DataStatus.DELAYED.value,
-                }
-            )
+        trades.extend(batch)
         if len(trades) >= limit:
             break
 
@@ -235,7 +266,7 @@ async def fetch_congress_trades(*, limit: int = 40, max_filings: int = 12) -> di
     except Exception:
         data_ts = None
 
-    return {
+    result = {
         "items": trades,
         "count": len(trades),
         "filings_indexed": len(filings),
@@ -252,4 +283,8 @@ async def fetch_congress_trades(*, limit: int = 40, max_filings: int = 12) -> di
         ),
         "source": "house_clerk_ptr",
         "available": bool(trades),
+        "_cache_key": cache_key,
     }
+    _CACHE["at"] = time.monotonic()
+    _CACHE["payload"] = result
+    return {k: v for k, v in result.items() if k != "_cache_key"}

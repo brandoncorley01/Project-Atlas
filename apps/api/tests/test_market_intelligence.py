@@ -264,3 +264,63 @@ def test_alerts_block_simulated_outside_dev_rules():
     )
     assert ok is False
     assert reason == "simulated_blocked"
+
+
+def test_equity_heatmap_tiles_omit_options_bias():
+    from app.market_intelligence.heatmap import build_market_heatmap
+
+    payload = build_market_heatmap(
+        [
+            {
+                "symbol": "AAPL",
+                "sector": "Technology",
+                "market_cap": 3e12,
+                "daily_return": 1.25,
+            },
+            {
+                "symbol": "XOM",
+                "sector": "Energy",
+                "market_cap": 4e11,
+                "daily_return": -0.8,
+            },
+        ],
+        size_by="market_cap",
+        color_by="daily_return",
+    )
+    tiles = payload["table_fallback"]
+    assert all("options_bias" not in t for t in tiles)
+    assert tiles[0]["color_value"] == 1.25
+    assert "Up" in tiles[0]["label"] or "Slightly" in tiles[0]["label"]
+
+
+def test_heatmap_preserves_zero_color_values():
+    from app.market_intelligence.heatmap import build_market_heatmap
+
+    payload = build_market_heatmap(
+        [{"symbol": "SPY", "sector": "Index", "market_cap": 1e11, "daily_return": 0.0, "options_bias": 0.0}],
+        color_by="daily_return",
+    )
+    tile = payload["table_fallback"][0]
+    assert tile["color_value"] == 0.0
+    assert tile["label"] == "Flat"
+    # Explicit zero options_bias is preserved when provided by options heatmaps
+    assert tile.get("options_bias") == 0.0
+
+
+def test_finra_parse_json_and_csv():
+    from app.market_intelligence.providers.finra_ats import _parse_rows
+
+    json_body = (
+        '[{"issueSymbolIdentifier":"AAPL","weekStartDate":"2026-07-07",'
+        '"totalWeeklyShareQuantity":100,"totalNotionalSum":1,"totalWeeklyTradeCount":2}]'
+    )
+    rows = _parse_rows(json_body, "application/json")
+    assert rows[0]["issueSymbolIdentifier"] == "AAPL"
+
+    csv_body = (
+        "issueSymbolIdentifier,weekStartDate,totalWeeklyShareQuantity,totalNotionalSum,totalWeeklyTradeCount\n"
+        "NVDA,2026-07-07,200,3,4\n"
+    )
+    csv_rows = _parse_rows(csv_body, "text/csv")
+    assert csv_rows[0]["issueSymbolIdentifier"] == "NVDA"
+

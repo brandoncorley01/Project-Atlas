@@ -4,7 +4,6 @@ from datetime import date, datetime
 from typing import Any
 
 import math
-import yfinance as yf
 
 from app.engine.models import CandidateOpportunity, SignalModule
 from app.providers.options.greeks import estimate_delta
@@ -99,6 +98,11 @@ def fetch_options_candidates(
     """Fetch liquid near-the-money contracts via Yahoo Finance (free, no API key)."""
     stock_price = float(stock_context.get("price") or 0)
     if stock_price <= 0:
+        return []
+
+    try:
+        import yfinance as yf
+    except Exception:
         return []
 
     ticker = yf.Ticker(symbol.upper())
