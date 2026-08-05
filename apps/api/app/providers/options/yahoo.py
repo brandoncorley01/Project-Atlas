@@ -110,6 +110,8 @@ def fetch_options_candidates(
     pool: list[CandidateOpportunity] = []
     today = date.today()
 
+    # Cap expirations scanned — full chain walks blow MI latency budgets
+    scanned = 0
     for exp_str in expirations:
         try:
             expiration = _parse_expiration(exp_str)
@@ -119,6 +121,9 @@ def fetch_options_candidates(
         dte = (expiration - today).days
         if dte < MIN_DTE or dte > MAX_DTE:
             continue
+        if scanned >= 3:
+            break
+        scanned += 1
 
         try:
             chain = ticker.option_chain(exp_str)

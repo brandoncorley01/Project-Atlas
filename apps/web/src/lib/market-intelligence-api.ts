@@ -14,9 +14,9 @@ import {
   CLIENT_WEATHER,
 } from "@/lib/market-intelligence-fixtures";
 
-/** Fail fast so UI never hangs on a cold/missing Render API. */
+/** Fail soft so UI never hangs forever on a cold/missing Render API. */
 const MI_FETCH_TIMEOUT_MS = 8_000;
-const MI_HEAVY_TIMEOUT_MS = 45_000;
+const MI_HEAVY_TIMEOUT_MS = 55_000;
 
 async function getToken() {
   if (usesBffProxy()) return undefined;
@@ -102,7 +102,8 @@ export async function fetchOptionsFlow(limit = 50) {
     undefined,
     MI_HEAVY_TIMEOUT_MS,
   );
-  if (data?.items?.length) return withSource(data, "api");
+  // Treat HTTP 200 as API even when Yahoo returns an empty unusualness set.
+  if (data && Array.isArray(data.items)) return withSource(data, "api");
   return withSource(
     {
       items: CLIENT_FLOW_CARDS.slice(0, limit),
@@ -167,7 +168,7 @@ export async function fetchSmartMoney() {
 }
 
 export async function fetchOptionsHeatmap() {
-  const data = await miFetch<Record<string, unknown>>("/options/heatmap");
+  const data = await miFetch<Record<string, unknown>>("/options/heatmap", "GET", undefined, MI_HEAVY_TIMEOUT_MS);
   if (data?.sectors) return withSource(data, "api");
   return withSource({ ...CLIENT_HEATMAP }, "client_fixture");
 }

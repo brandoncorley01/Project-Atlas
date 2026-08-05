@@ -14,12 +14,23 @@ const ENGINE_LONG_PROXY_TIMEOUT_MS = 180_000;
 export const maxDuration = 300;
 export const dynamic = "force-dynamic";
 
-function proxyTimeoutFor(subpath: string): number {
+def proxyTimeoutFor(subpath: string): number {
   if (subpath.startsWith("ai/")) return AI_PROXY_TIMEOUT_MS;
   if (subpath === "signals/sports/events") return INSIGHT_SEARCH_PROXY_TIMEOUT_MS;
   if (subpath === "dashboard") return DASHBOARD_PROXY_TIMEOUT_MS;
-  // Market/Options Intelligence should fail fast to client fixtures instead of hanging.
-  if (subpath.startsWith("market-intelligence")) return 12_000;
+  // Heavy Market/Options Intelligence paths need Yahoo time; keep lighter MI routes shorter.
+  if (
+    subpath === "market-intelligence/heatmap"
+    || subpath === "market-intelligence/options/flow"
+    || subpath === "market-intelligence/options/heatmap"
+    || subpath === "market-intelligence/options/smart-money"
+    || subpath === "market-intelligence/earnings/desk"
+    || subpath === "market-intelligence/dark-pool"
+    || subpath === "market-intelligence/congress-trades"
+  ) {
+    return 55_000;
+  }
+  if (subpath.startsWith("market-intelligence")) return 25_000;
   if (
     subpath === "engine/fix-all"
     || subpath === "engine/refresh-options"

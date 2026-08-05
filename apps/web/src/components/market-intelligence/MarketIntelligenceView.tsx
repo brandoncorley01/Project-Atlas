@@ -94,7 +94,8 @@ export function MarketIntelligenceView() {
     }
   }, []);
 
-  const loadDesk = useCallback(async () => {
+  const loadDesk = useCallback(async (opts?: { updateFixtureFlag?: boolean }) => {
+    const updateFixtureFlag = opts?.updateFixtureFlag !== false;
     try {
       const [weatherData, rotationData, exitData] = await Promise.all([
         fetchMarketWeather(),
@@ -109,13 +110,15 @@ export function MarketIntelligenceView() {
           rotationData.freshness ??
           CLIENT_FIXTURE_FRESHNESS,
       );
-      setUsingFixture(
-        weatherData.source === "client_fixture" ||
-          rotationData.source === "client_fixture" ||
-          exitData.source === "client_fixture",
-      );
+      if (updateFixtureFlag) {
+        setUsingFixture(
+          weatherData.source === "client_fixture" ||
+            rotationData.source === "client_fixture" ||
+            exitData.source === "client_fixture",
+        );
+      }
     } catch {
-      setUsingFixture(true);
+      if (updateFixtureFlag) setUsingFixture(true);
     }
   }, []);
 
@@ -129,8 +132,8 @@ export function MarketIntelligenceView() {
           setHeatmap(data ?? CLIENT_HEATMAP);
           setFreshness((data.freshness as Freshness) ?? CLIENT_FIXTURE_FRESHNESS);
           setUsingFixture(data.source === "client_fixture");
-          // Keep decision desk warm alongside equity heatmap
-          await loadDesk();
+          // Warm decision desk without overwriting heatmap live/fixture status
+          await loadDesk({ updateFixtureFlag: false });
         } else if (active === "weather" || active === "exit" || active === "rotation") {
           await loadDesk();
         } else if (active === "earnings") {

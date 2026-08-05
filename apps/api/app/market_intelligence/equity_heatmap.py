@@ -48,7 +48,7 @@ _EQUITY_SECTOR_MAP: dict[str, str] = {
 
 
 def _enrich_market_caps(symbols: list[str]) -> dict[str, float]:
-    """Best-effort market cap from yfinance fast_info (sync)."""
+    """Best-effort market cap from yfinance fast_info (sync). Kept for optional use."""
     out: dict[str, float] = {}
     try:
         import yfinance as yf
@@ -76,14 +76,56 @@ def _enrich_market_caps(symbols: list[str]) -> dict[str, float]:
     return out
 
 
+# Stable relative weights so the treemap still reads as mega vs mid without slow cap lookups.
+_CAP_PROXY: dict[str, float] = {
+    "AAPL": 3.4e12,
+    "MSFT": 3.2e12,
+    "NVDA": 3.0e12,
+    "AMZN": 2.2e12,
+    "GOOGL": 2.1e12,
+    "META": 1.5e12,
+    "TSLA": 1.1e12,
+    "BRK-B": 1.0e12,
+    "AVGO": 9e11,
+    "JPM": 7e11,
+    "V": 6e11,
+    "MA": 5e11,
+    "SPY": 5e11,
+    "QQQ": 3e11,
+    "IWM": 8e10,
+}
+
+
+def _proxy_market_caps(
+    symbols: list[str],
+    quotes: dict[str, dict[str, Any]],
+    discovered: list[Any],
+) -> dict[str, float]:
+    out: dict[str, float] = {}
+    for i, sym in enumerate(symbols):
+        if sym in _CAP_PROXY:
+            out[sym] = _CAP_PROXY[sym]
+            continue
+        price = float((quotes.get(sym) or {}).get("price") or 0)
+        # Rank-based fallback keeps tiles visible and relatively sized
+        out[sym] = max(price * 1e9, 5e10) * (1.0 - i * 0.01)
+        match = next((d for d in discovered if getattr(d, "symbol", None) == sym), None)
+        if match is not None and getattr(match, "market_cap", None):
+            try:
+                out[sym] = float(match.market_cap)
+            except (TypeError, ValueError):
+                pass
+    return out
+
+
 async def build_equity_market_heatmap(
     *,
     size_by: str = "market_cap",
     color_by: str = "daily_return",
-    max_symbols: int = 48,
+    max_symbols: int = 36,
 ) -> dict[str, Any]:
     """
-    Real stock-market heatmap: liquid + screener symbols sized by market cap,
+    Real stock-market heatmap: liquid + screener symbols sized by market-cap proxy,
     colored by daily % change. Always delayed (Yahoo/Finnhub quotes) — never live.
     """
     from app.providers.market.universe import CORE_LIQUID, discover_market_symbols
@@ -95,7 +137,9 @@ async def build_equity_market_heatmap(
     ordered = list(dict.fromkeys([*CORE_LIQUID, *symbols]))[:max_symbols]
 
     quotes = await fetch_stock_quotes(ordered)
-    caps = await asyncio.to_thread(_enrich_market_caps, ordered)
+    # Skip per-symbol yfinance market-cap calls — they blow past BFF budgets.
+    # Size tiles with a stable proxy from price + known mega-cap bias.
+    caps = _proxy_market_caps(ordered, quotes, discovered)
 
     universe: list[dict[str, Any]] = []
     for sym in ordered:
@@ -108,7 +152,6 @@ async def build_equity_market_heatmap(
         if change_pct is None and not q:
             continue
         price = float(q.get("price") or 0)
-        # Approximate size if cap missing: use a stable proxy so tiles still render
         market_cap = caps.get(sym) or (abs(float(change_pct or 0)) + 1) * 1e9
         universe.append(
             {
