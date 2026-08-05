@@ -11,6 +11,7 @@ from app.config import settings
 from app.db.supabase_client import SupabaseClient
 from app.market_intelligence.alerts import default_alert_settings, should_send_alert
 from app.market_intelligence.freshness import build_freshness, utcnow
+from app.market_intelligence.equity_heatmap import build_equity_market_heatmap
 from app.market_intelligence.heatmap import (
     SECTOR_MAP,
     build_market_heatmap,
@@ -307,50 +308,65 @@ class MarketIntelligenceService:
     # ----- Market Intelligence -----
 
     async def market_heatmap(self, *, size_by: str = "market_cap", color_by: str = "daily_return") -> dict[str, Any]:
-        events = await self._load_events()
-        # Build a simple universe from flow + static sector map
-        by_sym: dict[str, NormalizedOptionsActivity] = {}
-        for e in events:
-            by_sym[e.underlying] = e
-        universe = []
-        for sym, e in by_sym.items():
-            universe.append(
-                {
-                    "symbol": sym,
-                    "sector": e.sector or SECTOR_MAP.get(sym, "Other"),
-                    "industry": "General",
-                    "market_cap": float(e.estimated_premium or 1_000_000),
-                    "volume": e.underlying_volume or e.contract_volume or 1,
-                    "dollar_volume": float(e.estimated_premium or 1),
-                    "daily_return": float(e.raw_metadata.get("daily_return") or 0),
-                    "momentum_score": 0.0,
-                    "options_bias": 0.0,
-                }
-            )
-        # Ensure core index presence for empty-ish universes
-        if not universe:
-            universe = [
-                {"symbol": "SPY", "sector": "Index", "market_cap": 1e12, "volume": 1e8, "daily_return": 0.2},
-                {"symbol": "QQQ", "sector": "Index", "market_cap": 8e11, "volume": 8e7, "daily_return": 0.4},
-                {"symbol": "AAPL", "sector": "Technology", "market_cap": 3e12, "volume": 5e7, "daily_return": 0.1},
-                {"symbol": "XOM", "sector": "Energy", "market_cap": 4e11, "volume": 2e7, "daily_return": -0.3},
-            ]
-            status = DataStatus.SIMULATED
-            provider = "atlas_core_universe_fixture"
-        else:
-            status = events[0].data_status if events else DataStatus.SIMULATED
-            provider = events[0].data_source if events else "fixture"
+        """Real equity market heatmap (cap × daily return), not options-flow tiles."""
+        try:
+            return await build_equity_market_heatmap(size_by=size_by, color_by=color_by)
+        except Exception as exc:
+            logger.warning("Equity heatmap failed, falling back: %s", exc)
+            # Keep prior options-derived fallback only if equity build fails hard
+            events = await self._load_events()
+            by_sym: dict[str, NormalizedOptionsActivity] = {}
+            for e in events:
+                by_sym[e.underlying] = e
+            universe = []
+            for sym, e in by_sym.items():
+                universe.append(
+                    {
+                        "symbol": sym,
+                        "sector": e.sector or SECTOR_MAP.get(sym, "Other"),
+                        "industry": "General",
+                        "market_cap": float(e.estimated_premium or 1_000_000),
+                        "volume": e.underlying_volume or e.contract_volume or 1,
+                        "dollar_volume": float(e.estimated_premium or 1),
+                        "daily_return": float(e.raw_metadata.get("daily_return") or 0),
+                        "momentum_score": 0.0,
+                        "options_bias": 0.0,
+                    }
+                )
+            if not universe:
+                from app.providers.market.universe import CORE_LIQUID
 
-        payload = build_market_heatmap(universe, size_by=size_by, color_by=color_by)
-        payload["freshness"] = build_freshness(
-            provider_name=provider,
-            data_timestamp=utcnow(),
-            data_status=status if isinstance(status, DataStatus) else DataStatus(str(status)),
-        ).to_dict()
-        payload["disclaimer"] = (
-            "Heatmaps describe recent conditions. They do not guarantee future movement."
-        )
-        return payload
+                universe = [
+                    {
+                        "symbol": s,
+                        "sector": SECTOR_MAP.get(s, "Other"),
+                        "market_cap": 1e11,
+                        "daily_return": 0.0,
+                    }
+                    for s in CORE_LIQUID[:12]
+                ]
+            payload = build_market_heatmap(universe, size_by=size_by, color_by=color_by)
+            payload["freshness"] = build_freshness(
+                provider_name="equity_heatmap_fallback",
+                data_timestamp=utcnow(),
+                data_status=DataStatus.PARTIAL,
+                missing_fields=["equity_quotes"],
+            ).to_dict()
+            payload["disclaimer"] = (
+                "Equity quote heatmap unavailable — showing partial fallback. Not live tape."
+            )
+            payload["heatmap_kind"] = "fallback"
+            return payload
+
+    async def dark_pool(self, *, limit: int = 40) -> dict[str, Any]:
+        from app.market_intelligence.providers.finra_ats import fetch_dark_pool_summary
+
+        return await fetch_dark_pool_summary(limit=limit)
+
+    async def congress_trades(self, *, limit: int = 40) -> dict[str, Any]:
+        from app.market_intelligence.providers.congress_trades import fetch_congress_trades
+
+        return await fetch_congress_trades(limit=limit)
 
     async def sector_rotation(self) -> dict[str, Any]:
         events = await self._load_events()

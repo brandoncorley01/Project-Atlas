@@ -25,10 +25,10 @@ import {
 } from "@/lib/market-intelligence-fixtures";
 
 const TABS = [
+  { id: "heatmap", label: "Stock Heatmap" },
   { id: "weather", label: "Market Weather" },
   { id: "exit", label: "Exit Guidance" },
   { id: "rotation", label: "Sector Rotation" },
-  { id: "heatmap", label: "Market Heatmap" },
   { id: "options-bias", label: "Options Bias" },
   { id: "smart-money", label: "Smart-Money" },
   { id: "replay", label: "Replay" },
@@ -37,10 +37,10 @@ const TABS = [
 type TabId = (typeof TABS)[number]["id"];
 
 function readInitialTab(): TabId {
-  if (typeof window === "undefined") return "weather";
+  if (typeof window === "undefined") return "heatmap";
   const raw = new URLSearchParams(window.location.search).get("tab");
   if (TABS.some((t) => t.id === raw)) return raw as TabId;
-  return "weather";
+  return "heatmap";
 }
 
 function EvidenceList({ title, items }: { title: string; items: string[] }) {
@@ -58,7 +58,7 @@ function EvidenceList({ title, items }: { title: string; items: string[] }) {
 }
 
 export function MarketIntelligenceView() {
-  const [tab, setTab] = useState<TabId>("weather");
+  const [tab, setTab] = useState<TabId>("heatmap");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [freshness, setFreshness] = useState<Freshness | null>(CLIENT_FIXTURE_FRESHNESS);
@@ -83,7 +83,7 @@ export function MarketIntelligenceView() {
     setTab(next);
     if (typeof window !== "undefined") {
       const url = new URL(window.location.href);
-      if (next === "weather") url.searchParams.delete("tab");
+      if (next === "heatmap") url.searchParams.delete("tab");
       else url.searchParams.set("tab", next);
       window.history.replaceState({}, "", url.toString());
     }
@@ -119,15 +119,15 @@ export function MarketIntelligenceView() {
       setLoading(true);
       setError(null);
       try {
-        // Always keep the decision desk warm.
-        if (active === "weather" || active === "exit" || active === "rotation") {
-          await loadDesk();
-        }
         if (active === "heatmap") {
           const data = await fetchMarketHeatmap();
           setHeatmap(data ?? CLIENT_HEATMAP);
           setFreshness((data.freshness as Freshness) ?? CLIENT_FIXTURE_FRESHNESS);
           setUsingFixture(data.source === "client_fixture");
+          // Keep decision desk warm alongside equity heatmap
+          await loadDesk();
+        } else if (active === "weather" || active === "exit" || active === "rotation") {
+          await loadDesk();
         } else if (active === "options-bias") {
           const bias = await fetchOptionsHeatmap();
           setOptionsBias(bias ?? CLIENT_HEATMAP);
@@ -183,8 +183,8 @@ export function MarketIntelligenceView() {
       <header className="space-y-2">
         <h1 className="text-2xl font-semibold tracking-tight">Market Intelligence</h1>
         <p className="max-w-3xl text-sm text-muted">
-          Regime context, sector lean, and swing exit guidance — so you know what to favor, avoid,
-          or tighten today. Decision support only; not a forecast or order instruction.
+          Live-session stock market heatmap (delayed quotes), regime context, sector lean, and swing
+          exit guidance. Decision support only — not a forecast or order instruction.
         </p>
         <div className="flex flex-wrap items-center gap-2">
           <DataStatusBadge freshness={freshness} />
@@ -302,11 +302,22 @@ export function MarketIntelligenceView() {
 
       {tab === "heatmap" && heatmap && (
         <HeatmapPanel
-          title="Market Heatmap"
-          subtitle="Drill into Options Intelligence from notable names."
+          title="Stock Market Heatmap"
+          subtitle={
+            heatmap.symbol_count
+              ? `${String(heatmap.symbol_count)} liquid names — size ≈ market cap, color = daily % change.`
+              : "Size ≈ market cap, color = daily % change from delayed Yahoo/Finnhub quotes."
+          }
           sectors={heatmap.sectors as never[]}
           tableFallback={heatmap.table_fallback as never[]}
-          legend={heatmap.legend as never}
+          legend={
+            (heatmap.legend as { size?: string; color?: string; note?: string }) || {
+              size: "market_cap",
+              color: "daily_return",
+              note: "Equity session moves — not options premium.",
+            }
+          }
+          colorBy={String(heatmap.color_by ?? "daily_return")}
         />
       )}
 
@@ -345,6 +356,7 @@ export function MarketIntelligenceView() {
           sectors={optionsBias.sectors as never[]}
           tableFallback={optionsBias.table_fallback as never[]}
           legend={optionsBias.legend as never}
+          colorBy="options_bias"
         />
       )}
 
@@ -355,6 +367,7 @@ export function MarketIntelligenceView() {
           sectors={smartMoney.sectors as never[]}
           tableFallback={smartMoney.table_fallback as never[]}
           legend={smartMoney.legend as never}
+          colorBy="options_bias"
         />
       )}
 

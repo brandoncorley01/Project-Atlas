@@ -83,7 +83,7 @@ class Settings(BaseSettings):
 
     # Market & Options Intelligence
     atlas_market_intelligence_enabled: bool = True
-    atlas_options_flow_provider: str = "fixture"
+    atlas_options_flow_provider: str = "yahoo_derived"
     atlas_options_flow_allow_simulated: bool = True
     atlas_exit_score_version: str = "exit_v1"
     atlas_options_score_version: str = "options_activity_v1"

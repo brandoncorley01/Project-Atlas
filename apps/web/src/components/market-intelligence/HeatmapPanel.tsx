@@ -13,10 +13,30 @@ type Tile = {
   why?: string;
 };
 
-function tone(value: number) {
-  if (value > 0.5) return "bg-emerald-500/35 border-emerald-400/40 text-emerald-50";
-  if (value < -0.5) return "bg-rose-500/35 border-rose-400/40 text-rose-50";
+function tone(value: number, kind: "return" | "bias" | "urgency") {
+  if (kind === "urgency") {
+    if (value >= 71) return "bg-rose-500/45 border-rose-400/50 text-rose-50";
+    if (value >= 41) return "bg-amber-500/35 border-amber-400/40 text-amber-50";
+    return "bg-emerald-500/25 border-emerald-400/30 text-emerald-50";
+  }
+  // Equity % return or options bias (scaled)
+  if (value >= 2) return "bg-emerald-600/55 border-emerald-400/50 text-emerald-50";
+  if (value >= 0.5) return "bg-emerald-500/35 border-emerald-400/40 text-emerald-50";
+  if (value <= -2) return "bg-rose-600/55 border-rose-400/50 text-rose-50";
+  if (value <= -0.5) return "bg-rose-500/35 border-rose-400/40 text-rose-50";
   return "bg-slate-500/25 border-slate-400/30 text-slate-100";
+}
+
+function formatMetric(tile: Tile, colorBy?: string) {
+  if (tile.exit_urgency != null || colorBy === "exit_urgency") {
+    return `Exit ${Number(tile.exit_urgency ?? tile.color_value ?? 0).toFixed(0)}`;
+  }
+  if (colorBy === "options_bias" || tile.options_bias != null) {
+    const v = Number(tile.options_bias ?? tile.color_value ?? 0);
+    return `Bias ${v >= 0 ? "+" : ""}${v.toFixed(2)}`;
+  }
+  const ret = Number(tile.daily_return ?? tile.color_value ?? 0);
+  return `${ret >= 0 ? "+" : ""}${ret.toFixed(2)}%`;
 }
 
 export function HeatmapPanel({
@@ -25,16 +45,25 @@ export function HeatmapPanel({
   sectors,
   tableFallback,
   legend,
+  colorBy,
 }: {
   title: string;
   subtitle?: string;
   sectors?: Array<{ sector: string; tiles: Tile[] }>;
   tableFallback?: Tile[];
   legend?: { size?: string; color?: string; note?: string };
+  colorBy?: string;
 }) {
   const flat = tableFallback?.length
     ? tableFallback
     : (sectors ?? []).flatMap((s) => s.tiles);
+
+  const kind: "return" | "bias" | "urgency" =
+    colorBy === "exit_urgency" || flat.some((t) => t.exit_urgency != null)
+      ? "urgency"
+      : colorBy === "options_bias"
+        ? "bias"
+        : "return";
 
   return (
     <div className="space-y-4">
@@ -56,20 +85,25 @@ export function HeatmapPanel({
             </p>
             <div className="flex flex-wrap gap-2">
               {sector.tiles.map((tile) => {
-                const size = Math.max(72, Math.min(160, Math.sqrt(Number(tile.size_value || 1)) / 50 + 72));
-                const colorVal = Number(tile.color_value ?? tile.daily_return ?? tile.options_bias ?? 0);
+                const size = Math.max(
+                  72,
+                  Math.min(168, Math.sqrt(Number(tile.size_value || 1)) / 80_000 + 72),
+                );
+                const colorVal = Number(
+                  tile.color_value ?? tile.daily_return ?? tile.options_bias ?? tile.exit_urgency ?? 0,
+                );
                 return (
                   <div
                     key={`${sector.sector}-${tile.symbol}`}
-                    className={`flex flex-col justify-between rounded-lg border p-2 ${tone(colorVal)}`}
-                    style={{ width: size, minHeight: size * 0.7 }}
+                    className={`flex flex-col justify-between rounded-lg border p-2 ${tone(colorVal, kind)}`}
+                    style={{ width: size, minHeight: size * 0.72 }}
                     title={tile.why || tile.label}
                   >
                     <span className="text-sm font-bold">{tile.symbol}</span>
+                    <span className="text-[11px] font-semibold opacity-95">
+                      {formatMetric(tile, colorBy)}
+                    </span>
                     <span className="text-[10px] opacity-90">{tile.label || "—"}</span>
-                    {tile.exit_urgency != null && (
-                      <span className="text-[10px]">Exit {Number(tile.exit_urgency).toFixed(0)}</span>
-                    )}
                   </div>
                 );
               })}
@@ -78,7 +112,6 @@ export function HeatmapPanel({
         ))}
       </div>
 
-      {/* Accessible table fallback (also primary on mobile) */}
       <div className="overflow-x-auto rounded-xl border border-border">
         <table className="w-full text-left text-sm">
           <thead className="bg-background/50 text-xs text-muted">
@@ -96,16 +129,8 @@ export function HeatmapPanel({
                 <td className="px-3 py-2 font-medium">{tile.symbol}</td>
                 <td className="px-3 py-2 text-muted">{tile.sector}</td>
                 <td className="px-3 py-2">{tile.label || "—"}</td>
-                <td className="px-3 py-2">
-                  {tile.exit_urgency != null
-                    ? `Exit ${Number(tile.exit_urgency).toFixed(0)}`
-                    : tile.options_bias != null
-                      ? `Bias ${Number(tile.options_bias).toFixed(2)}`
-                      : tile.daily_return != null
-                        ? `${Number(tile.daily_return).toFixed(2)}`
-                        : "—"}
-                </td>
-                <td className="px-3 py-2 text-muted">{tile.action || "—"}</td>
+                <td className="px-3 py-2">{formatMetric(tile, colorBy)}</td>
+                <td className="px-3 py-2 text-muted">{tile.action || tile.why || "—"}</td>
               </tr>
             ))}
             {flat.length === 0 && (

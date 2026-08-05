@@ -1,6 +1,8 @@
 import { apiRequestHeaders, getApiUrl, usesBffProxy } from "@/lib/api-url";
 import {
   CLIENT_ALERTS,
+  CLIENT_CONGRESS_TRADES,
+  CLIENT_DARK_POOL,
   CLIENT_EXIT_HEATMAP,
   CLIENT_FIXTURE_FRESHNESS,
   CLIENT_FLOW_CARDS,
@@ -13,6 +15,7 @@ import {
 
 /** Fail fast so UI never hangs on a cold/missing Render API. */
 const MI_FETCH_TIMEOUT_MS = 8_000;
+const MI_HEAVY_TIMEOUT_MS = 45_000;
 
 async function getToken() {
   if (usesBffProxy()) return undefined;
@@ -25,7 +28,7 @@ async function getToken() {
   }
 }
 
-function init(token?: string, method = "GET", body?: unknown): RequestInit {
+function init(token?: string, method = "GET", body?: unknown, timeoutMs = MI_FETCH_TIMEOUT_MS): RequestInit {
   return {
     method,
     headers: {
@@ -35,7 +38,7 @@ function init(token?: string, method = "GET", body?: unknown): RequestInit {
     credentials: usesBffProxy() ? "include" : "same-origin",
     cache: "no-store",
     body: body ? JSON.stringify(body) : undefined,
-    signal: AbortSignal.timeout(MI_FETCH_TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
   };
 }
 
@@ -50,10 +53,18 @@ export type Freshness = {
 
 export type MiSource = "api" | "client_fixture";
 
-async function miFetch<T>(path: string, method = "GET", body?: unknown): Promise<T | null> {
+async function miFetch<T>(
+  path: string,
+  method = "GET",
+  body?: unknown,
+  timeoutMs = MI_FETCH_TIMEOUT_MS,
+): Promise<T | null> {
   try {
     const token = await getToken();
-    const res = await fetch(`${getApiUrl()}/market-intelligence${path}`, init(token, method, body));
+    const res = await fetch(
+      `${getApiUrl()}/market-intelligence${path}`,
+      init(token, method, body, timeoutMs),
+    );
     if (!res.ok) return null;
     return (await res.json()) as T;
   } catch {
@@ -86,6 +97,9 @@ export async function fetchMiStatus() {
 export async function fetchOptionsFlow(limit = 50) {
   const data = await miFetch<{ items: Record<string, unknown>[]; freshness?: Freshness; disclaimer?: string }>(
     `/options/flow?limit=${limit}`,
+    "GET",
+    undefined,
+    MI_HEAVY_TIMEOUT_MS,
   );
   if (data?.items?.length) return withSource(data, "api");
   return withSource(
@@ -184,9 +198,51 @@ export async function fetchAlertSettings() {
 }
 
 export async function fetchMarketHeatmap() {
-  const data = await miFetch<Record<string, unknown>>("/heatmap");
+  const data = await miFetch<Record<string, unknown>>("/heatmap", "GET", undefined, MI_HEAVY_TIMEOUT_MS);
   if (data?.sectors) return withSource(data, "api");
-  return withSource({ ...CLIENT_HEATMAP, color_by: "daily_return" }, "client_fixture");
+  return withSource({ ...CLIENT_HEATMAP, color_by: "daily_return", heatmap_kind: "fixture" }, "client_fixture");
+}
+
+export async function fetchDarkPool(limit = 40) {
+  const data = await miFetch<{
+    items: Record<string, unknown>[];
+    freshness?: Freshness;
+    disclaimer?: string;
+    week_start?: string;
+    available?: boolean;
+  }>(`/dark-pool?limit=${limit}`, "GET", undefined, MI_HEAVY_TIMEOUT_MS);
+  if (data?.items) return withSource(data, "api");
+  return withSource(
+    {
+      items: CLIENT_DARK_POOL,
+      week_start: null,
+      available: false,
+      freshness: CLIENT_FIXTURE_FRESHNESS,
+      disclaimer:
+        "FINRA ATS dark-pool volume unavailable — API still deploying or unreachable. Not fabricated.",
+    },
+    "client_fixture",
+  );
+}
+
+export async function fetchCongressTrades(limit = 40) {
+  const data = await miFetch<{
+    items: Record<string, unknown>[];
+    freshness?: Freshness;
+    disclaimer?: string;
+    available?: boolean;
+  }>(`/congress-trades?limit=${limit}`, "GET", undefined, MI_HEAVY_TIMEOUT_MS);
+  if (data?.items) return withSource(data, "api");
+  return withSource(
+    {
+      items: CLIENT_CONGRESS_TRADES,
+      available: false,
+      freshness: CLIENT_FIXTURE_FRESHNESS,
+      disclaimer:
+        "Congress TRADE disclosures unavailable — showing preview placeholders until API responds.",
+    },
+    "client_fixture",
+  );
 }
 
 export async function fetchSectorRotation() {

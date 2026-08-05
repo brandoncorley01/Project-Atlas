@@ -274,3 +274,45 @@ export const CLIENT_PERFORMANCE = {
   },
   disclaimer: "Example methodology only — not a live performance claim.",
 };
+
+export const CLIENT_DARK_POOL: Record<string, unknown>[] = [
+  {
+    symbol: "NVDA",
+    ats_shares: 84_000_000,
+    ats_notional: 12_500_000_000,
+    ats_trades: 120_000,
+    vs_prior_week: 1.4,
+    activity_tag: "surge",
+    week_start: "preview",
+    data_status: "simulated",
+    note: "Simulated FINRA ATS preview — not real dark-pool prints.",
+  },
+  {
+    symbol: "AAPL",
+    ats_shares: 46_000_000,
+    ats_notional: 9_800_000_000,
+    ats_trades: 95_000,
+    vs_prior_week: 0.9,
+    activity_tag: "steady",
+    week_start: "preview",
+    data_status: "simulated",
+    note: "Simulated FINRA ATS preview — not real dark-pool prints.",
+  },
+];
+
+export const CLIENT_CONGRESS_TRADES: Record<string, unknown>[] = [
+  {
+    chamber: "House",
+    member: "Hon. Example Member",
+    state_district: "XX00",
+    ticker: "AAPL",
+    asset_name: "Apple Inc.",
+    transaction_type: "Purchase",
+    transaction_date: "2026-06-01",
+    filing_date: "2026-07-01",
+    amount: "$1,001-$15,000",
+    ptr_url: "https://disclosures-clerk.house.gov/",
+    data_status: "simulated",
+    note: "Simulated STOCK Act preview — replace with live House Clerk PTR feed.",
+  },
+];

@@ -24,7 +24,15 @@ class YahooDerivedFlowProvider(OptionsFlowProvider):
     default_status = DataStatus.DELAYED
 
     def __init__(self, symbols: list[str] | None = None):
-        self.symbols = symbols or ["AAPL", "NVDA", "MSFT", "SPY", "QQQ"]
+        if symbols:
+            self.symbols = symbols
+        else:
+            try:
+                from app.providers.market.universe import CORE_LIQUID
+
+                self.symbols = list(CORE_LIQUID)[:14]
+            except Exception:
+                self.symbols = ["AAPL", "NVDA", "MSFT", "SPY", "QQQ", "AMZN", "META", "TSLA"]
 
     def is_enabled(self) -> bool:
         try:
@@ -45,7 +53,7 @@ class YahooDerivedFlowProvider(OptionsFlowProvider):
 
         events: list[NormalizedOptionsActivity] = []
         now = datetime.now(UTC)
-        for symbol in symbols[:8]:
+        for symbol in symbols[:12]:
             try:
                 candidates = fetch_options_candidates(str(symbol), {"price": None})
             except Exception as exc:

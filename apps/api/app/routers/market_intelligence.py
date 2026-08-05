@@ -161,6 +161,26 @@ async def market_heatmap(
     return await _svc(user_id, token).market_heatmap(size_by=size_by, color_by=color_by)
 
 
+@router.get("/dark-pool")
+async def dark_pool(
+    limit: int = Query(default=40, ge=1, le=100),
+    user_id: str = Depends(get_current_user_id),
+    token: str = Depends(get_access_token),
+) -> dict:
+    _require_enabled()
+    return await _svc(user_id, token).dark_pool(limit=limit)
+
+
+@router.get("/congress-trades")
+async def congress_trades(
+    limit: int = Query(default=40, ge=1, le=100),
+    user_id: str = Depends(get_current_user_id),
+    token: str = Depends(get_access_token),
+) -> dict:
+    _require_enabled()
+    return await _svc(user_id, token).congress_trades(limit=limit)
+
+
 @router.get("/sector-rotation")
 async def sector_rotation(
     user_id: str = Depends(get_current_user_id),

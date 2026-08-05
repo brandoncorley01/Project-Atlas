@@ -193,6 +193,20 @@ def _color_label(value: float, metric: str) -> str:
         if value >= 41:
             return "Elevated"
         return "Low urgency"
+    if metric in ("daily_return",):
+        if value >= 3:
+            return "Strong up"
+        if value >= 1:
+            return "Up"
+        if value >= 0.25:
+            return "Slightly up"
+        if value <= -3:
+            return "Strong down"
+        if value <= -1:
+            return "Down"
+        if value <= -0.25:
+            return "Slightly down"
+        return "Flat"
     if value > 0.5:
         return "Up / constructive"
     if value < -0.5:

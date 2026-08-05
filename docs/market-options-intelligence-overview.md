@@ -4,8 +4,8 @@
 
 Atlas decision-support for:
 
-1. **Options Intelligence** — flow scanner, low-premium opportunities, concentrated-activity watchlist, options bias heatmap, signal history, performance analytics, alert settings
-2. **Market Intelligence** — market heatmap, sector rotation, options/smart-money heatmaps, Market Weather, portfolio exit heatmap, historical replay shell
+1. **Options Intelligence** — Flow Tracker (unusual options activity), FINRA dark-pool ATS volume, STOCK Act politician trade disclosures, low-premium opportunities, concentrated-activity watchlist, options bias heatmap, signal history, performance analytics, alert settings
+2. **Market Intelligence** — **real equity stock market heatmap** (cap × daily %), sector rotation, options/smart-money heatmaps, Market Weather, portfolio exit heatmap, historical replay shell
 3. **Swing-trade exit guidance** — explainable Exit Urgency Score with plain-English decision support (no auto-trading)
 
 ## What this is not
@@ -13,7 +13,8 @@ Atlas decision-support for:
 - Not a clone of Unusual Whales, Finviz, or TradingView
 - Not automatic order execution
 - Not institutional identity labeling
-- Not fabricated dark-pool or live tape claims
+- Not fabricated live dark-pool prints (FINRA ATS is official but delayed)
+- Not a claim that congressional trades are “smart money”
 
 ## Data status badges
 
@@ -75,9 +76,15 @@ Every score payload includes version, weights, components, missing inputs, penal
 - `GET /options/signals/history`
 - `GET /options/performance`
 - `GET /options/alerts/settings`
-- `GET /heatmap`
+- `GET /heatmap` — equity stock market heatmap
+- `GET /dark-pool` — FINRA ATS delayed dark-pool volume
+- `GET /congress-trades` — House STOCK Act PTR disclosures
 - `GET /sector-rotation`
 - `GET /smart-money-heatmap`
+- `GET /weather`
+- `GET /replay`
+- `POST /exit/evaluate`
+- `POST /exit/portfolio-heatmap`
 - `GET /weather`
 - `GET /replay`
 - `POST /exit/evaluate`

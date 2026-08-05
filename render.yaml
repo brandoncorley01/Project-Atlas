@@ -56,7 +56,7 @@ services:
       - key: ATLAS_MARKET_INTELLIGENCE_ENABLED
         value: "true"
       - key: ATLAS_OPTIONS_FLOW_PROVIDER
-        value: "fixture"
+        value: "yahoo_derived"
       - key: ATLAS_OPTIONS_FLOW_ALLOW_SIMULATED
         value: "true"
       - key: OPENAI_API_KEY
