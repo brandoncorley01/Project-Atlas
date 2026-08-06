@@ -12,6 +12,10 @@ import { QuickStartGuide } from "@/components/ui/QuickStartGuide";
 import { filterSignals, sortSignals, type FilterKey, type SortKey } from "@/lib/signal-filters";
 import type { SignalSummary } from "@/components/dashboard/OpportunityList";
 import { apiRequestHeaders, getApiUrl, usesBffProxy } from "@/lib/api-url";
+import {
+  exclusiveAllOptions,
+  isCapitalFirstOnlyBoard,
+} from "@/lib/options-signals-dedupe";
 
 function toSummary(row: OptionSignal): SignalSummary {
   const ctx = row.scoring_snapshot?.market_context as SignalSummary["context"] | undefined;
@@ -155,7 +159,9 @@ export function OptionsSignalsView({
       }
 
       const created = body.signals_created as number | undefined;
-      const scanned = body.symbols_scanned as number | undefined;
+      const stats = (body.stats ?? {}) as { symbols_scanned?: number };
+      const scanned =
+        (body.symbols_scanned as number | undefined) ?? stats.symbols_scanned;
       const modeNote =
         typeof body.message === "string" && body.message.trim() ? body.message.trim() : null;
       if (created != null && created > 0) {
@@ -180,20 +186,33 @@ export function OptionsSignalsView({
     setScanning(false);
   }
 
-  const topOrdered = useMemo(() => {
-    const summaries = sortSignals(filterSignals(allItems.map(toSummary), topFilter), topSort);
-    const byId = new Map(allItems.map((r) => [r.id, r]));
-    return summaries.map((s) => byId.get(s.id)).filter(Boolean) as OptionSignal[];
-  }, [allItems, topFilter, topSort]);
-
   const budgetOrdered = useMemo(() => {
     const summaries = sortSignals(filterSignals(budgetItems.map(toSummary), budgetFilter), budgetSort);
     const byId = new Map(budgetItems.map((r) => [r.id, r]));
     return summaries.map((s) => byId.get(s.id)).filter(Boolean) as OptionSignal[];
   }, [budgetItems, budgetFilter, budgetSort]);
 
+  // Capital-first scans persist only under-$100 rows, so /signals/options and
+  // ?budget=true return the same IDs. Exclude budget rows from "All scanned"
+  // so the page never lists the same contract twice.
+  const allExclusiveItems = useMemo(
+    () => exclusiveAllOptions(allItems, budgetItems),
+    [allItems, budgetItems],
+  );
+
+  const topOrdered = useMemo(() => {
+    const summaries = sortSignals(
+      filterSignals(allExclusiveItems.map(toSummary), topFilter),
+      topSort,
+    );
+    const byId = new Map(allExclusiveItems.map((r) => [r.id, r]));
+    return summaries.map((s) => byId.get(s.id)).filter(Boolean) as OptionSignal[];
+  }, [allExclusiveItems, topFilter, topSort]);
+
   const busy = loading || scanning;
   const hasAny = allItems.length > 0 || budgetItems.length > 0;
+  const capitalFirstOnly = isCapitalFirstOnlyBoard(allItems, budgetItems);
+  const insightRow = budgetOrdered[0] ?? topOrdered[0] ?? allItems[0];
 
   if (loading && !hasAny) {
     return (
@@ -234,12 +253,11 @@ export function OptionsSignalsView({
     <div className="space-y-8">
       <AtlasModuleInsight
         module="options"
-        signalId={topOrdered[0]?.id ?? allItems[0]?.id}
+        signalId={insightRow?.id}
         headline="Options move on time — Atlas prioritizes catalysts, DTE, and premium velocity."
         urgencyNote={
-          (topOrdered[0] ?? allItems[0]) &&
-          Number((topOrdered[0] ?? allItems[0])?.days_to_expiration ?? 99) <= 14
-            ? `Top pick has ${Number((topOrdered[0] ?? allItems[0])?.days_to_expiration)} DTE — near-term monetary risk/reward is elevated.`
+          insightRow && Number(insightRow.days_to_expiration ?? 99) <= 14
+            ? `Top pick has ${Number(insightRow.days_to_expiration)} DTE — near-term monetary risk/reward is elevated.`
             : "Short-dated contracts reprice faster than stocks — size carefully."
         }
       />
@@ -311,24 +329,34 @@ export function OptionsSignalsView({
       <section>
         <h2 className="mb-1 text-lg font-semibold">All scanned picks</h2>
         <p className="mb-2 text-sm text-muted">
-          Full scan results. While Atlas is still proving itself, deep scan saves under-$100
-          contracts first.
+          Higher-cost contracts from the same scan. While Atlas is still proving itself, deep
+          scan saves under-$100 contracts first — those stay in the section above.
         </p>
-        <SignalsToolbar
-          sort={topSort}
-          filter={topFilter}
-          onSortChange={setTopSort}
-          onFilterChange={setTopFilter}
-          resultCount={topOrdered.length}
-        />
-        {topOrdered.length > 0 ? (
-          <div className="space-y-6">
-            {topOrdered.map((row, index) => (
-              <OptionSignalCard key={row.id} row={row} rank={index + 1} />
-            ))}
+        {capitalFirstOnly ? (
+          <div className="rounded-xl border border-dashed border-border bg-surface/50 p-6 text-center text-sm text-muted">
+            Capital-first mode is on — only under-$100 contracts are saved until Atlas proves a
+            ≥55% options win rate on 15+ graded picks. Re-scan after that to unlock higher-cost
+            plays here.
           </div>
         ) : (
-          <p className="text-sm text-muted">No picks match your filters.</p>
+          <>
+            <SignalsToolbar
+              sort={topSort}
+              filter={topFilter}
+              onSortChange={setTopSort}
+              onFilterChange={setTopFilter}
+              resultCount={topOrdered.length}
+            />
+            {topOrdered.length > 0 ? (
+              <div className="space-y-6">
+                {topOrdered.map((row, index) => (
+                  <OptionSignalCard key={row.id} row={row} rank={index + 1} />
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-muted">No picks match your filters.</p>
+            )}
+          </>
         )}
       </section>
     </div>

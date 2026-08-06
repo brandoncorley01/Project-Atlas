@@ -20,8 +20,49 @@ DEEP_DIVE_SYMBOL_LIMIT = 28
 MAX_SIGNALS_OUTPUT = 15
 MAX_SIGNALS_STORED = 35
 MAX_BUDGET_SIGNALS = 10
+MAX_PER_SYMBOL = 3
 FINNHUB_CONTEXT_LIMIT = 28
 PARALLEL_SYMBOL_FETCHES = 6
+
+
+def select_signals_to_save(
+    explained: list,
+    *,
+    limit: int = MAX_SIGNALS_STORED,
+    max_per_symbol: int = MAX_PER_SYMBOL,
+) -> list:
+    """Dedupe contract keys and cap per underlying so one ticker cannot fill the board."""
+    to_save: list = []
+    seen: set[str] = set()
+    per_symbol: dict[str, int] = {}
+
+    for signal in explained:
+        if len(to_save) >= limit:
+            break
+        c = signal.planned.scored.candidate
+        key = f"{c.symbol}:{c.option_type}:{c.strike}:{c.expiration}"
+        if key in seen:
+            continue
+        sym = str(c.symbol or "").upper()
+        if per_symbol.get(sym, 0) >= max_per_symbol:
+            continue
+        seen.add(key)
+        per_symbol[sym] = per_symbol.get(sym, 0) + 1
+        to_save.append(signal)
+
+    # If the per-symbol cap left empty slots, fill with remaining unique contracts.
+    if len(to_save) < limit:
+        for signal in explained:
+            if len(to_save) >= limit:
+                break
+            c = signal.planned.scored.candidate
+            key = f"{c.symbol}:{c.option_type}:{c.strike}:{c.expiration}"
+            if key in seen:
+                continue
+            seen.add(key)
+            to_save.append(signal)
+
+    return to_save
 
 
 async def _yahoo_last_price(symbol: str) -> float:
@@ -204,6 +245,7 @@ class OptionsRefreshService:
 
         candidates, stats = await self.gather_live_candidates()
         explained = run_options_pipeline(candidates)
+        pipeline_count = len(explained)
 
         explained = [
             s
@@ -211,12 +253,19 @@ class OptionsRefreshService:
             if float((s.planned.scored.scoring_snapshot or {}).get("profit_probability") or 0) >= min_prob
             and float(s.planned.scored.opportunity_score or 0) >= min_opp
         ]
+        after_calibration = len(explained)
 
         if not explained:
             return {
                 "signals_created": 0,
                 "filtered_out": stats["raw_contracts"],
-                "stats": stats,
+                "symbols_scanned": stats.get("symbols_scanned", 0),
+                "stats": {
+                    **stats,
+                    "pipeline_count": pipeline_count,
+                    "after_calibration": 0,
+                    "budget_first_mode": budget_first,
+                },
                 "used_mock_fallback": False,
                 "message": (
                     f"Scanned {stats['symbols_scanned']} symbols — no liquid setups passed filters. "
@@ -262,22 +311,19 @@ class OptionsRefreshService:
         standard = explained[:limit]
         budget = budget_pool[:MAX_BUDGET_SIGNALS]
 
-        to_save: list = []
-        seen: set[str] = set()
-        for signal in explained[:MAX_SIGNALS_STORED]:
-            c = signal.planned.scored.candidate
-            key = f"{c.symbol}:{c.option_type}:{c.strike}:{c.expiration}"
-            if key in seen:
-                continue
-            seen.add(key)
-            to_save.append(signal)
+        to_save = select_signals_to_save(explained, limit=MAX_SIGNALS_STORED)
 
+        stats["pipeline_count"] = pipeline_count
+        stats["after_calibration"] = after_calibration
         stats["budget_candidates"] = len(budget_pool)
         stats["budget_saved"] = len(
             [s for s in to_save if is_budget_contract(s.planned.scored.candidate)]
         )
         stats["budget_first_mode"] = budget_first
         stats["options_proven"] = bool(calibration.get("options_proven"))
+        stats["symbols_saved"] = len(
+            {s.planned.scored.candidate.symbol for s in to_save}
+        )
 
         if replace:
             await self.db.delete(
@@ -319,7 +365,8 @@ class OptionsRefreshService:
             "signals_created": len(saved),
             "standard_signals": len(standard),
             "budget_signals": len(budget),
-            "filtered_out": max(stats["raw_contracts"] - len(explained), 0),
+            "filtered_out": max(stats["raw_contracts"] - after_calibration, 0),
+            "symbols_scanned": stats.get("symbols_scanned", 0),
             "stats": stats,
             "used_mock_fallback": False,
             "top_profit_probability": top_prob,
