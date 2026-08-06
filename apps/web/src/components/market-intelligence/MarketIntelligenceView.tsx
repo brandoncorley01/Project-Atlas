@@ -353,6 +353,21 @@ export function MarketIntelligenceView() {
           {earnings.disclaimer ? (
             <p className="text-xs text-amber-200/80">{String(earnings.disclaimer)}</p>
           ) : null}
+          {(() => {
+            const reviewed = (earnings.recently_reviewed as Record<string, unknown>[]) || [];
+            if (reviewed.length === 0) return null;
+            const insufficient = reviewed.filter(
+              (r) => String(r.recommendation) === "INSUFFICIENT_DATA",
+            ).length;
+            if (insufficient < reviewed.length || insufficient === 0) return null;
+            return (
+              <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+                Yahoo options chains returned without usable liquidity fields for every reviewed
+                name — Atlas could not score EV. Calendar/quotes may still be live; retry after
+                chains refresh.
+              </div>
+            );
+          })()}
 
           <section className="space-y-2">
             <h2 className="text-sm font-semibold">Upcoming earnings</h2>

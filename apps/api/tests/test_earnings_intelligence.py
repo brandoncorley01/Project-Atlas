@@ -119,7 +119,66 @@ def test_desk_payload_has_real_data_shape():
     }
     passes, fails = otm_passes_gates(gates)
     assert passes is False
-    assert "liquidity" in fails
+    assert any("liquidity" in f for f in fails)
+
+
+def test_liquidity_ok_accepts_yahoo_zero_oi_with_volume():
+    ok, reasons = liquidity_ok(volume=1200, open_interest=0, spread=4.0)
+    assert ok is True, reasons
+    ok_low, reasons_low = liquidity_ok(volume=40, open_interest=0, spread=4.0)
+    assert ok_low is False
+    assert reasons_low
+
+
+def test_options_candidates_accept_zero_oi_high_volume(monkeypatch):
+    """Regression: Yahoo currently returns openInterest=0 on liquid names."""
+    from datetime import date, timedelta
+
+    import pandas as pd
+
+    from app.engine.models import CandidateOpportunity, SignalModule
+    from app.providers.options import yahoo as yahoo_mod
+
+    class _FakeTicker:
+        @property
+        def options(self):
+            exp = (date.today() + timedelta(days=10)).isoformat()
+            return [exp]
+
+        def option_chain(self, _exp):
+            frame = pd.DataFrame(
+                [
+                    {
+                        "strike": 210.0,
+                        "bid": 0.0,
+                        "ask": 0.0,
+                        "lastPrice": 3.45,
+                        "volume": 4200,
+                        "openInterest": 0,
+                        "impliedVolatility": 0.32,
+                    }
+                ]
+            )
+
+            class Chain:
+                calls = frame
+                puts = frame.copy()
+
+            return Chain()
+
+    class _FakeYf:
+        @staticmethod
+        def Ticker(_symbol):
+            return _FakeTicker()
+
+    monkeypatch.setitem(__import__("sys").modules, "yfinance", _FakeYf())
+
+    cands = yahoo_mod.fetch_options_candidates("AAPL", {"price": 208.0})
+    assert cands, "expected candidates when OI=0 but volume is strong"
+    assert all(isinstance(c, CandidateOpportunity) for c in cands)
+    assert cands[0].module == SignalModule.OPTIONS
+    assert cands[0].open_interest == 0
+    assert cands[0].volume >= 50
 
 
 def test_otm_passes_gates_all_green():

@@ -15,6 +15,7 @@ import {
 
 /** Fail soft so UI never hangs forever on a cold/missing Render API. */
 const MI_FETCH_TIMEOUT_MS = 8_000;
+const MI_MEDIUM_TIMEOUT_MS = 45_000;
 const MI_HEAVY_TIMEOUT_MS = 85_000;
 
 async function getToken() {
@@ -154,6 +155,9 @@ export async function fetchLowPremium(filters?: Record<string, unknown>) {
 export async function fetchSmartMoney() {
   const data = await miFetch<{ items: Record<string, unknown>[]; freshness?: Freshness; disclaimer?: string }>(
     "/options/smart-money",
+    "GET",
+    undefined,
+    MI_MEDIUM_TIMEOUT_MS,
   );
   if (data?.items) return withSource(data, "api");
   return withSource(
@@ -303,19 +307,29 @@ export async function fetchEarningsDesk() {
 }
 
 export async function fetchSectorRotation() {
-  const data = await miFetch<{ items: Record<string, unknown>[]; freshness?: Freshness }>("/sector-rotation");
+  const data = await miFetch<{ items: Record<string, unknown>[]; freshness?: Freshness }>(
+    "/sector-rotation",
+    "GET",
+    undefined,
+    MI_MEDIUM_TIMEOUT_MS,
+  );
   if (data?.items) return withSource(data, "api");
   return withSource({ ...CLIENT_SECTOR_ROTATION }, "client_fixture");
 }
 
 export async function fetchSmartMoneyHeatmap() {
-  const data = await miFetch<Record<string, unknown>>("/smart-money-heatmap");
+  const data = await miFetch<Record<string, unknown>>(
+    "/smart-money-heatmap",
+    "GET",
+    undefined,
+    MI_MEDIUM_TIMEOUT_MS,
+  );
   if (data?.sectors) return withSource(data, "api");
   return withSource({ ...CLIENT_HEATMAP }, "client_fixture");
 }
 
 export async function fetchMarketWeather() {
-  const data = await miFetch<Record<string, unknown>>("/weather");
+  const data = await miFetch<Record<string, unknown>>("/weather", "GET", undefined, MI_MEDIUM_TIMEOUT_MS);
   if (data?.label) return withSource(data, "api");
   return withSource({ ...CLIENT_WEATHER }, "client_fixture");
 }

@@ -23,11 +23,30 @@ def liquidity_ok(
     min_oi: int = 200,
     max_spread_pct: float = 12.0,
 ) -> tuple[bool, list[str]]:
+    """
+    Liquidity gate for earnings contracts.
+
+    Yahoo frequently returns openInterest=0 even on liquid names. Treat OI=0/None as
+    unknown and allow a volume fallback instead of hard-failing every setup.
+    """
     reasons: list[str] = []
-    if volume is None or volume < min_volume:
+    vol = 0 if volume is None else int(volume)
+    oi = None if open_interest is None else int(open_interest)
+
+    if volume is None or vol < min_volume:
         reasons.append(f"volume {volume} below {min_volume}")
-    if open_interest is None or open_interest < min_oi:
+
+    oi_unknown = oi is None or oi == 0
+    if oi_unknown:
+        # Require stronger volume when OI is missing/zero from the feed
+        oi_volume_floor = max(min_volume, 250)
+        if vol < oi_volume_floor:
+            reasons.append(
+                f"open interest unknown/zero and volume {volume} below fallback {oi_volume_floor}"
+            )
+    elif oi < min_oi:
         reasons.append(f"open interest {open_interest} below {min_oi}")
+
     if spread is None:
         reasons.append("bid-ask spread unavailable")
     elif spread > max_spread_pct:

@@ -91,9 +91,26 @@ def _row_to_candidate(
     )
 
 
+def _candidate_liquid_enough(candidate: CandidateOpportunity) -> bool:
+    """Yahoo often reports openInterest=0 even on liquid names — accept volume as proxy."""
+    oi = int(candidate.open_interest or 0)
+    vol = int(candidate.volume or 0)
+    if oi >= 50:
+        return True
+    if oi == 0 and vol >= 50:
+        return True
+    if vol >= 200:
+        return True
+    return False
+
+
 def fetch_options_candidates(
     symbol: str,
     stock_context: dict[str, Any],
+    *,
+    min_dte: int = MIN_DTE,
+    max_dte: int = MAX_DTE,
+    max_expirations: int = 3,
 ) -> list[CandidateOpportunity]:
     """Fetch liquid near-the-money contracts via Yahoo Finance (free, no API key)."""
     stock_price = float(stock_context.get("price") or 0)
@@ -123,9 +140,9 @@ def fetch_options_candidates(
             continue
 
         dte = (expiration - today).days
-        if dte < MIN_DTE or dte > MAX_DTE:
+        if dte < min_dte or dte > max_dte:
             continue
-        if scanned >= 3:
+        if scanned >= max_expirations:
             break
         scanned += 1
 
@@ -145,8 +162,8 @@ def fetch_options_candidates(
 
             for _, row in near_money.iterrows():
                 candidate = _row_to_candidate(symbol, option_type, row, expiration, stock_context)
-                if candidate and candidate.open_interest >= 50:
+                if candidate and _candidate_liquid_enough(candidate):
                     pool.append(candidate)
 
-    pool.sort(key=lambda c: (c.open_interest, c.volume), reverse=True)
+    pool.sort(key=lambda c: (int(c.open_interest or 0), int(c.volume or 0)), reverse=True)
     return pool[:MAX_CANDIDATES_PER_SYMBOL]

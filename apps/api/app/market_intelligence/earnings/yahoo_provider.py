@@ -17,6 +17,30 @@ from app.market_intelligence.types import DataStatus
 
 logger = logging.getLogger(__name__)
 
+# ETFs/indexes rarely have company earnings calendars — skip noisy 404s.
+_SKIP_EARNINGS_CALENDAR = frozenset(
+    {
+        "SPY",
+        "QQQ",
+        "IWM",
+        "DIA",
+        "XLE",
+        "XLF",
+        "XLK",
+        "XLV",
+        "XLI",
+        "XLP",
+        "XLU",
+        "XLB",
+        "XLRE",
+        "XLC",
+        "HYG",
+        "TLT",
+        "GLD",
+        "SLV",
+    }
+)
+
 
 def _as_date(value: Any) -> date | None:
     if value is None:
@@ -153,13 +177,24 @@ def _historical_moves(symbol: str, lookback: int = 4) -> list[float]:
         return []
 
 
-def _build_chain(symbol: str, price: float) -> dict[str, Any] | None:
+def _build_chain(symbol: str, price: float, *, report_date: date | None = None) -> dict[str, Any] | None:
     from app.providers.options.yahoo import fetch_options_candidates
 
     if price <= 0:
         return None
+    # Widen DTE window so near-earnings names still find listed expirations.
+    max_dte = 28
+    if report_date is not None:
+        days_out = (report_date - date.today()).days
+        max_dte = max(28, min(60, days_out + 21))
     try:
-        candidates = fetch_options_candidates(symbol, {"price": price})
+        candidates = fetch_options_candidates(
+            symbol,
+            {"price": price},
+            min_dte=1,
+            max_dte=max_dte,
+            max_expirations=5,
+        )
     except Exception as exc:
         logger.debug("chain fail %s: %s", symbol, exc)
         return None
@@ -180,6 +215,8 @@ def _build_chain(symbol: str, price: float) -> dict[str, Any] | None:
             continue
         iv_raw = float(c.implied_volatility) if c.implied_volatility is not None else None
         iv = (iv_raw / 100.0) if iv_raw is not None and iv_raw > 3 else iv_raw
+        # Persist OI=0 as None so liquidity gates treat it as unknown, not illiquid.
+        oi_raw = int(c.open_interest or 0)
         contracts.append(
             ContractCandidate(
                 option_type=str(c.option_type),
@@ -189,13 +226,16 @@ def _build_chain(symbol: str, price: float) -> dict[str, Any] | None:
                 bid=bid if bid > 0 else max(premium * 0.97, 0.01),
                 ask=ask if ask > 0 else premium,
                 volume=int(c.volume or 0),
-                open_interest=int(c.open_interest or 0),
+                open_interest=oi_raw if oi_raw > 0 else 0,
                 iv=iv,
                 delta=float(c.delta) if c.delta is not None else None,
                 moneyness=_moneyness(str(c.option_type), float(c.strike), price),
                 spread_pct=_spread_pct(bid if bid > 0 else None, ask if ask > 0 else None, premium),
             )
         )
+
+    if not contracts:
+        return None
 
     if not any(c.moneyness == "otm" for c in contracts):
         otmish = max((c for c in contracts if c.option_type == "call"), key=lambda c: c.strike, default=None)
@@ -233,6 +273,8 @@ def _scan_calendars_sync(
     today = date.today()
     dated: list[tuple[str, dict[str, Any]]] = []
     for sym in symbols:
+        if sym.upper() in _SKIP_EARNINGS_CALENDAR:
+            continue
         row = _calendar_row(sym)
         if not row:
             continue
@@ -244,6 +286,19 @@ def _scan_calendars_sync(
         dated.append((sym, row))
     dated.sort(key=lambda x: x[1]["report_date"])
     return dated
+
+
+def _momentum_bias(change_pct: float | None) -> tuple[str, str]:
+    """Soft session bias from delayed quotes — not analyst research."""
+    if change_pct is None:
+        return "unknown", "unknown"
+    if change_pct >= 1.5:
+        return "bullish", "constructive"
+    if change_pct <= -1.5:
+        return "bearish", "weakening"
+    if abs(change_pct) >= 0.5:
+        return "mixed", "mixed"
+    return "mixed", "unknown"
 
 
 async def fetch_live_earnings_desk(
@@ -282,6 +337,12 @@ async def fetch_live_earnings_desk(
     for sym, row in dated:
         q = quotes.get(sym) or {}
         price = float(q.get("price") or 0)
+        change_pct = q.get("change_pct")
+        try:
+            change_pct_f = float(change_pct) if change_pct is not None else None
+        except (TypeError, ValueError):
+            change_pct_f = None
+        sentiment, sector_dir = _momentum_bias(change_pct_f)
         moves = await asyncio.to_thread(_historical_moves, sym)
         missing: list[str] = []
         if row.get("eps_estimate") is None:
@@ -293,7 +354,7 @@ async def fetch_live_earnings_desk(
 
         chain = None
         if price > 0:
-            chain = await asyncio.to_thread(_build_chain, sym, price)
+            chain = await asyncio.to_thread(_build_chain, sym, price, report_date=row["report_date"])
         if not chain:
             missing.append("options_chain")
         else:
@@ -309,9 +370,9 @@ async def fetch_live_earnings_desk(
                 eps_estimate=row.get("eps_estimate"),
                 revenue_estimate=row.get("revenue_estimate"),
                 guidance_note=None,
-                analyst_sentiment="unknown",
+                analyst_sentiment=sentiment,
                 sector=None,
-                sector_direction="unknown",
+                sector_direction=sector_dir,
                 market_direction="unknown",
                 price=price or None,
                 volume=None,

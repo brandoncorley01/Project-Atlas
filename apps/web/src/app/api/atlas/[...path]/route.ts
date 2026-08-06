@@ -27,10 +27,13 @@ function proxyTimeoutFor(subpath: string): number {
     || subpath === "market-intelligence/earnings/desk"
     || subpath === "market-intelligence/dark-pool"
     || subpath === "market-intelligence/congress-trades"
+    || subpath === "market-intelligence/weather"
+    || subpath === "market-intelligence/sector-rotation"
+    || subpath === "market-intelligence/smart-money-heatmap"
   ) {
     return 90_000;
   }
-  if (subpath.startsWith("market-intelligence")) return 25_000;
+  if (subpath.startsWith("market-intelligence")) return 45_000;
   if (
     subpath === "engine/fix-all"
     || subpath === "engine/refresh-options"
