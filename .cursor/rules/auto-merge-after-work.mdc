@@ -1,0 +1,9 @@
+# Auto merge after work
+
+After finishing a coherent unit of work (feature/fix) that was opened as a PR:
+
+1. **Merge** the working branch into `main` (fast-forward preferred) without waiting to be asked.
+2. **Push** `main` to `origin` immediately after a successful merge.
+3. Ensure the PR is closed/merged on GitHub afterward.
+4. Do not force-push or rewrite shared history.
+5. If merge conflicts block the merge, resolve them, then merge and push; report clearly if it still cannot complete.
