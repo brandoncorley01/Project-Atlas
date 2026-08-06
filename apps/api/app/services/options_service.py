@@ -25,13 +25,51 @@ FINNHUB_CONTEXT_LIMIT = 28
 PARALLEL_SYMBOL_FETCHES = 6
 
 
+def contract_identity_key(candidate: object) -> str:
+    """Stable contract identity — normalize strike so 18 and 18.0 cannot both save."""
+    symbol = str(getattr(candidate, "symbol", "") or "").upper()
+    option_type = str(getattr(candidate, "option_type", "") or "").lower()
+    try:
+        strike = f"{float(getattr(candidate, 'strike', 0) or 0):.2f}"
+    except (TypeError, ValueError):
+        strike = "0.00"
+    expiration = getattr(candidate, "expiration", None)
+    return f"{symbol}:{option_type}:{strike}:{expiration}"
+
+
+def _strike_value(candidate: object) -> float:
+    try:
+        return float(getattr(candidate, "strike", 0) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _near_duplicate_strike(candidate: object, kept: list) -> bool:
+    """Reject half-strike twins (18.0 vs 18.5) on the same chain that look identical."""
+    sym = str(getattr(candidate, "symbol", "") or "").upper()
+    option_type = str(getattr(candidate, "option_type", "") or "").lower()
+    expiration = getattr(candidate, "expiration", None)
+    strike = _strike_value(candidate)
+    for other in kept:
+        c = other.planned.scored.candidate
+        if str(c.symbol or "").upper() != sym:
+            continue
+        if str(c.option_type or "").lower() != option_type:
+            continue
+        if getattr(c, "expiration", None) != expiration:
+            continue
+        if abs(_strike_value(c) - strike) < 0.51:
+            return True
+    return False
+
+
 def select_signals_to_save(
     explained: list,
     *,
     limit: int = MAX_SIGNALS_STORED,
     max_per_symbol: int = MAX_PER_SYMBOL,
 ) -> list:
-    """Dedupe contract keys and cap per underlying so one ticker cannot fill the board."""
+    """Dedupe contracts, skip near-twin strikes, and cap per underlying."""
     to_save: list = []
     seen: set[str] = set()
     per_symbol: dict[str, int] = {}
@@ -40,8 +78,8 @@ def select_signals_to_save(
         if len(to_save) >= limit:
             break
         c = signal.planned.scored.candidate
-        key = f"{c.symbol}:{c.option_type}:{c.strike}:{c.expiration}"
-        if key in seen:
+        key = contract_identity_key(c)
+        if key in seen or _near_duplicate_strike(c, to_save):
             continue
         sym = str(c.symbol or "").upper()
         if per_symbol.get(sym, 0) >= max_per_symbol:
@@ -56,8 +94,8 @@ def select_signals_to_save(
             if len(to_save) >= limit:
                 break
             c = signal.planned.scored.candidate
-            key = f"{c.symbol}:{c.option_type}:{c.strike}:{c.expiration}"
-            if key in seen:
+            key = contract_identity_key(c)
+            if key in seen or _near_duplicate_strike(c, to_save):
                 continue
             seen.add(key)
             to_save.append(signal)

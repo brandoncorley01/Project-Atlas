@@ -78,7 +78,7 @@ export function OpportunityList({
         );
         return (
           <div
-            key={item.id}
+            key={item.id || `${item.module}-${item.title}-${index}`}
             className={`atlas-card atlas-card-interactive p-4 sm:p-5 ${
               budget && highlightBudget
                 ? "border-emerald-500/50 ring-2 ring-emerald-500/20"

@@ -9,6 +9,7 @@ import { LogOutcomeButtons } from "@/components/performance/LogOutcomeButtons";
 import { PickPerformanceBadge } from "@/components/performance/PickPerformanceBadge";
 import { AtlasExplainButton } from "@/components/ai/AtlasExplainButton";
 import { optionSignalMetadata } from "@/lib/watchlist-api";
+import { formatStrike } from "@/lib/format-strike";
 import { useState } from "react";
 
 export interface OptionSignal {
@@ -108,7 +109,7 @@ export function OptionSignalCard({
             <PickPerformanceBadge module="options" signalId={row.id} />
           </div>
           <h2 className="mt-1 text-xl font-bold">
-            {row.underlying} {optionType} ${Number(row.strike ?? 0).toFixed(0)}
+            {row.underlying} {optionType} ${formatStrike(row.strike)}
           </h2>
           <p className="mt-1 text-sm text-muted">
             Premium ${premium.toFixed(2)} ·{" "}

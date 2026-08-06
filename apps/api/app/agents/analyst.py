@@ -1,10 +1,31 @@
 from app.engine.models import CandidateOpportunity, ScoredOpportunity
 
 
+def _moneyness_move_pct(candidate: CandidateOpportunity) -> float | None:
+    """Percent move needed for the option to finish ITM (None if unknown)."""
+    stock_price = candidate.metadata.get("stock_price")
+    try:
+        px = float(stock_price) if stock_price is not None else 0.0
+    except (TypeError, ValueError):
+        px = 0.0
+    strike = float(candidate.strike or 0)
+    if px <= 0 or strike <= 0:
+        return None
+    if candidate.option_type == "call":
+        return max(0.0, (strike - px) / px * 100)
+    return max(0.0, (px - strike) / px * 100)
+
+
 def _profit_probability_score(candidate: CandidateOpportunity) -> float:
-    """Estimate directional win odds for a retail swing option."""
+    """Estimate directional win odds for a retail swing option.
+
+    Additive buckets used to saturate near 100% for any liquid, trend-aligned
+    contract (including far OTM puts). Keep headroom below 100 and penalize
+    lottery-ticket moneyness so ranking does not collapse to one identical "best".
+    """
     prob = 48.0
-    delta = abs(candidate.delta or 0.35)
+    # Missing delta must NOT default into the 0.30–0.50 sweet spot.
+    delta = abs(candidate.delta) if candidate.delta is not None else None
 
     # Direction must match the underlying setup.
     if candidate.option_type == "call" and candidate.trend_bullish:
@@ -15,7 +36,9 @@ def _profit_probability_score(candidate: CandidateOpportunity) -> float:
         prob -= 10
 
     # Sweet-spot delta: enough exposure without lottery-ticket odds.
-    if 0.30 <= delta <= 0.50:
+    if delta is None:
+        prob -= 4
+    elif 0.30 <= delta <= 0.50:
         prob += 12
     elif 0.22 <= delta < 0.30:
         prob += 4
@@ -23,6 +46,18 @@ def _profit_probability_score(candidate: CandidateOpportunity) -> float:
         prob -= 6
     elif delta < 0.18:
         prob -= 8
+
+    # OTM distance — far OTM "cheap" contracts are not ~97% winners.
+    move = _moneyness_move_pct(candidate)
+    if move is not None:
+        if move >= 10:
+            prob -= 16
+        elif move >= 7:
+            prob -= 10
+        elif move >= 4:
+            prob -= 6
+        elif move >= 2:
+            prob -= 2
 
     # Liquidity improves real fills and exit quality.
     if candidate.bid_ask_spread_pct <= 2.5:
@@ -70,7 +105,8 @@ def _profit_probability_score(candidate: CandidateOpportunity) -> float:
     elif rvol < 0.7:
         prob -= 4
 
-    return round(min(100.0, max(0.0, prob)), 2)
+    # Soft cap leaves ranking headroom — identical 100%s collapse the board.
+    return round(min(92.0, max(0.0, prob)), 2)
 
 
 def score_candidate(candidate: CandidateOpportunity) -> ScoredOpportunity:
@@ -141,10 +177,12 @@ def rank_scored(scored: list[ScoredOpportunity]) -> list[ScoredOpportunity]:
     """Rank by profit probability, with under-$100 contracts as a soft tie-break."""
     from app.agents.scout import is_budget_contract
 
-    def sort_key(item: ScoredOpportunity) -> tuple[float, float, float, float]:
+    def sort_key(item: ScoredOpportunity) -> tuple[float, float, float, float, float]:
         snap = item.scoring_snapshot or {}
         prob = float(snap.get("profit_probability") or 0)
         budget = 1.0 if is_budget_contract(item.candidate) else 0.0
-        return (prob, budget, item.opportunity_score, item.confidence_score)
+        # Prefer tighter spreads when probs tie so ranking does not look frozen.
+        spread = float(item.candidate.bid_ask_spread_pct or 100)
+        return (prob, budget, item.opportunity_score, item.confidence_score, -spread)
 
     return sorted(scored, key=sort_key, reverse=True)

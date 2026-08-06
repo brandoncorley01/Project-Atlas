@@ -16,6 +16,7 @@ import {
   exclusiveAllOptions,
   isCapitalFirstOnlyBoard,
 } from "@/lib/options-signals-dedupe";
+import { formatStrike } from "@/lib/format-strike";
 
 function toSummary(row: OptionSignal): SignalSummary {
   const ctx = row.scoring_snapshot?.market_context as SignalSummary["context"] | undefined;
@@ -25,7 +26,7 @@ function toSummary(row: OptionSignal): SignalSummary {
   return {
     id: row.id,
     module: "options",
-    title: `${row.underlying} ${optionType} $${Number(row.strike ?? 0).toFixed(0)}`,
+    title: `${row.underlying} ${optionType} $${formatStrike(row.strike)}`,
     recommendation: row.recommendation,
     context: {
       ...ctx,
@@ -316,7 +317,11 @@ export function OptionsSignalsView({
         {budgetOrdered.length > 0 ? (
           <div className="space-y-6">
             {budgetOrdered.map((row, index) => (
-              <OptionSignalCard key={row.id} row={row} rank={index + 1} />
+              <OptionSignalCard
+                key={row.id || `${row.underlying}-${row.option_type}-${row.strike}-${row.expiration}`}
+                row={row}
+                rank={index + 1}
+              />
             ))}
           </div>
         ) : (
@@ -350,7 +355,11 @@ export function OptionsSignalsView({
             {topOrdered.length > 0 ? (
               <div className="space-y-6">
                 {topOrdered.map((row, index) => (
-                  <OptionSignalCard key={row.id} row={row} rank={index + 1} />
+                  <OptionSignalCard
+                    key={row.id || `${row.underlying}-${row.option_type}-${row.strike}-${row.expiration}`}
+                    row={row}
+                    rank={index + 1}
+                  />
                 ))}
               </div>
             ) : (

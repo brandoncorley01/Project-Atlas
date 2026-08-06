@@ -32,8 +32,25 @@ def test_select_signals_dedupes_identical_contracts():
     assert keys == {"SOFI:18.0", "SOFI:19.0"}
 
 
+def test_select_signals_dedupes_int_float_strike_keys():
+    a = _signal("SOFI", 18)
+    b = _signal("SOFI", 18.0)
+    saved = select_signals_to_save([a, b], limit=10, max_per_symbol=5)
+    assert len(saved) == 1
+
+
+def test_select_signals_skips_half_strike_twins():
+    a = _signal("SOFI", 18.0)
+    twin = _signal("SOFI", 18.5)
+    b = _signal("SOFI", 19.5)
+    saved = select_signals_to_save([a, twin, b], limit=10, max_per_symbol=5)
+    strikes = sorted(s.planned.scored.candidate.strike for s in saved)
+    assert strikes == [18.0, 19.5]
+
+
 def test_select_signals_caps_per_symbol_then_backfills():
     # Ranked board dumps many SOFI first — diversity pass should still pull NVDA/AAPL.
+    # Space strikes ≥0.51 apart so near-twin filter does not collapse the pool.
     pool = [_signal("SOFI", 10.0 + i) for i in range(10)]
     pool += [_signal("NVDA", 100.0), _signal("AAPL", 200.0)]
     saved = select_signals_to_save(pool, limit=6, max_per_symbol=MAX_PER_SYMBOL)
@@ -61,6 +78,7 @@ def test_select_signals_prefers_symbol_spread_when_interleaved():
         sym = s.planned.scored.candidate.symbol
         counts[sym] = counts.get(sym, 0) + 1
     assert counts == {"SOFI": 2, "NVDA": 2, "AAPL": 2}
+
 
 def test_select_signals_respects_overall_limit():
     pool = [_signal(f"T{i}", 10.0) for i in range(50)]

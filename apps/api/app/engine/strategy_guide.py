@@ -71,7 +71,7 @@ def _estimate_itm_probability(
             base = max(8.0, profit_probability - 22)
         return round(base, 1)
 
-    delta_prob = abs(delta or 0.35) * 100
+    delta_prob = abs(delta) * 100 if delta is not None else 35.0
     trend_adj = 10 if aligned else -8
     move_penalty = min(18, move_needed * 2.5)
     decay = max(0.75, 1 - (days_ahead / max(days_to_expiration, 1)) * 0.35)

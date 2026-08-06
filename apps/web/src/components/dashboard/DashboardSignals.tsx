@@ -26,8 +26,16 @@ export function DashboardSignals({
   const [sort, setSort] = useState<SortKey>("win_prob");
   const [filter, setFilter] = useState<FilterKey>("all");
 
+  // Capital-first scans make Top (list_options) and Budget the same IDs — exclude
+  // budget rows from Top so Home never lists one options contract twice.
+  const topExclusive = useMemo(() => {
+    const budgetIds = new Set(budgetOpportunities.map((r) => r.id).filter(Boolean));
+    if (budgetIds.size === 0) return topOpportunities;
+    return topOpportunities.filter((item) => !budgetIds.has(item.id));
+  }, [topOpportunities, budgetOpportunities]);
+
   const tabs: { id: BoardTab; label: string; count: number; href: string }[] = [
-    { id: "top", label: "Top", count: topOpportunities.length, href: "/" },
+    { id: "top", label: "Top", count: topExclusive.length, href: "/" },
     { id: "sports", label: "Sports", count: sportsOpportunities.length, href: "/sports" },
     { id: "stocks", label: "Stocks", count: stockOpportunities.length, href: "/stocks" },
     { id: "budget", label: "Budget", count: budgetOpportunities.length, href: "/options" },
@@ -42,9 +50,9 @@ export function DashboardSignals({
       case "budget":
         return budgetOpportunities;
       default:
-        return topOpportunities;
+        return topExclusive;
     }
-  }, [tab, topOpportunities, sportsOpportunities, stockOpportunities, budgetOpportunities]);
+  }, [tab, topExclusive, sportsOpportunities, stockOpportunities, budgetOpportunities]);
 
   const items = useMemo(
     () => sortSignals(filterSignals(source, filter), sort),
@@ -52,9 +60,12 @@ export function DashboardSignals({
   );
 
   const emptyByTab: Record<BoardTab, string> = {
-    top: 'No signals yet. Use the scanner bar above — Options, Stocks, or Sports.',
-    sports: 'No sports plays yet. Tap Sports → Scan sports odds.',
-    stocks: 'No stock swings yet. Tap Stocks → Scan stock swings.',
+    top:
+      budgetOpportunities.length > 0 && topExclusive.length === 0
+        ? "Capital-first mode — under-$100 options are on the Budget tab until Atlas proves its win rate."
+        : "No signals yet. Use the scanner bar above — Options, Stocks, or Sports.",
+    sports: "No sports plays yet. Tap Sports → Scan sports odds.",
+    stocks: "No stock swings yet. Tap Stocks → Scan stock swings.",
     budget: "No budget options yet. Run a deep options scan.",
   };
 

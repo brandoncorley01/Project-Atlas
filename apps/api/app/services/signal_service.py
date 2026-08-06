@@ -2,6 +2,7 @@ from app.db.supabase_client import SupabaseClient, explained_to_options_row
 from app.engine.models import ExplainedSignal
 from app.engine.pipeline import run_options_pipeline
 from app.agents.news_ai import sanitize_catalyst_context
+from app.services.options_service import contract_identity_key
 from app.agents.sports_categories import (
     CATEGORY_ORDER,
     category_counts,
@@ -93,6 +94,48 @@ def _safe_float(value: object, default: float = 0.0) -> float:
         return default
 
 
+def _format_strike(value: object) -> str:
+    """Match web formatStrike — half strikes must not round into twin titles."""
+    n = _safe_float(value)
+    if abs(n - round(n)) < 1e-6:
+        return str(int(round(n)))
+    return f"{n:.1f}".rstrip("0").rstrip(".")
+
+
+def _options_row_identity(row: dict) -> str:
+    """Read-path contract identity (mirrors options_service.contract_identity_key)."""
+    from types import SimpleNamespace
+    from datetime import date, datetime
+
+    exp = row.get("expiration")
+    if isinstance(exp, str):
+        try:
+            exp = date.fromisoformat(exp[:10])
+        except ValueError:
+            pass
+    elif isinstance(exp, datetime):
+        exp = exp.date()
+    candidate = SimpleNamespace(
+        symbol=row.get("underlying"),
+        option_type=row.get("option_type"),
+        strike=row.get("strike"),
+        expiration=exp,
+    )
+    return contract_identity_key(candidate)
+
+
+def _dedupe_options_rows(rows: list[dict]) -> list[dict]:
+    seen: set[str] = set()
+    out: list[dict] = []
+    for row in rows:
+        key = _options_row_identity(row)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(row)
+    return out
+
+
 def _legacy_context_from_explanation(explanation: str | None) -> dict:
     """Backfill market context for signals saved before structured context existed."""
     if not explanation:
@@ -166,14 +209,14 @@ class SignalService:
                 ),
                 reverse=True,
             )
-            return rows[:limit]
+            return _dedupe_options_rows(rows)[:limit]
 
         budget_rows = [row for row in rows if self._is_budget_row(row) and is_options_fresh(row)]
         budget_rows.sort(
             key=lambda r: float((r.get("scoring_snapshot") or {}).get("profit_probability") or 0),
             reverse=True,
         )
-        return budget_rows[:limit]
+        return _dedupe_options_rows(budget_rows)[:limit]
 
     async def get_options(self, signal_id: str) -> dict | None:
         """Return an options signal for detail views, including stale/expired rows."""
@@ -513,7 +556,7 @@ class SignalService:
         if module == "options":
             underlying = row.get("underlying") or "?"
             option_type = str(row.get("option_type") or "call").upper()
-            title = f"{underlying} {option_type} ${_safe_float(row.get('strike')):.0f}"
+            title = f"{underlying} {option_type} ${_format_strike(row.get('strike'))}"
         elif module == "stock":
             price = _safe_float(row.get("current_price"))
             title = f"{row.get('ticker') or '?'} ${price:.2f}"
