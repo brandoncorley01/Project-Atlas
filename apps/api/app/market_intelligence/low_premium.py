@@ -71,9 +71,16 @@ def scan_low_premium(
             rejects.append("expires_too_soon")
         elif dte > filters.max_dte:
             rejects.append("expires_too_far")
-        if (event.open_interest or 0) < filters.min_open_interest:
+        oi = event.open_interest
+        vol = event.contract_volume or 0
+        oi_unknown = oi is None or int(oi) == 0
+        if oi_unknown:
+            # Yahoo often reports OI=0 — require stronger volume instead of hard reject
+            if vol < max(filters.min_volume, 250):
+                rejects.append("open_interest")
+        elif int(oi) < filters.min_open_interest:
             rejects.append("open_interest")
-        if (event.contract_volume or 0) < filters.min_volume:
+        if vol < filters.min_volume:
             rejects.append("volume")
         spread = _spread_pct(event)
         if spread is None:

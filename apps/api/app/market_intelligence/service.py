@@ -151,7 +151,16 @@ class MarketIntelligenceService:
             liq = "C"
         elif spread is not None and spread > 5:
             liq = "B"
-        if (e.open_interest or 0) < 200:
+        oi = e.open_interest
+        vol = e.contract_volume or 0
+        oi_unknown = oi is None or int(oi) == 0
+        if oi_unknown:
+            # Yahoo OI often missing — grade from volume instead of forcing D
+            if vol < 250:
+                liq = "D"
+            elif vol < 1000 and liq == "A":
+                liq = "B"
+        elif int(oi) < 200:
             liq = "D"
         return {
             "ticker": e.underlying,

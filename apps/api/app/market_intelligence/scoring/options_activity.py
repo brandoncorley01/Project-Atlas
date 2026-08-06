@@ -197,7 +197,15 @@ def score_options_activity(
         total += components.get(key, 40.0) * weight
 
     # Hard penalties
-    if event.open_interest is not None and event.open_interest < 50:
+    oi = event.open_interest
+    vol = event.contract_volume
+    oi_unknown = oi is None or int(oi) == 0
+    if oi_unknown:
+        # Do not treat Yahoo's missing OI as near-zero liquidity when volume is strong
+        if vol is not None and int(vol) < 50:
+            total -= 15
+            penalties.append("Open interest unknown and volume very low")
+    elif int(oi) < 50:
         total -= 15
         penalties.append("Near-zero open interest")
     if event.contract_volume is not None and event.contract_volume < 20:

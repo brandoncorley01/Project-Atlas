@@ -83,7 +83,11 @@ class YahooDerivedFlowProvider(OptionsFlowProvider):
             out: list[NormalizedOptionsActivity] = []
             for idx, c in enumerate(ranked):
                 vol = int(getattr(c, "volume", 0) or 0)
-                oi = int(getattr(c, "open_interest", 0) or 1)
+                oi_raw = getattr(c, "open_interest", None)
+                try:
+                    oi = int(oi_raw) if oi_raw is not None else 0
+                except (TypeError, ValueError):
+                    oi = 0
                 if vol < 50:
                     continue
                 raw = {
@@ -97,6 +101,7 @@ class YahooDerivedFlowProvider(OptionsFlowProvider):
                     "ask": getattr(c, "ask", None),
                     "contracts": max(vol // 10, 1),
                     "volume": vol,
+                    # Keep real 0 — do not coerce to 1 (that falsely looks like tiny OI)
                     "open_interest": oi,
                     "implied_volatility": getattr(c, "implied_volatility", None),
                     "delta": getattr(c, "delta", None),
@@ -107,6 +112,7 @@ class YahooDerivedFlowProvider(OptionsFlowProvider):
                     "raw_metadata": {
                         "derived_from": "yahoo_option_chain",
                         "note": "Delayed chain unusualness — not live options tape / dark pool.",
+                        "open_interest_unknown": oi == 0,
                     },
                 }
                 if hasattr(raw["expiration"], "isoformat"):

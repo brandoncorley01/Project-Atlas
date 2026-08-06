@@ -15,6 +15,32 @@ def is_budget_contract(candidate: CandidateOpportunity) -> bool:
     return contract_cost(candidate) <= MAX_CONTRACT_COST
 
 
+def open_interest_ok(
+    open_interest: int | None,
+    volume: int | None,
+    *,
+    min_oi: int = MIN_OPEN_INTEREST,
+    min_volume: int = MIN_VOLUME,
+    strict: bool = False,
+) -> bool:
+    """
+    Liquidity gate for open interest.
+
+    Yahoo Finance frequently returns openInterest=0 even on liquid names.
+    Treat OI=0/None as unknown and accept a volume proxy instead of hard-failing
+    the entire options deep scan.
+    """
+    oi = 0 if open_interest is None else int(open_interest)
+    vol = 0 if volume is None else int(volume)
+    if oi >= min_oi:
+        return True
+    if oi == 0:
+        # Stronger volume required when OI is missing from the feed
+        floor = max(min_volume, 200 if strict else 50)
+        return vol >= floor
+    return False
+
+
 def filter_candidates(
     candidates: list[CandidateOpportunity],
     *,
@@ -31,7 +57,13 @@ def filter_candidates(
     for candidate in candidates:
         if candidate.premium is not None and candidate.premium > max_premium:
             continue
-        if candidate.open_interest < min_oi:
+        if not open_interest_ok(
+            candidate.open_interest,
+            candidate.volume,
+            min_oi=min_oi,
+            min_volume=min_vol,
+            strict=strict,
+        ):
             continue
         if candidate.volume < min_vol:
             continue
