@@ -103,22 +103,48 @@ def select_signals_to_save(
     return to_save
 
 
-async def _yahoo_last_price(symbol: str) -> float:
-    def _fetch() -> float:
+async def _yahoo_quote(symbol: str) -> dict[str, float]:
+    """Price + session change from Yahoo (sync via thread)."""
+
+    def _fetch() -> dict[str, float]:
         try:
             import yfinance as yf
         except Exception:
-            return 0.0
-        ticker = yf.Ticker(symbol.upper())
-        price = getattr(ticker, "fast_info", {}).get("lastPrice")  # type: ignore[attr-defined]
-        if price:
-            return float(price)
-        hist = ticker.history(period="1d")
-        if not hist.empty:
-            return float(hist["Close"].iloc[-1])
-        return 0.0
+            return {}
+        try:
+            ticker = yf.Ticker(symbol.upper())
+            fast = getattr(ticker, "fast_info", None)
+            price = 0.0
+            prev = 0.0
+            if fast is not None:
+                if hasattr(fast, "get"):
+                    price = float(fast.get("lastPrice") or fast.get("last_price") or 0)
+                    prev = float(fast.get("previousClose") or fast.get("previous_close") or 0)
+                else:
+                    price = float(getattr(fast, "last_price", 0) or getattr(fast, "lastPrice", 0) or 0)
+                    prev = float(
+                        getattr(fast, "previous_close", 0) or getattr(fast, "previousClose", 0) or 0
+                    )
+            if price <= 0:
+                hist = ticker.history(period="5d", interval="1d")
+                if hist is not None and not hist.empty:
+                    price = float(hist["Close"].iloc[-1])
+                    if len(hist) > 1:
+                        prev = float(hist["Close"].iloc[-2])
+            if price <= 0:
+                return {}
+            change = price - prev if prev > 0 else 0.0
+            change_pct = (change / prev) * 100 if prev > 0 else 0.0
+            return {"price": round(price, 2), "change": round(change, 2), "change_pct": round(change_pct, 2)}
+        except Exception:
+            return {}
 
     return await asyncio.to_thread(_fetch)
+
+
+async def _yahoo_last_price(symbol: str) -> float:
+    q = await _yahoo_quote(symbol)
+    return float(q.get("price") or 0)
 
 
 class OptionsRefreshService:
@@ -200,18 +226,38 @@ class OptionsRefreshService:
             except FinnhubError as exc:
                 errors.append(f"{symbol}: {exc}")
 
-        if float(stock_context.get("price") or 0) <= 0:
+        if float(stock_context.get("price") or 0) <= 0 or stock_context.get("day_change_pct") is None:
             try:
-                stock_context["price"] = await _yahoo_last_price(symbol)
+                yq = await _yahoo_quote(symbol)
+                if yq.get("price") and float(stock_context.get("price") or 0) <= 0:
+                    stock_context["price"] = yq["price"]
+                if stock_context.get("day_change_pct") is None and yq.get("change_pct") is not None:
+                    stock_context["day_change_pct"] = yq["change_pct"]
             except Exception as exc:
                 errors.append(f"{symbol} price: {exc}")
-                return [], {"errors": errors}
+                if float(stock_context.get("price") or 0) <= 0:
+                    return [], {"errors": errors}
 
-        if discovery and discovery.change_pct is not None:
-            if discovery.change_pct <= -1.5 and "day_losers" in discovery.sources:
-                stock_context.setdefault("trend_bullish", False)
-            elif discovery.change_pct >= 1.5 and "day_gainers" in discovery.sources:
-                stock_context.setdefault("trend_bullish", True)
+        # Prefer quote/screener session move over a blanket bullish default.
+        # setdefault was wrong here — the initial dict already set trend_bullish=True.
+        change = stock_context.get("day_change_pct")
+        if change is None and discovery is not None:
+            change = discovery.change_pct
+        try:
+            change_f = float(change) if change is not None else None
+        except (TypeError, ValueError):
+            change_f = None
+        if change_f is not None:
+            stock_context["day_change_pct"] = change_f
+            stock_context["trend_bullish"] = change_f >= 0
+        elif discovery and "day_losers" in (discovery.sources or []):
+            stock_context["trend_bullish"] = False
+        elif discovery and "day_gainers" in (discovery.sources or []):
+            stock_context["trend_bullish"] = True
+
+        # If we still have no price from Finnhub/Yahoo, stop — empty chain.
+        if float(stock_context.get("price") or 0) <= 0:
+            return [], {"errors": errors or [f"{symbol}: no price"]}
 
         try:
             contracts = await asyncio.to_thread(fetch_options_candidates, symbol, stock_context)
