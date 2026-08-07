@@ -2,7 +2,10 @@ from app.engine.models import CandidateOpportunity, ScoredOpportunity
 
 
 def _moneyness_move_pct(candidate: CandidateOpportunity) -> float | None:
-    """Percent move needed for the option to finish ITM (None if unknown)."""
+    """Percent move needed for the option to finish ITM (None if unknown).
+
+    Positive = OTM distance. Zero = ATM or already ITM.
+    """
     stock_price = candidate.metadata.get("stock_price")
     try:
         px = float(stock_price) if stock_price is not None else 0.0
@@ -16,12 +19,49 @@ def _moneyness_move_pct(candidate: CandidateOpportunity) -> float | None:
     return max(0.0, (px - strike) / px * 100)
 
 
+def _itm_depth_pct(candidate: CandidateOpportunity) -> float | None:
+    """How far ITM the contract already is (0 if ATM/OTM)."""
+    stock_price = candidate.metadata.get("stock_price")
+    try:
+        px = float(stock_price) if stock_price is not None else 0.0
+    except (TypeError, ValueError):
+        px = 0.0
+    strike = float(candidate.strike or 0)
+    if px <= 0 or strike <= 0:
+        return None
+    if candidate.option_type == "call":
+        return max(0.0, (px - strike) / px * 100)
+    return max(0.0, (strike - px) / px * 100)
+
+
+def _was_itm_at_prior_close(candidate: CandidateOpportunity) -> bool | None:
+    """True when the strike was already ITM vs previous close (gap-and-go leftover)."""
+    prev = candidate.metadata.get("previous_close")
+    try:
+        prev_px = float(prev) if prev is not None else 0.0
+    except (TypeError, ValueError):
+        prev_px = 0.0
+    strike = float(candidate.strike or 0)
+    if prev_px <= 0 or strike <= 0:
+        return None
+    if candidate.option_type == "call":
+        return prev_px > strike
+    return prev_px < strike
+
+
+def _day_change_pct(candidate: CandidateOpportunity) -> float | None:
+    raw = candidate.metadata.get("day_change_pct")
+    try:
+        return float(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _profit_probability_score(candidate: CandidateOpportunity) -> float:
     """Estimate directional win odds for a retail swing option.
 
-    Additive buckets used to saturate near 100% for any liquid, trend-aligned
-    contract (including far OTM puts). Keep headroom below 100 and penalize
-    lottery-ticket moneyness so ranking does not collapse to one identical "best".
+    Favors developing ATM–modest-OTM setups over contracts that were already
+    ITM at the open / after the morning gap.
     """
     prob = 48.0
     # Missing delta must NOT default into the 0.30–0.50 sweet spot.
@@ -38,26 +78,59 @@ def _profit_probability_score(candidate: CandidateOpportunity) -> float:
     # Sweet-spot delta: enough exposure without lottery-ticket odds.
     if delta is None:
         prob -= 4
-    elif 0.30 <= delta <= 0.50:
-        prob += 12
+    elif 0.30 <= delta <= 0.45:
+        # Prefer true developing deltas over deep ITM "sure things".
+        prob += 14
+    elif 0.45 < delta <= 0.55:
+        prob += 6
     elif 0.22 <= delta < 0.30:
         prob += 4
     elif delta > 0.60:
-        prob -= 6
+        prob -= 10
     elif delta < 0.18:
         prob -= 8
 
-    # OTM distance — far OTM "cheap" contracts are not ~97% winners.
+    # OTM distance — far OTM lottery tickets are not ~97% winners.
     move = _moneyness_move_pct(candidate)
-    if move is not None:
-        if move >= 10:
+    itm = _itm_depth_pct(candidate)
+    if itm is not None and itm > 0:
+        # Already ITM = less of a setup, more of a chase.
+        if itm >= 5:
+            prob -= 16
+        elif itm >= 2:
+            prob -= 10
+        else:
+            prob -= 5
+    elif move is not None:
+        # Developing band: still needs a real move, but not a lottery ticket.
+        if 0.5 <= move <= 4.0:
+            prob += 8
+        elif 4.0 < move <= 6.0:
+            prob += 3
+        elif move >= 10:
             prob -= 16
         elif move >= 7:
             prob -= 10
-        elif move >= 4:
-            prob -= 6
         elif move >= 2:
-            prob -= 2
+            # Slight OTM outside the sweet developing band — mild penalty only.
+            if move > 6:
+                prob -= 2
+
+    # Chase filter: big session move + already ITM (or ITM vs prior close).
+    day_chg = _day_change_pct(candidate)
+    aligned_chase = False
+    if day_chg is not None:
+        if candidate.option_type == "call" and day_chg >= 3.0:
+            aligned_chase = True
+        elif candidate.option_type == "put" and day_chg <= -3.0:
+            aligned_chase = True
+    if aligned_chase:
+        was_itm = _was_itm_at_prior_close(candidate)
+        if (itm is not None and itm > 0.5) or was_itm is True:
+            prob -= 12
+        elif abs(day_chg or 0) >= 6.0 and (move is None or move < 1.0):
+            # Huge gap/run and still ATM — late entry risk.
+            prob -= 6
 
     # Liquidity improves real fills and exit quality.
     if candidate.bid_ask_spread_pct <= 2.5:
@@ -91,13 +164,14 @@ def _profit_probability_score(candidate: CandidateOpportunity) -> float:
     rsi = candidate.metadata.get("rsi")
     if rsi is not None:
         if candidate.option_type == "call" and 42 <= rsi <= 62:
-            prob += 5
+            # Room to run — not already overbought after the open spike.
+            prob += 6
         elif candidate.option_type == "put" and 38 <= rsi <= 58:
-            prob += 5
+            prob += 6
         elif candidate.option_type == "call" and rsi > 72:
-            prob -= 6
+            prob -= 8
         elif candidate.option_type == "put" and rsi < 28:
-            prob -= 6
+            prob -= 8
 
     rvol = candidate.relative_volume
     if rvol >= 1.4:
@@ -116,6 +190,20 @@ def score_candidate(candidate: CandidateOpportunity) -> ScoredOpportunity:
         technical += 25
     technical += min(25, candidate.relative_volume * 8)
 
+    # Entry quality: developing setups beat already-ITM opens.
+    move = _moneyness_move_pct(candidate)
+    itm = _itm_depth_pct(candidate)
+    entry_quality = 0.0
+    if itm is not None and itm > 1.0:
+        entry_quality -= min(18.0, itm * 2.5)
+    elif move is not None and 0.5 <= move <= 5.0:
+        entry_quality += 12.0
+    elif move is not None and move < 0.5:
+        entry_quality += 4.0
+    day_chg = _day_change_pct(candidate)
+    if day_chg is not None and abs(day_chg) >= 5.0 and (itm or 0) > 0:
+        entry_quality -= 8.0
+
     catalyst = 20 if candidate.has_catalyst else 0
     impact = float(candidate.metadata.get("catalyst_impact") or 0)
     if impact >= 50:
@@ -128,7 +216,7 @@ def score_candidate(candidate: CandidateOpportunity) -> ScoredOpportunity:
     if candidate.open_interest >= 2000:
         data_quality += 5
 
-    confidence = min(100.0, technical + catalyst + data_quality)
+    confidence = min(100.0, technical + catalyst + data_quality + entry_quality)
 
     spread_risk = min(40, candidate.bid_ask_spread_pct * 4)
     time_risk = 25 if candidate.days_to_expiration <= 3 else (10 if candidate.days_to_expiration <= 7 else 0)
@@ -144,6 +232,7 @@ def score_candidate(candidate: CandidateOpportunity) -> ScoredOpportunity:
         "technical": round(technical, 2),
         "catalyst": catalyst,
         "data_quality": data_quality,
+        "entry_quality": round(entry_quality, 2),
         "spread_risk": round(spread_risk, 2),
         "time_risk": time_risk,
         "vol_risk": vol_risk,
@@ -161,6 +250,10 @@ def score_candidate(candidate: CandidateOpportunity) -> ScoredOpportunity:
             "discovery_sources": candidate.metadata.get("discovery_sources", []),
             "catalyst_impact": candidate.metadata.get("catalyst_impact"),
             "catalyst_sentiment": candidate.metadata.get("catalyst_sentiment"),
+            "day_change_pct": candidate.metadata.get("day_change_pct"),
+            "itm_depth_pct": itm,
+            "otm_move_pct": move,
+            "was_itm_at_prior_close": _was_itm_at_prior_close(candidate),
         },
     }
 
@@ -177,12 +270,13 @@ def rank_scored(scored: list[ScoredOpportunity]) -> list[ScoredOpportunity]:
     """Rank by profit probability, with under-$100 contracts as a soft tie-break."""
     from app.agents.scout import is_budget_contract
 
-    def sort_key(item: ScoredOpportunity) -> tuple[float, float, float, float, float]:
+    def sort_key(item: ScoredOpportunity) -> tuple[float, float, float, float, float, float]:
         snap = item.scoring_snapshot or {}
         prob = float(snap.get("profit_probability") or 0)
         budget = 1.0 if is_budget_contract(item.candidate) else 0.0
+        entry_q = float(snap.get("entry_quality") or 0)
         # Prefer tighter spreads when probs tie so ranking does not look frozen.
         spread = float(item.candidate.bid_ask_spread_pct or 100)
-        return (prob, budget, item.opportunity_score, item.confidence_score, -spread)
+        return (prob, entry_q, budget, item.opportunity_score, item.confidence_score, -spread)
 
     return sorted(scored, key=sort_key, reverse=True)

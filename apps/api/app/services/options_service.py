@@ -135,7 +135,14 @@ async def _yahoo_quote(symbol: str) -> dict[str, float]:
                 return {}
             change = price - prev if prev > 0 else 0.0
             change_pct = (change / prev) * 100 if prev > 0 else 0.0
-            return {"price": round(price, 2), "change": round(change, 2), "change_pct": round(change_pct, 2)}
+            out: dict[str, float] = {
+                "price": round(price, 2),
+                "change": round(change, 2),
+                "change_pct": round(change_pct, 2),
+            }
+            if prev > 0:
+                out["previous_close"] = round(prev, 2)
+            return out
         except Exception:
             return {}
 
@@ -226,13 +233,20 @@ class OptionsRefreshService:
             except FinnhubError as exc:
                 errors.append(f"{symbol}: {exc}")
 
-        if float(stock_context.get("price") or 0) <= 0 or stock_context.get("day_change_pct") is None:
+        need_yahoo = (
+            float(stock_context.get("price") or 0) <= 0
+            or stock_context.get("day_change_pct") is None
+            or not stock_context.get("previous_close")
+        )
+        if need_yahoo:
             try:
                 yq = await _yahoo_quote(symbol)
                 if yq.get("price") and float(stock_context.get("price") or 0) <= 0:
                     stock_context["price"] = yq["price"]
                 if stock_context.get("day_change_pct") is None and yq.get("change_pct") is not None:
                     stock_context["day_change_pct"] = yq["change_pct"]
+                if yq.get("previous_close") and not stock_context.get("previous_close"):
+                    stock_context["previous_close"] = yq["previous_close"]
             except Exception as exc:
                 errors.append(f"{symbol} price: {exc}")
                 if float(stock_context.get("price") or 0) <= 0:

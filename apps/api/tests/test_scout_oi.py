@@ -47,6 +47,24 @@ def test_scout_keeps_zero_oi_high_volume_live_candidates():
     assert "LOWOI" not in symbols
 
 
+def test_scout_rejects_deep_itm_contracts():
+    """Already deep ITM at scan time is not a developing day/week setup."""
+    developing = _cand(
+        symbol="DEV",
+        strike=212.0,
+        metadata={"stock_price": 210.0},  # ~1% OTM call
+    )
+    deep_itm = _cand(
+        symbol="ITM",
+        strike=195.0,
+        metadata={"stock_price": 210.0},  # ~7% ITM
+    )
+    passed = filter_candidates([developing, deep_itm], strict=False)
+    symbols = {c.symbol for c in passed}
+    assert "DEV" in symbols
+    assert "ITM" not in symbols
+
+
 def test_options_pipeline_produces_signals_from_yahoo_zero_oi():
     cands = [
         _cand(symbol="AAPL", open_interest=0, volume=12500, has_catalyst=True, trend_bullish=True),

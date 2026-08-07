@@ -10,7 +10,10 @@ from app.providers.options.greeks import estimate_delta
 
 MIN_DTE = 3
 MAX_DTE = 28
-STRIKE_RANGE_PCT = 0.15
+# Wider OTM reach for developing setups; deep ITM is filtered separately.
+STRIKE_RANGE_OTM_PCT = 0.10
+# Allow only tiny ITM (noise / rounding) — not already-winning opens.
+STRIKE_RANGE_ITM_PCT = 0.015
 MAX_CANDIDATES_PER_SYMBOL = 24
 
 
@@ -29,6 +32,46 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 
 def _safe_int(value: Any, default: int = 0) -> int:
     return int(_safe_float(value, float(default)))
+
+
+def _strike_in_developing_band(
+    option_type: str,
+    strike: float,
+    spot: float,
+    *,
+    otm_pct: float = STRIKE_RANGE_OTM_PCT,
+    itm_pct: float = STRIKE_RANGE_ITM_PCT,
+) -> bool:
+    """Prefer ATM → modest OTM; reject deep ITM that already won the move."""
+    if spot <= 0 or strike <= 0:
+        return False
+    if option_type == "call":
+        # Calls: strike above spot (OTM) up to otm_pct, or barely below (tiny ITM).
+        return spot * (1 - itm_pct) <= strike <= spot * (1 + otm_pct)
+    # Puts: strike below spot (OTM) down to otm_pct, or barely above (tiny ITM).
+    return spot * (1 - otm_pct) <= strike <= spot * (1 + itm_pct)
+
+
+def _setup_priority(candidate: CandidateOpportunity) -> tuple[int, int, int]:
+    """Rank pool toward developing ATM–OTM before liquidity sort."""
+    stock_price = float((candidate.metadata or {}).get("stock_price") or 0)
+    strike = float(candidate.strike or 0)
+    if stock_price <= 0 or strike <= 0:
+        return (0, int(candidate.open_interest or 0), int(candidate.volume or 0))
+    if candidate.option_type == "call":
+        otm = (strike - stock_price) / stock_price * 100
+    else:
+        otm = (stock_price - strike) / stock_price * 100
+    # Sweet developing band: 0.5–5% OTM
+    if 0.5 <= otm <= 5.0:
+        band = 3
+    elif 0 <= otm < 0.5 or 5.0 < otm <= 8.0:
+        band = 2
+    elif -1.5 <= otm < 0:
+        band = 1
+    else:
+        band = 0
+    return (band, int(candidate.open_interest or 0), int(candidate.volume or 0))
 
 
 def _row_to_candidate(
@@ -79,6 +122,7 @@ def _row_to_candidate(
         metadata={
             "source": "yahoo_finance",
             "stock_price": stock_context.get("price"),
+            "previous_close": stock_context.get("previous_close"),
             "rsi": stock_context.get("rsi"),
             "news_count": stock_context.get("news_count"),
             "top_headline": stock_context.get("top_headline"),
@@ -112,7 +156,11 @@ def fetch_options_candidates(
     max_dte: int = MAX_DTE,
     max_expirations: int = 3,
 ) -> list[CandidateOpportunity]:
-    """Fetch liquid near-the-money contracts via Yahoo Finance (free, no API key)."""
+    """Fetch liquid ATM–modest-OTM contracts via Yahoo Finance (free, no API key).
+
+    Strike window is asymmetric: hunt setups that still need the move to finish,
+    not contracts that were already ITM after the open gap.
+    """
     stock_price = float(stock_context.get("price") or 0)
     if stock_price <= 0:
         return []
@@ -155,15 +203,18 @@ def fetch_options_candidates(
             if frame is None or frame.empty:
                 continue
 
-            near_money = frame[
-                (frame["strike"] >= stock_price * (1 - STRIKE_RANGE_PCT))
-                & (frame["strike"] <= stock_price * (1 + STRIKE_RANGE_PCT))
-            ]
+            # Rough pre-filter then apply developing-band check per row.
+            lo = stock_price * (1 - max(STRIKE_RANGE_OTM_PCT, STRIKE_RANGE_ITM_PCT))
+            hi = stock_price * (1 + max(STRIKE_RANGE_OTM_PCT, STRIKE_RANGE_ITM_PCT))
+            near_money = frame[(frame["strike"] >= lo) & (frame["strike"] <= hi)]
 
             for _, row in near_money.iterrows():
+                strike = _safe_float(row.get("strike"))
+                if not _strike_in_developing_band(option_type, strike, stock_price):
+                    continue
                 candidate = _row_to_candidate(symbol, option_type, row, expiration, stock_context)
                 if candidate and _candidate_liquid_enough(candidate):
                     pool.append(candidate)
 
-    pool.sort(key=lambda c: (int(c.open_interest or 0), int(c.volume or 0)), reverse=True)
+    pool.sort(key=_setup_priority, reverse=True)
     return pool[:MAX_CANDIDATES_PER_SYMBOL]

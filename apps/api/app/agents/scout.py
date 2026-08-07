@@ -5,6 +5,8 @@ MIN_VOLUME = 20
 MAX_SPREAD_PCT = 10.0
 MAX_PREMIUM = 10.0
 MAX_CONTRACT_COST = 100.0  # Total cost per contract (premium × 100 shares)
+# Reject deep ITM leftovers from the open gap — hunt developing setups.
+MAX_ITM_DEPTH_PCT = 2.0
 
 
 def contract_cost(candidate: CandidateOpportunity) -> float:
@@ -13,6 +15,20 @@ def contract_cost(candidate: CandidateOpportunity) -> float:
 
 def is_budget_contract(candidate: CandidateOpportunity) -> bool:
     return contract_cost(candidate) <= MAX_CONTRACT_COST
+
+
+def _itm_depth_pct(candidate: CandidateOpportunity) -> float | None:
+    stock_price = (candidate.metadata or {}).get("stock_price")
+    try:
+        px = float(stock_price) if stock_price is not None else 0.0
+    except (TypeError, ValueError):
+        px = 0.0
+    strike = float(candidate.strike or 0)
+    if px <= 0 or strike <= 0:
+        return None
+    if candidate.option_type == "call":
+        return max(0.0, (px - strike) / px * 100)
+    return max(0.0, (strike - px) / px * 100)
 
 
 def open_interest_ok(
@@ -51,6 +67,7 @@ def filter_candidates(
     min_vol = 50 if strict else MIN_VOLUME
     max_spread = 8.0 if strict else MAX_SPREAD_PCT
     max_premium = MAX_PREMIUM
+    max_itm = 1.0 if strict else MAX_ITM_DEPTH_PCT
 
     passed: list[CandidateOpportunity] = []
 
@@ -70,6 +87,10 @@ def filter_candidates(
         if candidate.bid_ask_spread_pct > max_spread:
             continue
         if candidate.days_to_expiration < 1:
+            continue
+        itm = _itm_depth_pct(candidate)
+        if itm is not None and itm > max_itm:
+            # Already deep ITM at scan time — not a developing day/week setup.
             continue
         passed.append(candidate)
 
