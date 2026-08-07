@@ -141,8 +141,9 @@ async def coach_aggregate(
 async def resolve_outcomes(
     user_id: str = Depends(get_current_user_id),
     token: str = Depends(get_access_token),
-    limit: int = 25,
+    limit: int = 150,
     module: str | None = None,
+    passes: int = 4,
 ) -> dict:
     """Auto-grade finished sports, stock, options, and parlay picks for Atlas learning."""
     if module is not None and module not in ("sports", "stock", "options", "parlay"):
@@ -150,7 +151,11 @@ async def resolve_outcomes(
             status_code=400,
             detail="module must be one of: sports, stock, options, parlay",
         )
-    result = await run_resolve_outcomes_job(user_id, token, limit=limit, module=module)
+    passes = max(1, min(int(passes or 1), 12))
+    limit = max(20, min(int(limit or 150), 400))
+    result = await run_resolve_outcomes_job(
+        user_id, token, limit=limit, module=module, passes=passes
+    )
     set_last_job("resolve_outcomes")
     return result
 

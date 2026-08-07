@@ -26,11 +26,64 @@ from app.services.stock_options_grading import (
 
 logger = logging.getLogger(__name__)
 
+GRADEABLE_SPORTS_BET_TYPES = frozenset({"moneyline", "spread", "total", "ml", "h2h"})
+# Props and exotic markets cannot be auto-scored from final team scores alone.
+UNGRADEABLE_SPORTS_BET_TYPES = frozenset(
+    {
+        "player_prop",
+        "prop",
+        "futures",
+        "outright",
+        "fight_prop",
+        "period",
+        "quarter",
+        "half",
+    }
+)
+
 
 async def _yahoo_spot(symbol: str) -> float:
     from app.services.options_service import _yahoo_last_price
 
     return await _yahoo_last_price(symbol)
+
+
+def _hours_since(iso_value: Any) -> float | None:
+    if not iso_value:
+        return None
+    try:
+        text = str(iso_value).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return (datetime.now(UTC) - dt.astimezone(UTC)).total_seconds() / 3600
+    except (TypeError, ValueError):
+        return None
+
+
+def sports_bet_type(signal: dict[str, Any]) -> str:
+    snap = signal.get("scoring_snapshot") if isinstance(signal.get("scoring_snapshot"), dict) else {}
+    pick = snap.get("pick") if isinstance(snap.get("pick"), dict) else {}
+    raw = str(
+        signal.get("bet_type")
+        or snap.get("bet_type")
+        or pick.get("bet_type")
+        or ""
+    ).lower().strip()
+    if raw in {"ml", "h2h"}:
+        return "moneyline"
+    return raw
+
+
+def is_auto_gradeable_sports(signal: dict[str, Any]) -> bool:
+    bet = sports_bet_type(signal)
+    if bet in UNGRADEABLE_SPORTS_BET_TYPES:
+        return False
+    if bet in GRADEABLE_SPORTS_BET_TYPES:
+        return True
+    # Unknown but looks like a side/total line — still try.
+    snap = signal.get("scoring_snapshot") if isinstance(signal.get("scoring_snapshot"), dict) else {}
+    return bool(snap.get("sport_key") or signal.get("selection") or snap.get("selection"))
 
 
 def signal_from_performance_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -73,6 +126,8 @@ def signal_from_performance_row(row: dict[str, Any]) -> dict[str, Any]:
             sig[key] = snap[key]
     if not sig.get("ticker") and snap.get("symbol"):
         sig["ticker"] = snap["symbol"]
+    if not sig.get("event_start") and snap.get("event_start"):
+        sig["event_start"] = snap["event_start"]
     return sig
 
 
@@ -82,35 +137,80 @@ class OutcomeResolverService:
         self.user_id = user_id
         self.performance = PerformanceService(db, user_id)
 
-    async def resolve_pending(self, *, limit: int = 40, module: str | None = None) -> dict[str, Any]:
-        """Grade expired signals that have no logged outcome yet."""
+    async def resolve_pending(
+        self,
+        *,
+        limit: int = 120,
+        module: str | None = None,
+        passes: int = 1,
+    ) -> dict[str, Any]:
+        """Grade expired signals that have no logged outcome yet.
+
+        ``passes`` > 1 walks the backlog in chunks so ungradable props cannot
+        permanently block moneyline/spread/total grading (954+ open piles).
+        """
+        passes = max(1, min(int(passes or 1), 12))
+        limit = max(20, min(int(limit or 120), 400))
+
+        totals = {
+            "resolved": 0,
+            "skipped": 0,
+            "pending": 0,
+            "scratched_stale": 0,
+            "module": module,
+            "passes": 0,
+            "by_module": {},
+        }
+
+        for pass_i in range(passes):
+            pass_result = await self._resolve_pending_once(limit=limit, module=module)
+            totals["passes"] = pass_i + 1
+            totals["resolved"] += pass_result["resolved"]
+            totals["skipped"] += pass_result["skipped"]
+            totals["pending"] = pass_result["pending"]
+            totals["scratched_stale"] += pass_result["scratched_stale"]
+            for mod, stats in (pass_result.get("by_module") or {}).items():
+                bucket = totals["by_module"].setdefault(
+                    mod, {"resolved": 0, "skipped": 0, "pending": 0, "scratched_stale": 0}
+                )
+                for key in ("resolved", "skipped", "scratched_stale"):
+                    bucket[key] += int(stats.get(key) or 0)
+                bucket["pending"] = int(stats.get("pending") or 0)
+
+            progressed = int(pass_result["resolved"]) + int(pass_result["scratched_stale"])
+            if progressed == 0:
+                break
+
+        return totals
+
+    async def _resolve_pending_once(self, *, limit: int, module: str | None) -> dict[str, Any]:
         empty = {"resolved": 0, "skipped": 0, "pending": 0, "scratched_stale": 0}
         by_module: dict[str, dict[str, Any]] = {}
 
         if module in (None, "sports"):
             sports = await self._resolve_sports(limit=limit if module == "sports" else limit)
-            stale = await self._prune_stale_sports_pending(limit=max(60, limit))
+            stale = await self._prune_stale_sports_pending(limit=max(200, limit * 2))
             sports = {**sports, "scratched_stale": stale}
             by_module["sports"] = sports
         else:
             sports = empty
 
         if module in (None, "stock"):
-            stock_limit = limit if module == "stock" else limit // 2
+            stock_limit = limit if module == "stock" else max(40, limit // 2)
             stocks = await self._resolve_stocks(limit=stock_limit)
             by_module["stock"] = stocks
         else:
             stocks = empty
 
         if module in (None, "options"):
-            options_limit = limit if module == "options" else limit // 2
+            options_limit = limit if module == "options" else max(40, limit // 2)
             options = await self._resolve_options(limit=options_limit)
             by_module["options"] = options
         else:
             options = empty
 
         if module in (None, "parlay"):
-            parlay_limit = limit if module == "parlay" else max(8, limit // 3)
+            parlay_limit = limit if module == "parlay" else max(12, limit // 3)
             parlays = await self._resolve_parlays(limit=parlay_limit)
             by_module["parlay"] = parlays
         else:
@@ -124,17 +224,18 @@ class OutcomeResolverService:
         return {
             "resolved": resolved,
             "skipped": skipped,
-            "pending": max(0, pending - scratched),
+            "pending": max(0, pending),
             "scratched_stale": scratched,
             "module": module,
             "by_module": by_module,
         }
 
-    async def _prune_stale_sports_pending(self, *, limit: int = 80) -> int:
-        """Clear open Atlas/user sports pending after the event is long over and ungradable.
+    async def _prune_stale_sports_pending(self, *, limit: int = 200) -> int:
+        """Clear open sports pending after the event is long over and ungradable.
 
-        Keeps the Performance 'open' count shrinking as games expire — scratches do not
-        count as wins/losses for learning win-rate.
+        Important: fetch a large window and scratch every eligible row in it.
+        Previously the oldest ungradable props consumed the limit and blocked
+        finished moneylines from ever leaving "open".
         """
         rows = await self.db.select(
             "signal_performance",
@@ -144,17 +245,25 @@ class OutcomeResolverService:
                 "outcome": "eq.pending",
             },
             order="logged_at.asc",
-            limit=limit,
+            limit=max(limit, 250),
         )
         if not rows:
             return 0
 
-        now = datetime.now(UTC)
-        # After kickoff + this many hours with no gradeable final → scratch out of "open".
-        stale_after_h = 36.0
         scratched = 0
+        # Prefer clearing known-finished / ungradable markets first.
+        ranked = sorted(
+            rows,
+            key=lambda r: (
+                0 if _hours_since((r.get("scoring_snapshot") or {}).get("event_start")) is not None else 1,
+                0 if not is_auto_gradeable_sports(signal_from_performance_row(r)) else 1,
+                str(r.get("logged_at") or ""),
+            ),
+        )
 
-        for row in rows:
+        for row in ranked:
+            if scratched >= limit:
+                break
             sid = str(row.get("signal_id") or "")
             if not sid:
                 continue
@@ -176,40 +285,33 @@ class OutcomeResolverService:
             except Exception as exc:
                 logger.debug("Stale prune signal lookup %s: %s", sid[:8], exc)
 
-            hours_past: float | None = None
-            if event_start:
-                try:
-                    text = str(event_start).replace("Z", "+00:00")
-                    start = datetime.fromisoformat(text)
-                    if start.tzinfo is None:
-                        start = start.replace(tzinfo=UTC)
-                    hours_past = (now - start.astimezone(UTC)).total_seconds() / 3600
-                except (TypeError, ValueError):
-                    hours_past = None
+            hours_past = _hours_since(event_start)
+            age_h = _hours_since(row.get("logged_at"))
+            bet = sports_bet_type(signal_from_performance_row(row))
+            ungradable = bet in UNGRADEABLE_SPORTS_BET_TYPES or (
+                bool(snap.get("is_player_prop") or snap.get("is_futures") or snap.get("is_fight_prop"))
+            )
 
-            # Undated Insight leftovers: if signal already expired/closed, clear after 3 days on books.
-            if hours_past is None:
-                logged = str(row.get("logged_at") or "")
-                age_h = None
-                if logged:
-                    try:
-                        text = logged.replace("Z", "+00:00")
-                        logged_dt = datetime.fromisoformat(text)
-                        if logged_dt.tzinfo is None:
-                            logged_dt = logged_dt.replace(tzinfo=UTC)
-                        age_h = (now - logged_dt.astimezone(UTC)).total_seconds() / 3600
-                    except (TypeError, ValueError):
-                        age_h = None
-                if status in {"expired", "closed"} and age_h is not None and age_h >= 72:
-                    hours_past = age_h
-                elif age_h is not None and age_h >= 96 and not event_start:
-                    # Snapshot-only undated props that never got a final — clear from open.
-                    hours_past = age_h
-                else:
+            # Props / futures: leave open briefly, then scratch — they cannot auto-score.
+            if ungradable:
+                prop_stale_h = 12.0 if hours_past is not None else 48.0
+                marker = hours_past if hours_past is not None else age_h
+                if marker is None or marker < prop_stale_h:
                     continue
-
-            if hours_past is None or hours_past < stale_after_h:
-                continue
+                hours_past = marker
+            else:
+                # Gradeable markets: wait for finals; if still open long after tip-off, scratch.
+                stale_after_h = 18.0
+                if hours_past is None:
+                    if status in {"expired", "closed"} and age_h is not None and age_h >= 48:
+                        hours_past = age_h
+                    elif age_h is not None and age_h >= 72:
+                        # Snapshot-only leftovers with no event_start — clear open pile.
+                        hours_past = age_h
+                    else:
+                        continue
+                if hours_past < stale_after_h:
+                    continue
 
             try:
                 await self.performance.log_outcome(
@@ -221,8 +323,9 @@ class OutcomeResolverService:
                     signal_snapshot={
                         **snap,
                         "stale_cleared": True,
-                        "stale_hours_past": round(hours_past, 1),
+                        "stale_hours_past": round(float(hours_past), 1),
                         "graded_by": "auto_sports_stale",
+                        "ungradeable_market": ungradable,
                     },
                 )
                 if status in {"active", "expired"}:
@@ -276,7 +379,8 @@ class OutcomeResolverService:
 
     async def _candidate_signals(self, module: str, *, limit: int) -> list[dict[str, Any]]:
         """Prefer durable pending performance rows; enrich with live signal when present."""
-        pending = await self._pending_performance(module, limit=limit * 3)
+        # Pull a wider window so we can prioritize gradeable sports over props.
+        pending = await self._pending_performance(module, limit=max(limit * 4, 200))
         candidates: list[dict[str, Any]] = []
         seen: set[str] = set()
 
@@ -287,7 +391,6 @@ class OutcomeResolverService:
             seen.add(sid)
             live = await self._load_live_signal(module, sid)
             if live:
-                # Prefer live row but keep durable nested snapshot fields as fallback.
                 snap = row.get("scoring_snapshot") if isinstance(row.get("scoring_snapshot"), dict) else {}
                 live_snap = live.get("scoring_snapshot") if isinstance(live.get("scoring_snapshot"), dict) else {}
                 merged_snap = {**snap, **live_snap}
@@ -296,7 +399,6 @@ class OutcomeResolverService:
                 sig = signal_from_performance_row(row)
             candidates.append(sig)
 
-        # Also pick up live signals that somehow never registered (edge case).
         if len(candidates) < limit:
             table = {
                 "sports": "sports_signals",
@@ -328,13 +430,24 @@ class OutcomeResolverService:
                 except Exception as exc:
                     logger.debug("Live candidate load %s: %s", module, exc)
 
-        return candidates[: limit * 2]
+        if module == "sports":
+            # Grade moneyline/spread/total first — props previously filled the whole batch.
+            candidates.sort(
+                key=lambda s: (
+                    0 if is_auto_gradeable_sports(s) else 1,
+                    str(s.get("event_start") or ""),
+                )
+            )
+
+        return candidates[: max(limit * 2, limit)]
 
     async def _resolve_sports(self, *, limit: int) -> dict[str, Any]:
         now = datetime.now(UTC)
         raw = await self._candidate_signals("sports", limit=limit)
         candidates: list[dict[str, Any]] = []
         for sig in raw:
+            if not is_auto_gradeable_sports(sig):
+                continue
             snap = sig.get("scoring_snapshot") or {}
             event_start = sig.get("event_start") or snap.get("event_start")
             if event_start:
@@ -371,17 +484,22 @@ class OutcomeResolverService:
             if key:
                 sport_keys.add(str(key))
 
-        # Prefer fresh completed scores so grading happens as soon as the game is final.
         scores_by_sport = (
             await fetch_scores_by_sport(sport_keys, force_refresh=True) if sport_keys else {}
         )
+        # Flat list for snapshots missing sport_key — still try team/event match.
+        all_games: list[dict[str, Any]] = []
+        for g_list in scores_by_sport.values():
+            all_games.extend(g_list)
 
         resolved = 0
         skipped = 0
         for sig in candidates[:limit]:
             snap = sig.get("scoring_snapshot") or {}
             sport_key = str(snap.get("sport_key") or "")
-            games = scores_by_sport.get(sport_key) or []
+            games = list(scores_by_sport.get(sport_key) or [])
+            if not games:
+                games = all_games
             game = match_completed_game(sig, games)
             if not game:
                 skipped += 1

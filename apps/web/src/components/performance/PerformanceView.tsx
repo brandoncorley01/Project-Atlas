@@ -320,16 +320,29 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
       await runBackfill(true);
       if (cancelled) return;
 
-      // 3) Auto-grade settled sports/stocks/options/parlays (high limit)
+      // 3) Auto-grade / clear stale open Atlas backlog (multi-pass — props must not block moneylines)
       try {
         const token = await getToken();
-        await fetch(`${getApiUrl()}/engine/resolve-outcomes?limit=80`, {
-          method: "POST",
-          headers: apiRequestHeaders(token),
-          credentials: usesBffProxy() ? "include" : "same-origin",
-        });
+        const res = await fetch(
+          `${getApiUrl()}/engine/resolve-outcomes?limit=200&passes=6`,
+          {
+            method: "POST",
+            headers: apiRequestHeaders(token),
+            credentials: usesBffProxy() ? "include" : "same-origin",
+          },
+        );
+        if (res.ok) {
+          const body = await res.json().catch(() => ({}));
+          const resolved = Number(body.resolved ?? 0);
+          const scratched = Number(body.scratched_stale ?? 0);
+          if (resolved > 0 || scratched > 0) {
+            setMessage(
+              `Cleared open Atlas backlog: ${resolved} graded, ${scratched} stale scratched`,
+            );
+          }
+        }
       } catch {
-        /* non-fatal */
+        /* non-fatal — user can tap Auto-grade */
       }
       if (cancelled) return;
 
@@ -400,30 +413,37 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
     setMessage(null);
     const token = await getToken();
     try {
-      const res = await fetch(`${getApiUrl()}/engine/resolve-outcomes?limit=80`, {
-        method: "POST",
-        headers: apiRequestHeaders(token),
-        credentials: usesBffProxy() ? "include" : "same-origin",
-      });
+      const res = await fetch(
+        `${getApiUrl()}/engine/resolve-outcomes?limit=200&passes=6`,
+        {
+          method: "POST",
+          headers: apiRequestHeaders(token),
+          credentials: usesBffProxy() ? "include" : "same-origin",
+        },
+      );
       const body = await res.json().catch(() => ({}));
       if (res.ok) {
-        const resolved = body.resolved ?? 0;
-        setMessage(
-          resolved > 0 || (body.scratched_stale ?? 0) > 0
-            ? `Auto-graded ${resolved} settled pick(s)`
-              + ((body.scratched_stale ?? 0) > 0
-                ? `; cleared ${body.scratched_stale} stale open pick(s)`
-                : "")
-              + " across all sectors"
-            : "No new grades ready — games/expirations still open",
-        );
+        const resolved = Number(body.resolved ?? 0);
+        const scratched = Number(body.scratched_stale ?? 0);
+        const passes = Number(body.passes ?? 1);
+        if (resolved > 0 || scratched > 0) {
+          setMessage(
+            `Auto-graded ${resolved} settled pick(s)`
+              + (scratched > 0 ? `; cleared ${scratched} stale open pick(s)` : "")
+              + ` across ${passes} pass${passes === 1 ? "" : "es"} — open count should drop`,
+          );
+        } else {
+          setMessage(
+            "No new grades ready yet — finished games need final scores; stale props clear on the next pass",
+          );
+        }
         await refreshSummary();
         void loadCoachInsight(true);
       } else {
         setMessage(typeof body.detail === "string" ? body.detail : "Could not auto-grade");
       }
     } catch {
-      setMessage("Backend not responding");
+      setMessage("Backend not responding — redeploy Render API if this persists");
     }
     setGradingSector(null);
   }
@@ -434,7 +454,11 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
     const token = await getToken();
     const sector = SECTORS.find((s) => s.id === sectorId);
     try {
-      const params = new URLSearchParams({ module: sectorId, limit: "80" });
+      const params = new URLSearchParams({
+        module: sectorId,
+        limit: "200",
+        passes: "6",
+      });
       const res = await fetch(`${getApiUrl()}/engine/resolve-outcomes?${params}`, {
         method: "POST",
         headers: apiRequestHeaders(token),
@@ -442,17 +466,21 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
       });
       const body = await res.json().catch(() => ({}));
       if (res.ok) {
-        const resolved = body.resolved ?? 0;
-        const skipped = body.skipped ?? 0;
-        const modResult = body.by_module?.[sectorId] as { resolved?: number; pending?: number } | undefined;
+        const resolved = Number(body.resolved ?? 0);
+        const scratched = Number(body.scratched_stale ?? 0);
+        const skipped = Number(body.skipped ?? 0);
+        const modResult = body.by_module?.[sectorId] as
+          | { resolved?: number; pending?: number; scratched_stale?: number }
+          | undefined;
         let msg =
-          resolved > 0
+          resolved > 0 || scratched > 0
             ? `Auto-graded ${resolved} ${sector?.label.toLowerCase() ?? sectorId} pick(s)`
+              + (scratched > 0 ? `; cleared ${scratched} stale open` : "")
             : skipped > 0
               ? `No new grades — ${skipped} ${sector?.label.toLowerCase() ?? sectorId} pick(s) still awaiting final data`
               : `No ${sector?.label.toLowerCase() ?? sectorId} picks ready to grade yet`;
-        if (modResult && resolved === 0 && (modResult.pending ?? 0) > 0) {
-          msg += ` (${modResult.pending} pending in this sector)`;
+        if (modResult && resolved === 0 && scratched === 0 && (modResult.pending ?? 0) > 0) {
+          msg += ` (${modResult.pending} still open in this sector)`;
         }
         setMessage(msg);
         await refreshSummary();
@@ -462,7 +490,7 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
         setMessage(detail);
       }
     } catch {
-      setMessage("Backend not responding");
+      setMessage("Backend not responding — redeploy Render API if this persists");
     }
     setGradingSector(null);
   }
@@ -618,7 +646,7 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
         >
           <p className="text-xs font-semibold uppercase tracking-wide text-sky-300">Atlas scan picks</p>
           <p className="mt-1 text-sm text-muted">
-            Open count shrinks as games finish and grade — lifetime history stays for learning
+            Open shrinks as games finish and grade — lifetime history stays for learning
           </p>
           <div className="mt-3 flex flex-wrap gap-4 text-sm">
             <span>
@@ -637,6 +665,12 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
               {laneStats.atlas.total} lifetime
             </span>
           </div>
+          {laneStats.atlas.pending > 50 && laneStats.atlas.graded === 0 && (
+            <p className="mt-2 text-xs text-amber-200/90">
+              Large open backlog — tap Auto-grade above (after Render redeploy) to settle finished
+              games and clear stale props.
+            </p>
+          )}
           <p className="mt-3 text-xs font-medium text-sky-300">
             {atlasExpanded
               ? "Hide Atlas picks ↑"

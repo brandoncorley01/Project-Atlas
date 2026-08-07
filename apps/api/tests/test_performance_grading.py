@@ -131,3 +131,43 @@ def test_signal_from_performance_row_rebuilds_sports():
     assert sig["bet_type"] == "moneyline"
     assert sig["selection"] == "Lakers"
     assert sig["scoring_snapshot"]["sport_key"] == "basketball_nba"
+
+
+def test_props_are_not_auto_gradeable_but_moneylines_are():
+    from app.services.outcome_resolver import is_auto_gradeable_sports
+
+    ml = {
+        "bet_type": "moneyline",
+        "selection": "Lakers",
+        "scoring_snapshot": {"sport_key": "basketball_nba", "bet_type": "moneyline"},
+    }
+    prop = {
+        "bet_type": "player_prop",
+        "selection": "LeBron over 25.5 pts",
+        "scoring_snapshot": {"sport_key": "basketball_nba", "is_player_prop": True},
+    }
+    assert is_auto_gradeable_sports(ml) is True
+    assert is_auto_gradeable_sports(prop) is False
+
+
+def test_match_completed_game_fuzzy_teams():
+    from app.services.sports_grading import match_completed_game
+
+    sig = {
+        "event_name": "Boston Celtics vs Los Angeles Lakers",
+        "scoring_snapshot": {
+            "home_team": "Los Angeles Lakers",
+            "away_team": "Boston Celtics",
+            "sport_key": "basketball_nba",
+        },
+    }
+    games = [
+        {
+            "id": "g1",
+            "completed": True,
+            "home_team": "Lakers",
+            "away_team": "Celtics",
+            "scores": [{"name": "Lakers", "score": "110"}, {"name": "Celtics", "score": "98"}],
+        }
+    ]
+    assert match_completed_game(sig, games) is not None

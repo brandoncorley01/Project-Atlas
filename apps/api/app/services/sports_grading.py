@@ -125,14 +125,24 @@ def match_completed_game(
     snap = signal.get("scoring_snapshot") or {}
     line_mv = signal.get("line_movement") or {}
     event_id = snap.get("event_id") or line_mv.get("event_id")
-    home = snap.get("home_team") or ""
-    away = snap.get("away_team") or ""
+    home = str(snap.get("home_team") or "")
+    away = str(snap.get("away_team") or "")
 
     if not home and signal.get("event_name"):
-        parts = str(signal.get("event_name")).split("@")
-        if len(parts) == 2:
-            away = parts[0].strip()
-            home = parts[1].strip()
+        name = str(signal.get("event_name"))
+        for sep in ("@", " vs ", " VS ", " v ", " - "):
+            if sep in name:
+                parts = name.split(sep, 1)
+                if len(parts) == 2:
+                    away = parts[0].strip()
+                    home = parts[1].strip()
+                    break
+
+    def _norm(value: str) -> str:
+        return " ".join(value.lower().replace(".", "").split())
+
+    home_n = _norm(home)
+    away_n = _norm(away)
 
     for game in games:
         if not game.get("completed"):
@@ -143,6 +153,13 @@ def match_completed_game(
         g_away = str(game.get("away_team") or "")
         if home and away and g_home == home and g_away == away:
             return game
+        g_home_n = _norm(g_home)
+        g_away_n = _norm(g_away)
+        if home_n and away_n and g_home_n and g_away_n:
+            home_ok = home_n in g_home_n or g_home_n in home_n
+            away_ok = away_n in g_away_n or g_away_n in away_n
+            if home_ok and away_ok:
+                return game
     return None
 
 
