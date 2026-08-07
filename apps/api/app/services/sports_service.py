@@ -283,16 +283,16 @@ class SportsRefreshService:
                 "message": fetch_stats.get("error") or "ODDS_API_KEY is not configured",
             }
 
-        if cache_only and fetch_stats.get("error") and not events:
+        # Provider returned a hard error with nothing to score (cold cache, spend lock, etc.)
+        if fetch_stats.get("error") and not events:
             return {
                 "signals_created": 0,
                 "events_scanned": 0,
                 "stats": fetch_stats,
-                "credits_used": 0,
-                "cache_used": False,
+                "credits_used": int(fetch_stats.get("credits_used") or 0),
+                "cache_used": bool(fetch_stats.get("cached")),
                 "top_opportunity": None,
-                "message": fetch_stats.get("error")
-                or "No cached odds — tap Fetch live odds first (Rescore uses 0 credits after that).",
+                "message": fetch_stats.get("error"),
             }
 
         # All keys exhausted AND no cached odds to fall back on.

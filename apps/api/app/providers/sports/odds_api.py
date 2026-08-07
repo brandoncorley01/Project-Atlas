@@ -1050,12 +1050,17 @@ async def fetch_all_sports_odds(
 
     cache = _read_cache()
     spend_locked = not config.settings.odds_live_spending_allowed()
-    # cache_only (Rescore) never spends. Spend-lock blocks automatic pulls, but
-    # explicit Fetch live odds (force_refresh) is still allowed so the board can
-    # be refreshed without unlocking global auto-spend.
-    block_live = cache_only or (spend_locked and not force_refresh)
-    if block_live:
-        if not cache or not cache.get("events"):
+    raw_cached = list(cache.get("events") or []) if cache else []
+    near_cached, _near_preview = _near_term_cache_events(raw_cached) if raw_cached else ([], {})
+    cache_usable = bool(near_cached)
+
+    # Rescore (cache_only) never spends.
+    # Spend lock: prefer a usable near-term cache (0 credits). If cache is empty/stale,
+    # intentional Scan may live-pull to seed — same as Fetch — so production cold starts work.
+    # force_refresh always live-pulls when credits allow.
+    serve_cache_only = bool(cache_only) or (spend_locked and not force_refresh and cache_usable)
+    if serve_cache_only:
+        if not cache_usable:
             return [], {
                 "configured": True,
                 "cached": False,
@@ -1064,22 +1069,20 @@ async def fetch_all_sports_odds(
                 "odds_spend_mode": config.settings.odds_spend_mode_normalized(),
                 "credits_used": 0,
                 "error": (
-                    "No odds cache yet. Tap Fetch live odds once to seed FanDuel/DraftKings lines "
-                    "(uses a few Odds credits). Rescore / Scan stay free after that."
-                    if spend_locked and not force_refresh
+                    "No upcoming games in the odds cache. Tap Fetch live odds once to seed "
+                    "FanDuel/DraftKings lines (uses a few Odds credits)."
+                    if cache and raw_cached
                     else (
-                        "Odds spend lock is on (cache-only) and there is no odds cache yet. "
-                        "Set ODDS_SPEND_MODE=conservative after adding fresh keys, then Fetch once — "
-                        "or keep using Atlas Insight / Search from OpenAI."
+                        "No odds cache yet. Tap Fetch live odds once to seed FanDuel/DraftKings lines "
+                        "(uses a few Odds credits). Rescore / Scan stay free after that."
                     )
                 ),
             }
-        age = _cache_age_minutes(cache.get("fetched_at"))
-        raw_events = list(cache.get("events") or [])
-        events, near_meta = _near_term_cache_events(raw_events)
+        age = _cache_age_minutes(cache.get("fetched_at") if cache else None)
+        events, near_meta = _near_term_cache_events(raw_cached)
         near_keys = frozenset(near_meta.get("near_term_league_keys") or [])
-        needs_live = _cache_needs_live_refresh(near_keys) if events else bool(raw_events)
-        stats = dict(cache.get("stats") or {})
+        needs_live = _cache_needs_live_refresh(near_keys) if events else bool(raw_cached)
+        stats = dict((cache or {}).get("stats") or {})
         stats.update(
             {
                 "configured": True,
@@ -1090,7 +1093,7 @@ async def fetch_all_sports_odds(
                 "stale": bool(age is not None and age > max(0, config.settings.odds_cache_ttl_minutes)),
                 "cache_age_minutes": round(age, 1) if age is not None else None,
                 "events": len(events),
-                "events_dropped_past": len(raw_events) - len(events),
+                "events_dropped_past": len(raw_cached) - len(events),
                 "events_dropped_far_out": near_meta.get("dropped_far_out", 0),
                 "leagues_with_near_term_games": near_meta.get("near_term_leagues") or [],
                 "cache_needs_live_refresh": False if spend_locked else needs_live,
@@ -1106,6 +1109,13 @@ async def fetch_all_sports_odds(
             }
         )
         return events, stats
+
+    if spend_locked and not force_refresh and not cache_usable:
+        logger.info(
+            "Odds spend lock on but cache unusable (%d raw events) — Scan will live-seed",
+            len(raw_cached),
+        )
+        force_refresh = True  # intentional seed under lock when Scan has nothing to rescore
 
     # Serve fresh cache without spending any credits.
     if not force_refresh and cache:

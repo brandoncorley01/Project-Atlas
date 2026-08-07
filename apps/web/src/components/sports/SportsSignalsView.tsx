@@ -197,8 +197,11 @@ export function SportsSignalsView({
     const apiUrl = getApiUrl();
     const params = new URLSearchParams();
     if (mode === "live") params.set("force_refresh", "true");
-    // Prefer free cache rescore whenever warm — avoids slow live side-paths.
-    if (mode === "rescore" || (mode === "scan" && cacheRescoreFree)) {
+    // Rescore is always cache-only. Scan uses free cache when warm; otherwise the API
+    // live-seeds even under ODDS_SPEND_MODE=cache_only (cold Render disk / empty cache).
+    if (mode === "rescore") {
+      params.set("cache_only", "true");
+    } else if (mode === "scan" && cacheRescoreFree) {
       params.set("cache_only", "true");
     }
     const query = params.toString() ? `?${params}` : "";
@@ -450,7 +453,11 @@ export function SportsSignalsView({
             type="button"
             onClick={() => refreshSports("scan")}
             disabled={busy}
-            title="Scan sports odds — uses warm cache when available; live pulls also run Atlas Insight."
+            title={
+              cacheRescoreFree
+                ? "Scan sports odds from warm cache (0 credits). Use Fetch for a fresh live slate."
+                : "Scan sports odds — seeds live FanDuel/DraftKings lines if cache is empty, then ranks plays."
+            }
             className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-md shadow-violet-600/25 disabled:opacity-50"
           >
             {loading === "scan" ? "Scanning…" : "Scan sports odds"}

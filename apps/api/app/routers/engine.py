@@ -69,7 +69,8 @@ async def refresh_sports(
 ) -> dict:
     """Fetch odds from The Odds API and rank +EV moneyline, spread, total, and futures plays.
 
-    - Default / Scan: use warm cache when available, otherwise live pull.
+    - Default / Scan: use warm cache when available; live-seed when cache is empty/stale
+      (even under ODDS_SPEND_MODE=cache_only).
     - force_refresh=true (Fetch live odds): spend Odds credits for US-core books, then Atlas Insight.
     - cache_only=true (Rescore): never spend Odds credits; requires existing cache.
     """

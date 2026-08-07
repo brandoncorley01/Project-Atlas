@@ -162,9 +162,9 @@ class Settings(BaseSettings):
         return bool(self.odds_api_keys)
 
     def odds_intentional_live_allowed(self) -> bool:
-        """User-initiated Search / Insight may hit Odds APIs even in cache_only.
+        """User-initiated Search / Insight / cold-cache Scan may hit Odds APIs in cache_only.
 
-        Automatic Rescore/Scan stay cache-only. Callers must still honor credit
+        Warm-cache Rescore/Scan stay free. Callers must still honor credit
         reserves so free-tier keys aren't drained overnight.
         """
         return bool(self.odds_api_keys)
