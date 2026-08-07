@@ -64,7 +64,7 @@ async def run_fix_all(
     steps.append(
         await _step(
             "resolve_outcomes",
-            run_resolve_outcomes_job(user_id, token, limit=35),
+            run_resolve_outcomes_job(user_id, token, limit=200, passes=5),
         )
     )
     steps.append(
