@@ -106,7 +106,11 @@ def discover_market_symbols(*, max_symbols: int = 55) -> tuple[list[DiscoveredSy
 
 
 def pre_score_symbol(entry: DiscoveredSymbol) -> float:
-    """Fast symbol-level score before pulling full options chains."""
+    """Fast symbol-level score before pulling full options chains.
+
+    Prefer liquid / watchlist / moderate movers over names that already ran
+    hard at the open (those flood the board with already-ITM strikes).
+    """
     score = 0.0
     sources = set(entry.sources)
 
@@ -114,19 +118,27 @@ def pre_score_symbol(entry: DiscoveredSymbol) -> float:
         score += 30
     if "most_actives" in sources:
         score += 25
+    if "watchlist" in sources:
+        score += 22
     if "day_gainers" in sources:
-        score += 15
+        score += 8
     if "day_losers" in sources:
-        score += 12
+        score += 8
     if "undervalued_growth_stocks" in sources:
-        score += 10
+        score += 12
     if "most_shorted_stocks" in sources:
         score += 8
 
     change = abs(entry.change_pct or 0)
-    if change >= 3:
-        score += 12
-    elif change >= 1.5:
+    # Developing session moves beat gap-and-go leftovers.
+    if 1.5 <= change < 4.0:
+        score += 14
+    elif 4.0 <= change < 6.0:
         score += 6
+    elif change >= 6.0:
+        # Already extended — deprioritize for options deep-dive.
+        score -= 4
+    elif change >= 0.8:
+        score += 5
 
     return score

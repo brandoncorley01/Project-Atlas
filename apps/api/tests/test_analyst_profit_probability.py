@@ -1,10 +1,10 @@
-"""Profit-probability scoring — avoid 100% saturation and far-OTM lottery tickets."""
+"""Profit-probability scoring — prefer developing ATM–OTM over already-ITM opens."""
 
 from __future__ import annotations
 
 from datetime import date, timedelta
 
-from app.agents.analyst import _profit_probability_score
+from app.agents.analyst import _profit_probability_score, score_candidate
 from app.engine.models import CandidateOpportunity, SignalModule
 
 
@@ -63,3 +63,37 @@ def test_missing_delta_does_not_get_sweet_spot_bonus():
     missing = _cand(delta=None, **lean)
     assert _profit_probability_score(missing) < _profit_probability_score(with_delta)
     assert _profit_probability_score(with_delta) < 92.0
+
+
+def test_developing_otm_call_beats_already_itm_call():
+    """Setups that still need the move should outrank strikes already ITM at open."""
+    developing = _cand(
+        option_type="call",
+        strike=51.5,  # ~3% OTM
+        delta=0.38,
+        trend_bullish=True,
+        metadata={
+            "rsi": 52,
+            "stock_price": 50.0,
+            "previous_close": 49.5,
+            "day_change_pct": 1.0,
+        },
+    )
+    already_itm = _cand(
+        option_type="call",
+        strike=47.0,  # 6% ITM
+        delta=0.68,
+        trend_bullish=True,
+        metadata={
+            "rsi": 74,
+            "stock_price": 50.0,
+            "previous_close": 46.5,
+            "day_change_pct": 7.5,
+        },
+    )
+    assert _profit_probability_score(developing) > _profit_probability_score(already_itm)
+    scored_dev = score_candidate(developing)
+    scored_itm = score_candidate(already_itm)
+    assert (scored_dev.scoring_snapshot or {}).get("entry_quality", 0) > (
+        scored_itm.scoring_snapshot or {}
+    ).get("entry_quality", 0)
