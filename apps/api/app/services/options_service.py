@@ -410,6 +410,16 @@ class OptionsRefreshService:
         )
 
         if replace:
+            # Grade ready picks from durable performance rows before wiping the board.
+            try:
+                from app.services.outcome_resolver import OutcomeResolverService
+
+                await OutcomeResolverService(self.db, self.user_id).resolve_pending(
+                    limit=40,
+                    module="options",
+                )
+            except Exception as exc:
+                logger.warning("Pre-replace options auto-grade skipped: %s", exc)
             await self.db.delete(
                 "options_signals",
                 {"user_id": f"eq.{self.user_id}", "status": "eq.active"},

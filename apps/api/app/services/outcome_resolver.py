@@ -33,6 +33,49 @@ async def _yahoo_spot(symbol: str) -> float:
     return await _yahoo_last_price(symbol)
 
 
+def signal_from_performance_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Rebuild a gradeable signal dict from a durable signal_performance row.
+
+    Rescans hard-delete live board rows; grading must survive on the snapshot alone.
+    """
+    snap = row.get("scoring_snapshot") if isinstance(row.get("scoring_snapshot"), dict) else {}
+    sid = str(row.get("signal_id") or "")
+    sig: dict[str, Any] = {
+        "id": sid,
+        "scoring_snapshot": snap,
+        "status": snap.get("status") or "expired",
+        "data_as_of": snap.get("data_as_of") or row.get("logged_at"),
+    }
+    for key in (
+        "sport",
+        "bet_type",
+        "selection",
+        "odds_american",
+        "event_name",
+        "event_start",
+        "expected_value",
+        "underlying",
+        "option_type",
+        "strike",
+        "expiration",
+        "premium",
+        "ticker",
+        "symbol",
+        "recommendation",
+        "entry_range",
+        "stop_loss",
+        "profit_targets",
+        "current_price",
+        "opportunity_score",
+        "confidence_score",
+    ):
+        if snap.get(key) is not None:
+            sig[key] = snap[key]
+    if not sig.get("ticker") and snap.get("symbol"):
+        sig["ticker"] = snap["symbol"]
+    return sig
+
+
 class OutcomeResolverService:
     def __init__(self, db: SupabaseClient, user_id: str) -> None:
         self.db = db
@@ -159,6 +202,9 @@ class OutcomeResolverService:
                         age_h = None
                 if status in {"expired", "closed"} and age_h is not None and age_h >= 72:
                     hours_past = age_h
+                elif age_h is not None and age_h >= 96 and not event_start:
+                    # Snapshot-only undated props that never got a final — clear from open.
+                    hours_past = age_h
                 else:
                     continue
 
@@ -196,38 +242,101 @@ class OutcomeResolverService:
             logger.info("Pruned %s stale pending sports picks from open count", scratched)
         return scratched
 
-    async def _graded_ids(self, module: str | None = None) -> set[str]:
-        filters: dict[str, str] = {"user_id": f"eq.{self.user_id}"}
-        if module:
-            filters["module"] = f"eq.{module}"
-        perf_rows = await self.db.select("signal_performance", filters=filters, limit=2000)
-        return {
-            PerformanceService._normalize_signal_id(str(r.get("signal_id")))
-            for r in perf_rows
-            if r.get("signal_id") and r.get("outcome") in ("win", "loss", "scratch")
-        }
-
-    async def _resolve_sports(self, *, limit: int) -> dict[str, Any]:
-        graded_ids = await self._graded_ids("sports")
-
-        signals = await self.db.select(
-            "sports_signals",
+    async def _pending_performance(self, module: str, *, limit: int) -> list[dict[str, Any]]:
+        return await self.db.select(
+            "signal_performance",
             filters={
                 "user_id": f"eq.{self.user_id}",
-                "status": "in.(expired,active,closed)",
+                "module": f"eq.{module}",
+                "outcome": "eq.pending",
             },
-            order="event_start.asc",
-            limit=limit * 4,
+            order="logged_at.asc",
+            limit=limit,
         )
 
-        now = datetime.now(UTC)
+    async def _load_live_signal(self, module: str, signal_id: str) -> dict[str, Any] | None:
+        table = {
+            "sports": "sports_signals",
+            "stock": "stock_signals",
+            "options": "options_signals",
+            "parlay": "parlays",
+        }.get(module)
+        if not table or not signal_id:
+            return None
+        try:
+            rows = await self.db.select(
+                table,
+                filters={"id": f"eq.{signal_id}", "user_id": f"eq.{self.user_id}"},
+                limit=1,
+            )
+            return rows[0] if rows else None
+        except Exception as exc:
+            logger.debug("Live signal lookup %s %s: %s", module, signal_id[:8], exc)
+            return None
+
+    async def _candidate_signals(self, module: str, *, limit: int) -> list[dict[str, Any]]:
+        """Prefer durable pending performance rows; enrich with live signal when present."""
+        pending = await self._pending_performance(module, limit=limit * 3)
         candidates: list[dict[str, Any]] = []
-        for sig in signals:
-            sid = PerformanceService._normalize_signal_id(str(sig.get("id")))
-            if sid in graded_ids:
+        seen: set[str] = set()
+
+        for row in pending:
+            sid = PerformanceService._normalize_signal_id(str(row.get("signal_id") or ""))
+            if not sid or sid in seen:
                 continue
+            seen.add(sid)
+            live = await self._load_live_signal(module, sid)
+            if live:
+                # Prefer live row but keep durable nested snapshot fields as fallback.
+                snap = row.get("scoring_snapshot") if isinstance(row.get("scoring_snapshot"), dict) else {}
+                live_snap = live.get("scoring_snapshot") if isinstance(live.get("scoring_snapshot"), dict) else {}
+                merged_snap = {**snap, **live_snap}
+                sig = {**live, "scoring_snapshot": merged_snap, "id": live.get("id") or sid}
+            else:
+                sig = signal_from_performance_row(row)
+            candidates.append(sig)
+
+        # Also pick up live signals that somehow never registered (edge case).
+        if len(candidates) < limit:
+            table = {
+                "sports": "sports_signals",
+                "stock": "stock_signals",
+                "options": "options_signals",
+            }.get(module)
+            if table:
+                try:
+                    order = {
+                        "sports": "event_start.asc",
+                        "stock": "data_as_of.asc",
+                        "options": "expiration.asc",
+                    }[module]
+                    live_rows = await self.db.select(
+                        table,
+                        filters={
+                            "user_id": f"eq.{self.user_id}",
+                            "status": "in.(expired,active,closed)",
+                        },
+                        order=order,
+                        limit=limit,
+                    )
+                    for sig in live_rows:
+                        sid = PerformanceService._normalize_signal_id(str(sig.get("id") or ""))
+                        if not sid or sid in seen:
+                            continue
+                        seen.add(sid)
+                        candidates.append(sig)
+                except Exception as exc:
+                    logger.debug("Live candidate load %s: %s", module, exc)
+
+        return candidates[: limit * 2]
+
+    async def _resolve_sports(self, *, limit: int) -> dict[str, Any]:
+        now = datetime.now(UTC)
+        raw = await self._candidate_signals("sports", limit=limit)
+        candidates: list[dict[str, Any]] = []
+        for sig in raw:
             snap = sig.get("scoring_snapshot") or {}
-            event_start = sig.get("event_start")
+            event_start = sig.get("event_start") or snap.get("event_start")
             if event_start:
                 try:
                     text = str(event_start).replace("Z", "+00:00")
@@ -239,13 +348,13 @@ class OutcomeResolverService:
                 if start > now:
                     continue
             else:
-                # Undated rows: still try once we have sport + teams/event id (final scores available).
                 has_match_key = bool(
                     snap.get("sport_key")
                     and (
                         snap.get("event_id")
                         or (snap.get("home_team") and snap.get("away_team"))
-                        or (sig.get("event_name"))
+                        or sig.get("event_name")
+                        or snap.get("event_name")
                     )
                 )
                 if not has_match_key:
@@ -302,11 +411,14 @@ class OutcomeResolverService:
                     resolution_source="auto_sports",
                     signal_snapshot=sig,
                 )
-                await self.db.update(
-                    "sports_signals",
-                    {"id": f"eq.{sig['id']}"},
-                    {"status": "closed"},
-                )
+                try:
+                    await self.db.update(
+                        "sports_signals",
+                        {"id": f"eq.{sig['id']}"},
+                        {"status": "closed"},
+                    )
+                except Exception:
+                    pass
                 resolved += 1
             except Exception as exc:
                 logger.warning("Auto-grade sports signal %s: %s", sig.get("id"), exc)
@@ -319,22 +431,8 @@ class OutcomeResolverService:
         }
 
     async def _resolve_stocks(self, *, limit: int) -> dict[str, Any]:
-        graded_ids = await self._graded_ids("stock")
-        signals = await self.db.select(
-            "stock_signals",
-            filters={
-                "user_id": f"eq.{self.user_id}",
-                "status": "in.(expired,active,closed)",
-            },
-            order="data_as_of.asc",
-            limit=limit * 3,
-        )
-
-        candidates = [
-            sig
-            for sig in signals
-            if PerformanceService._normalize_signal_id(str(sig.get("id"))) not in graded_ids and stock_ready_to_grade(sig)
-        ][:limit]
+        raw = await self._candidate_signals("stock", limit=limit)
+        candidates = [sig for sig in raw if stock_ready_to_grade(sig)][:limit]
 
         if not candidates:
             return {"resolved": 0, "skipped": 0, "pending": 0}
@@ -358,7 +456,7 @@ class OutcomeResolverService:
             return price_cache[ticker]
 
         for sig in candidates:
-            ticker = str(sig.get("ticker") or "").upper()
+            ticker = str(sig.get("ticker") or sig.get("symbol") or "").upper()
             if not ticker:
                 skipped += 1
                 continue
@@ -377,11 +475,14 @@ class OutcomeResolverService:
                     resolution_source="auto_stock",
                     signal_snapshot=sig,
                 )
-                await self.db.update(
-                    "stock_signals",
-                    {"id": f"eq.{sig['id']}"},
-                    {"status": "closed"},
-                )
+                try:
+                    await self.db.update(
+                        "stock_signals",
+                        {"id": f"eq.{sig['id']}"},
+                        {"status": "closed"},
+                    )
+                except Exception:
+                    pass
                 resolved += 1
             except Exception as exc:
                 logger.warning("Auto-grade stock %s: %s", ticker, exc)
@@ -394,22 +495,8 @@ class OutcomeResolverService:
         }
 
     async def _resolve_options(self, *, limit: int) -> dict[str, Any]:
-        graded_ids = await self._graded_ids("options")
-        signals = await self.db.select(
-            "options_signals",
-            filters={
-                "user_id": f"eq.{self.user_id}",
-                "status": "in.(expired,active,closed)",
-            },
-            order="expiration.asc",
-            limit=limit * 3,
-        )
-
-        candidates = [
-            sig
-            for sig in signals
-            if PerformanceService._normalize_signal_id(str(sig.get("id"))) not in graded_ids and options_ready_to_grade(sig)
-        ][:limit]
+        raw = await self._candidate_signals("options", limit=limit)
+        candidates = [sig for sig in raw if options_ready_to_grade(sig)][:limit]
 
         if not candidates:
             return {"resolved": 0, "skipped": 0, "pending": 0}
@@ -443,11 +530,14 @@ class OutcomeResolverService:
                     resolution_source="auto_options",
                     signal_snapshot=sig,
                 )
-                await self.db.update(
-                    "options_signals",
-                    {"id": f"eq.{sig['id']}"},
-                    {"status": "closed"},
-                )
+                try:
+                    await self.db.update(
+                        "options_signals",
+                        {"id": f"eq.{sig['id']}"},
+                        {"status": "closed"},
+                    )
+                except Exception:
+                    pass
                 return True
 
         results = await asyncio.gather(*[_grade_one(sig) for sig in candidates], return_exceptions=True)
@@ -465,7 +555,7 @@ class OutcomeResolverService:
 
     async def _resolve_parlays(self, *, limit: int) -> dict[str, Any]:
         """Grade parlays once every leg's event has a final score."""
-        graded_ids = await self._graded_ids("parlay")
+        pending_perf = await self._pending_performance("parlay", limit=limit * 3)
         parlays = await self.db.select(
             "parlays",
             filters={"user_id": f"eq.{self.user_id}"},
@@ -473,12 +563,17 @@ class OutcomeResolverService:
             limit=limit * 3,
         )
 
-        candidates = [
-            row
-            for row in parlays
-            if PerformanceService._normalize_signal_id(str(row.get("id"))) not in graded_ids
-        ][:limit]
+        by_id: dict[str, dict[str, Any]] = {}
+        for row in pending_perf:
+            sid = PerformanceService._normalize_signal_id(str(row.get("signal_id") or ""))
+            if sid:
+                by_id[sid] = signal_from_performance_row(row)
+        for row in parlays:
+            sid = PerformanceService._normalize_signal_id(str(row.get("id") or ""))
+            if sid:
+                by_id[sid] = row
 
+        candidates = list(by_id.values())[:limit]
         if not candidates:
             return {"resolved": 0, "skipped": 0, "pending": 0}
 
@@ -531,11 +626,14 @@ class OutcomeResolverService:
                     signal_snapshot={**row, "scoring_snapshot": snap, "legs": leg_outcomes},
                 )
                 if str(row.get("status") or "") == "active":
-                    await self.db.update(
-                        "parlays",
-                        {"id": f"eq.{parlay_id}"},
-                        {"status": "closed"},
-                    )
+                    try:
+                        await self.db.update(
+                            "parlays",
+                            {"id": f"eq.{parlay_id}"},
+                            {"status": "closed"},
+                        )
+                    except Exception:
+                        pass
                 resolved += 1
             except Exception as exc:
                 logger.warning("Log parlay grade %s: %s", parlay_id[:8], exc)
@@ -556,7 +654,22 @@ class OutcomeResolverService:
             order="leg_order.asc",
             limit=12,
         )
+        # Snapshot-only parlays may store legs in scoring_snapshot after live rows vanish.
         if not legs:
+            snap = parlay.get("scoring_snapshot") if isinstance(parlay.get("scoring_snapshot"), dict) else {}
+            snap_legs = snap.get("leg_outcomes") or snap.get("legs") or parlay.get("legs")
+            if isinstance(snap_legs, list) and snap_legs:
+                # Already graded legs in snapshot — reconstruct outcome codes if present.
+                codes = [str(leg.get("outcome") or "") for leg in snap_legs]
+                if codes and all(c in ("win", "loss", "scratch") for c in codes):
+                    odds = parlay.get("combined_odds_american") or snap.get("combined_odds_american")
+                    try:
+                        odds_int = int(odds) if odds is not None else None
+                    except (TypeError, ValueError):
+                        odds_int = None
+                    ticket = grade_parlay_from_legs(codes, combined_odds_american=odds_int)
+                    if ticket:
+                        return ticket[0], ticket[1], list(snap_legs)
             return None
 
         signal_ids = [
@@ -580,6 +693,22 @@ class OutcomeResolverService:
                 }
             except Exception as exc:
                 logger.warning("Load parlay leg signals: %s", exc)
+
+        # Fall back to performance snapshots for deleted leg signals.
+        missing = [sid for sid in signal_ids if PerformanceService._normalize_signal_id(sid) not in signal_map]
+        for sid in missing:
+            try:
+                perf = await self.performance.get_outcome(module="sports", signal_id=sid)
+                if perf and isinstance(perf.get("scoring_snapshot"), dict):
+                    signal_map[PerformanceService._normalize_signal_id(sid)] = signal_from_performance_row(
+                        {
+                            "signal_id": sid,
+                            "scoring_snapshot": perf["scoring_snapshot"],
+                            "logged_at": perf.get("logged_at"),
+                        }
+                    )
+            except Exception:
+                pass
 
         now = datetime.now(UTC)
         sport_keys: set[str] = set()

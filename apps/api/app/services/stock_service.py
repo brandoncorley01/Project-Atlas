@@ -167,6 +167,15 @@ class StockRefreshService:
         setups = setups[:limit]
 
         if replace:
+            try:
+                from app.services.outcome_resolver import OutcomeResolverService
+
+                await OutcomeResolverService(self.db, self.user_id).resolve_pending(
+                    limit=40,
+                    module="stock",
+                )
+            except Exception as exc:
+                logger.warning("Pre-replace stock auto-grade skipped: %s", exc)
             await self.db.delete(
                 "stock_signals",
                 {"user_id": f"eq.{self.user_id}", "status": "eq.active"},

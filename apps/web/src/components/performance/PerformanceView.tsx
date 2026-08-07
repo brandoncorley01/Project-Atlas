@@ -639,8 +639,12 @@ export function PerformanceView({ initialSummary, initialHistory }: PerformanceV
           </div>
           <p className="mt-3 text-xs font-medium text-sky-300">
             {atlasExpanded
-              ? "Hide Atlas open picks ↑"
-              : `Show ${laneStats.atlas.pending} open Atlas pick${laneStats.atlas.pending === 1 ? "" : "s"} ↓`}
+              ? "Hide Atlas picks ↑"
+              : laneStats.atlas.pending > 0
+                ? `Show ${laneStats.atlas.pending} open Atlas pick${laneStats.atlas.pending === 1 ? "" : "s"} ↓`
+                : laneStats.atlas.graded > 0
+                  ? `Show ${laneStats.atlas.graded} graded Atlas pick${laneStats.atlas.graded === 1 ? "" : "s"} ↓`
+                  : "Show Atlas scan picks ↓"}
           </p>
         </button>
       </section>
@@ -1198,6 +1202,9 @@ function OutcomeRow({
   const [returnPct, setReturnPct] = useState(
     row.return_pct != null ? String(row.return_pct) : "",
   );
+  const [holdHours, setHoldHours] = useState(
+    row.hold_duration_hours != null ? String(row.hold_duration_hours) : "",
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const origin = resolvePickOrigin(row);
@@ -1213,16 +1220,19 @@ function OutcomeRow({
   useEffect(() => {
     setOutcome(row.outcome);
     setReturnPct(row.return_pct != null ? String(row.return_pct) : "");
-  }, [row.id, row.outcome, row.return_pct]);
+    setHoldHours(row.hold_duration_hours != null ? String(row.hold_duration_hours) : "");
+  }, [row.id, row.outcome, row.return_pct, row.hold_duration_hours]);
 
   async function save() {
     setSaving(true);
     setError(null);
     try {
       const returnVal = returnPct.trim() !== "" ? Number(returnPct) : undefined;
+      const holdVal = holdHours.trim() !== "" ? Number(holdHours) : undefined;
       const saved = await updatePerformanceOutcome(row.id, {
         outcome,
         returnPct: returnVal,
+        holdDurationHours: holdVal,
       });
       if (!saved) {
         throw new Error("Update failed");
@@ -1280,20 +1290,20 @@ function OutcomeRow({
             })}
           </ul>
         )}
-        {isPending && (
-          <LogOutcomeButtons
-            module={sector}
-            signalId={row.signal_id}
-            initialOutcome={{
-              outcome: row.outcome,
-              resolution_source: row.resolution_source,
-              return_pct: row.return_pct,
-            }}
-            compact
-            className="mt-2"
-            onLogged={() => onUpdated()}
-          />
-        )}
+        <LogOutcomeButtons
+          module={sector}
+          signalId={row.signal_id}
+          signalSnapshot={row.scoring_snapshot ?? undefined}
+          initialOutcome={{
+            outcome: row.outcome,
+            resolution_source: row.resolution_source,
+            return_pct: row.return_pct,
+            hold_duration_hours: row.hold_duration_hours,
+          }}
+          compact
+          className="mt-2"
+          onLogged={() => onUpdated()}
+        />
       </td>
       <td className={cellPad}>
         {editing ? (
@@ -1319,16 +1329,33 @@ function OutcomeRow({
       </td>
       <td className={cellPad}>
         {editing ? (
-          <input
-            type="number"
-            step="0.1"
-            placeholder="Return %"
-            value={returnPct}
-            onChange={(e) => setReturnPct(e.target.value)}
-            className="w-24 rounded border border-border bg-background px-2 py-1 text-sm"
-          />
+          <div className="flex flex-col gap-1">
+            <input
+              type="number"
+              step="0.1"
+              placeholder="Return %"
+              value={returnPct}
+              onChange={(e) => setReturnPct(e.target.value)}
+              className="w-24 rounded border border-border bg-background px-2 py-1 text-sm"
+            />
+            {(sector === "options" || sector === "stock") && (
+              <input
+                type="number"
+                step="0.5"
+                placeholder="Hold hrs"
+                value={holdHours}
+                onChange={(e) => setHoldHours(e.target.value)}
+                className="w-24 rounded border border-border bg-background px-2 py-1 text-sm"
+              />
+            )}
+          </div>
         ) : (
-          fmtPct(row.return_pct)
+          <div className="text-sm">
+            {fmtPct(row.return_pct)}
+            {row.hold_duration_hours != null && (
+              <p className="text-[10px] text-muted">{row.hold_duration_hours}h hold</p>
+            )}
+          </div>
         )}
       </td>
       <td className={cellPad}>
@@ -1352,6 +1379,9 @@ function OutcomeRow({
                   setEditing(false);
                   setOutcome(row.outcome);
                   setReturnPct(row.return_pct != null ? String(row.return_pct) : "");
+                  setHoldHours(
+                    row.hold_duration_hours != null ? String(row.hold_duration_hours) : "",
+                  );
                   setError(null);
                 }}
                 className="text-xs text-muted hover:underline"

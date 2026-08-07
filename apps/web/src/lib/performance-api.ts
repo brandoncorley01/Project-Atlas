@@ -99,6 +99,7 @@ export async function logPerformanceOutcome(params: {
   signalId: string;
   outcome: string;
   returnPct?: number | null;
+  holdDurationHours?: number | null;
   resolutionSource?: string;
   signalSnapshot?: Record<string, unknown>;
 }): Promise<PerformanceEntry | null> {
@@ -113,6 +114,7 @@ export async function logPerformanceOutcome(params: {
         signal_id: params.signalId,
         outcome: params.outcome,
         return_pct: params.returnPct,
+        hold_duration_hours: params.holdDurationHours,
         resolution_source: params.resolutionSource ?? "manual",
         signal_snapshot: params.signalSnapshot,
       }),
@@ -130,6 +132,7 @@ export async function logPerformanceOutcome(params: {
       signalId: params.signalId,
       outcome: params.outcome,
       returnPct: params.returnPct,
+      holdDurationHours: params.holdDurationHours,
       resolutionSource: params.resolutionSource,
       signalSnapshot: params.signalSnapshot,
     });
@@ -143,7 +146,11 @@ export async function logPerformanceOutcome(params: {
 
 export async function updatePerformanceOutcome(
   outcomeId: string,
-  updates: { outcome?: string; returnPct?: number | null },
+  updates: {
+    outcome?: string;
+    returnPct?: number | null;
+    holdDurationHours?: number | null;
+  },
 ): Promise<PerformanceEntry | null> {
   const token = await getToken();
   let saved: PerformanceEntry | null = null;
@@ -151,6 +158,9 @@ export async function updatePerformanceOutcome(
     const body: Record<string, unknown> = {};
     if (updates.outcome) body.outcome = updates.outcome;
     if (updates.returnPct !== undefined) body.return_pct = updates.returnPct;
+    if (updates.holdDurationHours !== undefined) {
+      body.hold_duration_hours = updates.holdDurationHours;
+    }
     const res = await fetch(`${getApiUrl()}/performance/${outcomeId}`, {
       method: "PATCH",
       ...fetchInit(token),

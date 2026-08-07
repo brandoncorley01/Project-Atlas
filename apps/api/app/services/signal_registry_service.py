@@ -281,15 +281,23 @@ class SignalRegistryService:
     def _snapshot_for_register(row: dict[str, Any]) -> dict[str, Any]:
         snap = dict(row) if isinstance(row, dict) else {}
         nested = snap.get("scoring_snapshot") if isinstance(snap.get("scoring_snapshot"), dict) else {}
-        origin = nested.get("pick_origin") or snap.get("pick_origin")
-        if origin == "user" or nested.get("user_entry") or nested.get("source") == "user_entry":
-            snap["pick_origin"] = "user"
-            snap["user_tracked"] = True
-            snap["atlas_tracked"] = False
+        # Fold top-level signal columns into nested snapshot so log_outcome keeps
+        # gradeable identity (strike/expiration/entry/etc.) after live rows are deleted.
+        merged = dict(nested)
+        for key, val in snap.items():
+            if key in {"scoring_snapshot", "id", "user_id"}:
+                continue
+            if merged.get(key) is None and val is not None:
+                merged[key] = val
+        origin = merged.get("pick_origin") or snap.get("pick_origin")
+        if origin == "user" or merged.get("user_entry") or merged.get("source") == "user_entry":
+            merged["pick_origin"] = "user"
+            merged["user_tracked"] = True
+            merged["atlas_tracked"] = False
         else:
-            snap["pick_origin"] = "atlas"
-            snap["atlas_tracked"] = True
-        return snap
+            merged["pick_origin"] = "atlas"
+            merged["atlas_tracked"] = True
+        return {**snap, "scoring_snapshot": merged, "pick_origin": merged["pick_origin"]}
 
     async def _tracked_ids(self) -> set[tuple[str, str]]:
         rows = await self.db.select(

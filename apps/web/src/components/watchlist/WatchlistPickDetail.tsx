@@ -77,6 +77,12 @@ function TickerDetail({ item }: { item: WatchlistItem }) {
 function MetadataFallback({ item }: { item: WatchlistItem }) {
   const meta = item.metadata ?? {};
   const kind = effectiveItemType(item);
+  const score =
+    meta.opportunity_score != null
+      ? Number(meta.opportunity_score)
+      : meta.confidence_score != null
+        ? Number(meta.confidence_score)
+        : null;
   return (
     <div className="rounded-xl border border-border bg-surface p-4">
       <p className="text-sm font-semibold text-foreground">
@@ -89,6 +95,12 @@ function MetadataFallback({ item }: { item: WatchlistItem }) {
               <div>
                 <dt className="text-xs text-muted">Event</dt>
                 <dd>{String(meta.event_name)}</dd>
+              </div>
+            )}
+            {meta.sport != null && (
+              <div>
+                <dt className="text-xs text-muted">Sport</dt>
+                <dd>{String(meta.sport)}</dd>
               </div>
             )}
             {meta.bet_type != null && (
@@ -112,6 +124,12 @@ function MetadataFallback({ item }: { item: WatchlistItem }) {
                 </dd>
               </div>
             )}
+            {meta.event_start != null && (
+              <div>
+                <dt className="text-xs text-muted">Event start</dt>
+                <dd>{new Date(String(meta.event_start)).toLocaleString()}</dd>
+              </div>
+            )}
           </>
         )}
         {(kind === "stock_signal" || kind === "option_signal") && (
@@ -122,10 +140,44 @@ function MetadataFallback({ item }: { item: WatchlistItem }) {
                 <dd>{String(meta.recommendation)}</dd>
               </div>
             )}
-            {meta.opportunity_score != null && (
+            {(meta.ticker != null || meta.underlying != null || meta.symbol != null) && (
+              <div>
+                <dt className="text-xs text-muted">
+                  {kind === "option_signal" ? "Underlying" : "Ticker"}
+                </dt>
+                <dd>
+                  {String(meta.underlying ?? meta.ticker ?? meta.symbol)}
+                </dd>
+              </div>
+            )}
+            {kind === "option_signal" && meta.option_type != null && (
+              <div>
+                <dt className="text-xs text-muted">Type</dt>
+                <dd className="uppercase">{String(meta.option_type)}</dd>
+              </div>
+            )}
+            {kind === "option_signal" && meta.strike != null && (
+              <div>
+                <dt className="text-xs text-muted">Strike</dt>
+                <dd>{String(meta.strike)}</dd>
+              </div>
+            )}
+            {kind === "option_signal" && meta.expiration != null && (
+              <div>
+                <dt className="text-xs text-muted">Expiration</dt>
+                <dd>{String(meta.expiration).slice(0, 10)}</dd>
+              </div>
+            )}
+            {kind === "option_signal" && meta.premium != null && (
+              <div>
+                <dt className="text-xs text-muted">Premium</dt>
+                <dd>${Number(meta.premium).toFixed(2)}</dd>
+              </div>
+            )}
+            {score != null && Number.isFinite(score) && (
               <div>
                 <dt className="text-xs text-muted">Opportunity</dt>
-                <dd>{Number(meta.opportunity_score).toFixed(0)}</dd>
+                <dd>{score.toFixed(0)}</dd>
               </div>
             )}
           </>
@@ -154,7 +206,7 @@ function MetadataFallback({ item }: { item: WatchlistItem }) {
         )}
       </dl>
       <p className="mt-3 text-xs text-muted">
-        Full live card unavailable — showing the details saved with this watchlist pick.
+        Full live card unavailable — showing the details saved when this pick was tracked.
       </p>
     </div>
   );
@@ -304,6 +356,9 @@ export function performanceEntryAsWatchlistItem(row: {
   module: string;
   signal_id: string;
   signal_label?: string | null;
+  opportunity_score?: number | null;
+  confidence_score?: number | null;
+  scoring_snapshot?: Record<string, unknown> | null;
   leg_outcomes?: Array<Record<string, unknown>> | null;
 }): WatchlistItem {
   const module = row.module;
@@ -318,16 +373,35 @@ export function performanceEntryAsWatchlistItem(row: {
             ? "parlay"
             : "ticker";
 
+  const snap =
+    row.scoring_snapshot && typeof row.scoring_snapshot === "object"
+      ? row.scoring_snapshot
+      : {};
+  const legs =
+    Array.isArray(row.leg_outcomes) && row.leg_outcomes.length > 0
+      ? row.leg_outcomes
+      : Array.isArray(snap.legs)
+        ? snap.legs
+        : Array.isArray(snap.leg_outcomes)
+          ? snap.leg_outcomes
+          : undefined;
+
   return {
     id: row.id,
     item_type: kind,
     symbol: row.signal_id,
     metadata: {
+      ...snap,
       watchlist_kind: kind,
       signal_id: row.signal_id,
       ...(kind === "parlay" ? { parlay_id: row.signal_id } : {}),
-      label: row.signal_label ?? row.signal_id,
-      ...(Array.isArray(row.leg_outcomes) ? { legs: row.leg_outcomes } : {}),
+      label:
+        row.signal_label ??
+        (typeof snap.label === "string" ? snap.label : null) ??
+        row.signal_id,
+      opportunity_score: row.opportunity_score ?? snap.opportunity_score,
+      confidence_score: row.confidence_score ?? snap.confidence_score,
+      ...(legs ? { legs } : {}),
     },
   };
 }

@@ -13,6 +13,7 @@ interface OutcomeEntry {
   outcome: string;
   resolution_source?: string | null;
   return_pct?: number | null;
+  hold_duration_hours?: number | null;
 }
 
 interface LogOutcomeButtonsProps {
@@ -67,16 +68,24 @@ export function LogOutcomeButtons({
   const [returnPct, setReturnPct] = useState(
     initialOutcome?.return_pct != null ? String(initialOutcome.return_pct) : "",
   );
+  const [holdHours, setHoldHours] = useState(
+    initialOutcome?.hold_duration_hours != null
+      ? String(initialOutcome.hold_duration_hours)
+      : "",
+  );
   const changingRef = useRef(changing);
   changingRef.current = changing;
 
-  const seedKey = `${initialOutcome?.outcome ?? ""}:${initialOutcome?.return_pct ?? ""}:${initialOutcome?.resolution_source ?? ""}`;
+  const seedKey = `${initialOutcome?.outcome ?? ""}:${initialOutcome?.return_pct ?? ""}:${initialOutcome?.hold_duration_hours ?? ""}:${initialOutcome?.resolution_source ?? ""}`;
 
   useEffect(() => {
     if (!initialOutcome || changingRef.current) return;
     setEntry(initialOutcome);
     if (initialOutcome.return_pct != null) {
       setReturnPct(String(initialOutcome.return_pct));
+    }
+    if (initialOutcome.hold_duration_hours != null) {
+      setHoldHours(String(initialOutcome.hold_duration_hours));
     }
   }, [seedKey]); // eslint-disable-line react-hooks/exhaustive-deps -- seed by value fingerprint
 
@@ -88,6 +97,9 @@ export function LogOutcomeButtons({
         setEntry(row);
         if (row.return_pct != null) {
           setReturnPct(String(row.return_pct));
+        }
+        if (row.hold_duration_hours != null) {
+          setHoldHours(String(row.hold_duration_hours));
         }
       }
     } catch {
@@ -111,11 +123,16 @@ export function LogOutcomeButtons({
         returnPct.trim() !== "" && Number.isFinite(Number(returnPct))
           ? Number(returnPct)
           : undefined;
+      const holdVal =
+        holdHours.trim() !== "" && Number.isFinite(Number(holdHours))
+          ? Number(holdHours)
+          : undefined;
       const saved = await logPerformanceOutcome({
         module,
         signalId: normalizedId,
         outcome: draft,
         returnPct: returnVal,
+        holdDurationHours: holdVal,
         resolutionSource: changing || (entry && entry.outcome !== "pending")
           ? "manual_edit"
           : "manual",
@@ -175,6 +192,9 @@ export function LogOutcomeButtons({
                   : null,
               );
               setReturnPct(entry.return_pct != null ? String(entry.return_pct) : "");
+              setHoldHours(
+                entry.hold_duration_hours != null ? String(entry.hold_duration_hours) : "",
+              );
               setMessage(null);
             }}
             className="rounded-md border border-accent/40 bg-accent/10 px-2.5 py-1 font-semibold text-accent hover:bg-accent/20"
@@ -240,18 +260,33 @@ export function LogOutcomeButtons({
         </button>
       </div>
 
-      {(module === "options" || module === "stock" || module === "parlay") && editing && (
-        <label className="mt-2 flex items-center gap-2 text-xs text-muted">
-          <span className="shrink-0">Return %</span>
-          <input
-            type="number"
-            step="0.1"
-            value={returnPct}
-            onChange={(e) => setReturnPct(e.target.value)}
-            placeholder="optional"
-            className="w-24 rounded border border-border bg-background px-2 py-1 text-sm text-foreground"
-          />
-        </label>
+      {editing && (
+        <div className="mt-2 flex flex-wrap gap-3">
+          <label className="flex items-center gap-2 text-xs text-muted">
+            <span className="shrink-0">Return %</span>
+            <input
+              type="number"
+              step="0.1"
+              value={returnPct}
+              onChange={(e) => setReturnPct(e.target.value)}
+              placeholder={module === "sports" ? "e.g. +150" : "optional"}
+              className="w-24 rounded border border-border bg-background px-2 py-1 text-sm text-foreground"
+            />
+          </label>
+          {(module === "options" || module === "stock") && (
+            <label className="flex items-center gap-2 text-xs text-muted">
+              <span className="shrink-0">Hold hrs</span>
+              <input
+                type="number"
+                step="0.5"
+                value={holdHours}
+                onChange={(e) => setHoldHours(e.target.value)}
+                placeholder="optional"
+                className="w-20 rounded border border-border bg-background px-2 py-1 text-sm text-foreground"
+              />
+            </label>
+          )}
+        </div>
       )}
 
       <div className="mt-2 flex flex-wrap items-center gap-2">

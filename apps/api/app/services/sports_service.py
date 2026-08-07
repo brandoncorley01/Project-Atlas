@@ -483,6 +483,22 @@ class SportsRefreshService:
             }
 
         if replace and setups:
+            # Grade finished picks from durable snapshots before wiping Odds-derived rows.
+            try:
+                from app.services.outcome_resolver import OutcomeResolverService
+
+                await asyncio.wait_for(
+                    OutcomeResolverService(self.db, self.user_id).resolve_pending(
+                        limit=60,
+                        module="sports",
+                    ),
+                    timeout=12.0,
+                )
+            except TimeoutError:
+                logger.warning("Pre-replace sports auto-grade timed out")
+            except Exception as exc:
+                logger.warning("Pre-replace sports auto-grade skipped: %s", exc)
+
             # Keep OpenAI web-desk picks — Odds scans only replace Odds-derived rows.
             active = await self.db.select(
                 "sports_signals",

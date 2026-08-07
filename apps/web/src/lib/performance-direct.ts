@@ -207,6 +207,7 @@ export async function logOutcomeDirect(params: {
   signalId: string;
   outcome: string;
   returnPct?: number | null;
+  holdDurationHours?: number | null;
   resolutionSource?: string;
   signalSnapshot?: Record<string, unknown>;
 }): Promise<PerformanceEntry | null> {
@@ -297,6 +298,7 @@ export async function logOutcomeDirect(params: {
     signal_id: signalId,
     outcome: params.outcome,
     return_pct: params.returnPct ?? null,
+    hold_duration_hours: params.holdDurationHours ?? null,
     logged_at: now,
     updated_at: now,
     resolution_source: src,
@@ -600,7 +602,11 @@ export async function syncWatchlistDirect(): Promise<{
 
 export async function updateOutcomeDirect(
   outcomeId: string,
-  updates: { outcome?: string; returnPct?: number | null },
+  updates: {
+    outcome?: string;
+    returnPct?: number | null;
+    holdDurationHours?: number | null;
+  },
 ): Promise<PerformanceEntry | null> {
   const { supabase, userId } = await getSession();
   if (!userId) return null;
@@ -615,6 +621,9 @@ export async function updateOutcomeDirect(
   if (updates.returnPct !== undefined) {
     payload.return_pct = updates.returnPct;
   }
+  if (updates.holdDurationHours !== undefined) {
+    payload.hold_duration_hours = updates.holdDurationHours;
+  }
 
   const { data, error } = await supabase
     .from("signal_performance")
@@ -622,7 +631,7 @@ export async function updateOutcomeDirect(
     .eq("id", outcomeId)
     .eq("user_id", userId)
     .select(
-      "id, module, signal_id, outcome, return_pct, hold_duration_hours, logged_at, resolution_source, signal_label",
+      "id, module, signal_id, outcome, return_pct, hold_duration_hours, logged_at, resolution_source, signal_label, scoring_snapshot",
     )
     .single();
 
