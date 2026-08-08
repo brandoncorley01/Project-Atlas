@@ -12,8 +12,10 @@ from app.agents.sports_analyst import PREFERRED_BOOK_KEY, US_PREFERRED_BOOK_KEYS
 from app.providers.sports.odds_api import (
     OddsApiClient,
     OddsApiError,
+    _merge_cached_events,
     _read_cache,
     _select_active_client,
+    _write_cache,
     invalidate_key_probe_cache,
 )
 from app.services.freshness import filter_upcoming_events, hours_until_event
@@ -1229,14 +1231,10 @@ async def fetch_verified_markets_for_search(
                 logger.info("Search live seed skipped (%s): %s", sk, exc)
 
     # Persist live-seeded events so board / later searches see FanDuel lines.
+    # Use module-level odds_api helpers — a local `from ... import _read_cache`
+    # here previously shadowed the binding and raised UnboundLocalError on Search.
     if seed_credits > 0 and events:
         try:
-            from app.providers.sports.odds_api import (
-                _merge_cached_events,
-                _read_cache,
-                _write_cache,
-            )
-
             existing = list((_read_cache() or {}).get("events") or [])
             merged = _merge_cached_events(existing, events) if existing else list(events)
             _write_cache(
