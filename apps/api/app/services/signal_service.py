@@ -475,6 +475,13 @@ class SignalService:
             "sharp_indicator": row.get("sharp_indicator"),
             "stats_support": _safe_float(snapshot.get("stats_support")),
             "team_stats": snapshot.get("team_stats"),
+            "public_market": (
+                row.get("public_market")
+                if isinstance(row.get("public_market"), dict)
+                else snapshot.get("public_market")
+                if isinstance(snapshot.get("public_market"), dict)
+                else None
+            ),
             "pick_source": str(snapshot.get("source") or line_movement.get("source") or "odds_api"),
             "openai_web": bool(
                 snapshot.get("openai_web")

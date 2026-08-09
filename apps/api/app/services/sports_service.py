@@ -443,6 +443,13 @@ class SportsRefreshService:
 
         setups = sort_for_display([row for row in setups if is_sports_actionable(row)])
 
+        try:
+            from app.services.kalshi_public_pulse import enrich_setup_snapshots_with_kalshi
+
+            setups = await enrich_setup_snapshots_with_kalshi(setups)
+        except Exception as exc:
+            logger.info("Kalshi public pulse on scan skipped: %s", exc)
+
         sports_in_results = sorted({str(r.get("sport")) for r in setups})
 
         if replace and not setups:

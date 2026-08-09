@@ -105,7 +105,8 @@ Compute in-house with **pandas-ta** or **ta-lib** on OHLCV from provider — avo
 
 ### Sharp/public indicators
 
-- **V1:** Skip or use coarse proxies (line movement vs opening line)
+- **Kalshi public pulse (live):** Open Kalshi game markets via the public Trade API (no key). Matched to Atlas home/away, shown on sports cards as a dual-line crowd-probability sparkline (`public_market`). Flag: `ATLAS_KALSHI_PUBLIC_PULSE_ENABLED` (default on). Does not change scoring thresholds — decision aid only.
+- **Also:** Coarse proxies from multi-book line movement
 - **Later:** Action Network, betting splits (paid)
 
 ---
