@@ -5,6 +5,7 @@ import type { SportsCategoryMeta } from "@/lib/sports-categories";
 import { getSupabaseEnv } from "@/lib/env";
 import { createClient } from "@/lib/supabase/server";
 import { apiFetch } from "@/lib/api";
+import { enrichSportsItemsWithKalshi } from "@/lib/kalshi-public-pulse";
 
 interface SportsListResponse {
   items: SportsSignal[];
@@ -28,7 +29,10 @@ export default async function SportsPage() {
           apiFetch<SportsListResponse>("/signals/sports?limit=200&window=all", token),
           apiFetch<CategoriesResponse>("/signals/sports/categories", token),
         ]);
-        items = listData.items;
+        items = (await enrichSportsItemsWithKalshi(
+          (listData.items ?? []) as unknown as Record<string, unknown>[],
+          { maxRows: 48 },
+        )) as unknown as SportsSignal[];
         categories = catData.categories;
       } catch {
         items = [];

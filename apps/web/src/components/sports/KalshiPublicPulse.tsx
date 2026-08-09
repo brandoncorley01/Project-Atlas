@@ -23,15 +23,15 @@ export interface KalshiPublicMarket {
 
 function stanceCopy(stance?: string | null) {
   if (stance === "sure") return "Public sure on your side";
-  if (stance === "doubtful") return "Public leans against your pick";
+  if (stance === "doubtful") return "Public leans against";
   if (stance === "mixed") return "Public mixed";
-  return "Public market price";
+  return "Public market";
 }
 
 function stanceClass(stance?: string | null) {
   if (stance === "sure") return "text-teal-300";
   if (stance === "doubtful") return "text-rose-300";
-  return "text-muted";
+  return "text-zinc-400";
 }
 
 /** Build a smooth dual-line path: side A in the top half, side B mirrored below. */
@@ -51,7 +51,6 @@ function buildPaths(
   const point = (series: number[], i: number, side: "top" | "bottom") => {
     const idx = Math.min(i, series.length - 1);
     const pct = Math.max(0, Math.min(100, series[idx] ?? 50));
-    // Stronger public price → farther from the center axis.
     const mag = (pct / 100) * amp;
     const y = side === "top" ? mid - mag : mid + mag;
     const x = padX + (i / Math.max(n - 1, 1)) * (width - padX * 2);
@@ -91,6 +90,7 @@ export function KalshiPublicPulse({
   const height = compact ? 44 : 52;
   const historyA = market.history_a?.length ? market.history_a : [sideA.implied_pct];
   const historyB = market.history_b?.length ? market.history_b : [sideB.implied_pct];
+  const hasMotion = historyA.length >= 3 || historyB.length >= 3;
   const { top, bottom } = buildPaths(historyA, historyB, width, height);
   const title = stanceCopy(market.stance_vs_pick);
   const pctA = Math.round(Number(sideA.implied_pct));
@@ -98,61 +98,78 @@ export function KalshiPublicPulse({
 
   const body = (
     <div
-      className={`flex min-w-0 items-center gap-3 ${compact ? "" : "w-full"}`}
+      className="flex min-w-0 flex-col gap-2"
       title={`${sideA.label} ${pctA}% · ${sideB.label} ${pctB}% — Kalshi public market`}
     >
-      <div className="shrink-0">
-        <p className="text-[11px] font-semibold tracking-wide text-zinc-400">Kalshi</p>
-        <p className={`mt-0.5 text-[10px] leading-tight ${stanceClass(market.stance_vs_pick)}`}>
-          {title}
-        </p>
-      </div>
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="shrink-0">
+          <p className="text-[11px] font-semibold tracking-wide text-zinc-300">Kalshi</p>
+          <p className={`mt-0.5 text-[10px] leading-tight ${stanceClass(market.stance_vs_pick)}`}>
+            {title}
+          </p>
+        </div>
 
-      <div className="relative min-w-0 flex-1">
-        <svg
-          viewBox={`0 0 ${width} ${height}`}
-          width="100%"
-          height={height}
-          className="max-w-[220px] overflow-visible"
-          aria-hidden
-        >
-          <line
-            x1="0"
-            y1={height / 2}
-            x2={width}
-            y2={height / 2}
-            stroke="currentColor"
-            className="text-zinc-600/70"
-            strokeWidth="1"
-            strokeDasharray="3 3"
-          />
-          <path
-            d={top}
-            fill="none"
-            stroke="#2dd4bf"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-          <path
-            d={bottom}
-            fill="none"
-            stroke="#5eead4"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            opacity="0.85"
-          />
-        </svg>
-      </div>
+        <div className="relative min-w-0 flex-1">
+          {hasMotion ? (
+            <svg
+              viewBox={`0 0 ${width} ${height}`}
+              width="100%"
+              height={height}
+              className="max-w-[220px] overflow-visible"
+              aria-hidden
+            >
+              <line
+                x1="0"
+                y1={height / 2}
+                x2={width}
+                y2={height / 2}
+                stroke="currentColor"
+                className="text-zinc-600/70"
+                strokeWidth="1"
+                strokeDasharray="3 3"
+              />
+              <path
+                d={top}
+                fill="none"
+                stroke="#2dd4bf"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <path
+                d={bottom}
+                fill="none"
+                stroke="#5eead4"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                opacity="0.85"
+              />
+            </svg>
+          ) : (
+            <div className="flex h-10 items-center gap-2">
+              <div className="relative h-2.5 w-full max-w-[220px] overflow-hidden rounded-full bg-zinc-800">
+                <div
+                  className="absolute inset-y-0 left-0 rounded-full bg-teal-400/90"
+                  style={{ width: `${Math.max(4, Math.min(96, pctA))}%` }}
+                />
+                <div
+                  className="absolute inset-y-0 right-0 rounded-full bg-teal-200/50"
+                  style={{ width: `${Math.max(4, Math.min(96, pctB))}%` }}
+                />
+              </div>
+            </div>
+          )}
+        </div>
 
-      <div className="shrink-0 text-right tabular-nums leading-tight">
-        <p className="text-xs font-semibold text-teal-300">
-          {sideA.abbr} {pctA}%
-        </p>
-        <p className="mt-1 text-xs font-semibold text-teal-200/90">
-          {sideB.abbr} {pctB}%
-        </p>
+        <div className="shrink-0 text-right tabular-nums leading-tight">
+          <p className="text-xs font-semibold text-teal-300">
+            {sideA.abbr} {pctA}%
+          </p>
+          <p className="mt-1 text-xs font-semibold text-teal-100/90">
+            {sideB.abbr} {pctB}%
+          </p>
+        </div>
       </div>
     </div>
   );
@@ -163,7 +180,7 @@ export function KalshiPublicPulse({
         href={market.url}
         target="_blank"
         rel="noreferrer"
-        className="mt-3 block rounded-xl border border-teal-500/20 bg-teal-500/[0.04] px-3 py-2.5 transition hover:border-teal-400/40 hover:bg-teal-500/[0.07]"
+        className="mt-3 block rounded-xl border border-teal-400/30 bg-teal-500/10 px-3 py-2.5 transition hover:border-teal-300/50 hover:bg-teal-500/15"
       >
         {body}
       </a>
@@ -171,7 +188,7 @@ export function KalshiPublicPulse({
   }
 
   return (
-    <div className="mt-3 rounded-xl border border-teal-500/20 bg-teal-500/[0.04] px-3 py-2.5">
+    <div className="mt-3 rounded-xl border border-teal-400/30 bg-teal-500/10 px-3 py-2.5">
       {body}
     </div>
   );

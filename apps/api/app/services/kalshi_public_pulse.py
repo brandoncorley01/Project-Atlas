@@ -92,22 +92,26 @@ async def enrich_sports_rows_with_kalshi(
                 *(fetch_series_events(s) for s in series_needed if s),
                 return_exceptions=True,
             ),
-            timeout=min(timeout_sec, 2.5),
+            timeout=max(3.0, min(timeout_sec, 6.0)),
         )
     except TimeoutError:
         logger.info("Kalshi series warm-up timed out")
     except Exception as exc:
         logger.info("Kalshi series warm-up failed: %s", exc)
 
-    try:
-        await asyncio.wait_for(
-            asyncio.gather(*(_one(r) for r in targets), return_exceptions=True),
-            timeout=timeout_sec,
+    # Soft deadline: keep rows that finished; only cancel the rest.
+    tasks = [asyncio.create_task(_one(r)) for r in targets]
+    done, pending = await asyncio.wait(tasks, timeout=timeout_sec)
+    if pending:
+        logger.info(
+            "Kalshi pulse enrich hit %.1fs budget — keeping %d/%d rows",
+            timeout_sec,
+            len(done),
+            len(tasks),
         )
-    except TimeoutError:
-        logger.info("Kalshi pulse enrich timed out after %.1fs", timeout_sec)
-    except Exception as exc:
-        logger.info("Kalshi pulse enrich failed: %s", exc)
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
     return rows
 
 

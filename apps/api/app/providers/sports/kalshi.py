@@ -27,8 +27,20 @@ SPORT_KEY_TO_SERIES: dict[str, str] = {
     "icehockey_nhl": "KXNHLGAME",
     "soccer_epl": "KXEPLGAME",
     "soccer_usa_mls": "KXMLSGAME",
+    "soccer_spain_la_liga": "KXLALIGAGAME",
+    "soccer_germany_bundesliga": "KXBUNDESLIGAGAME",
+    "soccer_italy_serie_a": "KXSERIEAGAME",
+    "soccer_france_ligue_one": "KXLIGUE1GAME",
     "americanfootball_ncaaf": "KXNCAAFGAME",
     "basketball_ncaab": "KXNCAABGAME",
+    "mma_mixed_martial_arts": "KXUFCFIGHT",
+    "boxing_boxing": "KXBOXINGFIGHT",
+    "tennis_atp_french_open": "KXATPMATCH",
+    "tennis_wta_french_open": "KXWTAMATCH",
+    "tennis_atp_wimbledon": "KXATPMATCH",
+    "tennis_wta_wimbledon": "KXWTAMATCH",
+    "tennis_atp_us_open": "KXATPMATCH",
+    "tennis_wta_us_open": "KXWTAMATCH",
 }
 
 # Sport label / slug fallbacks when sport_key is missing.
@@ -44,8 +56,20 @@ SPORT_LABEL_TO_SERIES: dict[str, str] = {
     "hockey": "KXNHLGAME",
     "epl": "KXEPLGAME",
     "mls": "KXMLSGAME",
+    "la_liga": "KXLALIGAGAME",
+    "laliga": "KXLALIGAGAME",
+    "bundesliga": "KXBUNDESLIGAGAME",
+    "serie_a": "KXSERIEAGAME",
+    "ligue_1": "KXLIGUE1GAME",
+    "ligue1": "KXLIGUE1GAME",
     "ncaaf": "KXNCAAFGAME",
     "ncaab": "KXNCAABGAME",
+    "mma": "KXUFCFIGHT",
+    "ufc": "KXUFCFIGHT",
+    "boxing": "KXBOXINGFIGHT",
+    "atp": "KXATPMATCH",
+    "wta": "KXWTAMATCH",
+    "tennis": "KXATPMATCH",
 }
 
 _STOP = {
@@ -76,8 +100,11 @@ def series_for_sport(*, sport_key: str | None = None, sport: str | None = None) 
     label = (sport or "").strip().lower().replace(" ", "_")
     if label in SPORT_KEY_TO_SERIES:
         return SPORT_KEY_TO_SERIES[label]
+    hay = f"{key} {label} {(sport or '').strip().lower()}"
     for token, series in SPORT_LABEL_TO_SERIES.items():
         if token == label or token in label.split("_") or token in key.split("_"):
+            return series
+        if re.search(rf"\b{re.escape(token)}\b", hay):
             return series
     return None
 

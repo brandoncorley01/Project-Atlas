@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { resolveApiBase } from "@/lib/api-config";
+import { enrichSportsItemsWithKalshi } from "@/lib/kalshi-public-pulse";
 
 const API_BASE = resolveApiBase();
 const PROXY_TIMEOUT_MS = 60_000;
@@ -97,6 +98,39 @@ async function proxyRequest(request: NextRequest, pathSegments: string[]) {
           },
           { status: 502 },
         );
+      }
+    }
+
+    // Attach Kalshi public-probability pulse on sports list/detail even when the
+    // Render API build does not yet include server-side enrichment.
+    if (
+      upstream.ok
+      && request.method === "GET"
+      && (subpath === "signals/sports" || /^signals\/sports\/[^/]+$/.test(subpath))
+    ) {
+      try {
+        const payload = JSON.parse(text) as Record<string, unknown>;
+        if (subpath === "signals/sports" && Array.isArray(payload.items)) {
+          payload.items = await enrichSportsItemsWithKalshi(
+            payload.items as Record<string, unknown>[],
+            { maxRows: Math.min(payload.items.length, 48) },
+          );
+          return NextResponse.json(payload, { status: upstream.status });
+        }
+        if (
+          /^signals\/sports\/[^/]+$/.test(subpath)
+          && payload
+          && typeof payload === "object"
+          && !Array.isArray(payload)
+        ) {
+          const [enriched] = await enrichSportsItemsWithKalshi(
+            [payload as Record<string, unknown>],
+            { maxRows: 1 },
+          );
+          return NextResponse.json(enriched ?? payload, { status: upstream.status });
+        }
+      } catch (err) {
+        console.warn("[atlas proxy] Kalshi enrich skipped", err);
       }
     }
 
