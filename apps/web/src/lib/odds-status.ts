@@ -19,6 +19,8 @@ export interface OddsApiStatus {
   cache_within_ttl?: boolean;
   cache_rescore_free?: boolean;
   cache_age_minutes?: number | null;
+  /** ISO timestamp of last live odds cache write (Fetch / live seed). */
+  cache_fetched_at?: string | null;
   cache_fresh?: boolean;
   cache_needs_live_refresh?: boolean;
   near_term_leagues?: string[];

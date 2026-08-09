@@ -50,7 +50,7 @@ export default async function SportsPage() {
             ONE SIDE / MARKET
           </span>
         }
-        description="Search events like FanDuel, log your own bets for Atlas learning, or use Scan / Fetch / Rescore / Atlas Insight for ranked plays."
+        description="Picks stay on your board until you Scan or Rescore. Search events like FanDuel, log your own bets, or use Scan / Fetch / Rescore / Atlas Insight."
       />
       <SportsSignalsView initialItems={items} initialCategories={categories} />
     </>

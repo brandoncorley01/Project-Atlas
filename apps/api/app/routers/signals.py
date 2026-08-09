@@ -156,6 +156,12 @@ async def list_sports_signals(
     offset: int = 0,
     status: str = "active",
 ) -> dict:
+    """List saved sports picks.
+
+    Read path skips expire/resolve so navigating back to Sports stays fast and
+    does not wipe the board. Concluded games are still filtered via is_sports_listable.
+    Expire + grade run on Scan / Rescore / cron / Performance.
+    """
     service = _service(user_id, token)
     rows = await service.list_sports(
         limit=limit,
@@ -164,6 +170,7 @@ async def list_sports_signals(
         sport=sport,
         category=category,
         window=window,
+        skip_expire=True,
     )
     items = [service.format_sports_item(row) for row in rows]
     try:
@@ -178,6 +185,29 @@ async def list_sports_signals(
         )
     except Exception:
         pass
+
+    board_as_of = None
+    for item in items:
+        raw = item.get("data_as_of")
+        if isinstance(raw, str) and raw:
+            if board_as_of is None or raw > board_as_of:
+                board_as_of = raw
+
+    odds_meta: dict = {}
+    try:
+        from app.providers.sports.odds_api import odds_cache_status
+        from app.jobs.state import LAST_JOBS
+
+        cache = odds_cache_status()
+        odds_meta = {
+            "odds_fetched_at": cache.get("fetched_at"),
+            "odds_age_minutes": cache.get("age_minutes"),
+            "last_sports_job_at": LAST_JOBS.get("refresh_sports"),
+            "last_insight_job_at": LAST_JOBS.get("refresh_sports_openai"),
+        }
+    except Exception:
+        pass
+
     return {
         "items": items,
         "total": len(items),
@@ -186,6 +216,11 @@ async def list_sports_signals(
         "sport": sport,
         "category": category,
         "window": window,
+        "meta": {
+            "board_as_of": board_as_of,
+            "persisted": True,
+            **odds_meta,
+        },
     }
 
 

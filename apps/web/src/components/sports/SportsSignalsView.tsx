@@ -26,10 +26,23 @@ import {
 } from "@/lib/sports-filters";
 import { apiRequestHeaders, getApiUrl, usesBffProxy } from "@/lib/api-url";
 import { fetchIntelligenceStatus } from "@/lib/sports-intelligence-api";
+import {
+  boardAsOfFromItems,
+  hydrateSportsItems,
+  markSportsBoardAction,
+  readSportsBoardCache,
+  writeSportsBoardCache,
+} from "@/lib/sports-board-cache";
 
 interface SportsSignalsViewProps {
   initialItems: SportsSignal[];
   initialCategories?: SportsCategoryMeta[];
+}
+
+interface SportsListMeta {
+  board_as_of?: string | null;
+  odds_fetched_at?: string | null;
+  odds_age_minutes?: number | null;
 }
 
 export function SportsSignalsView({
@@ -37,7 +50,7 @@ export function SportsSignalsView({
   initialCategories = [],
 }: SportsSignalsViewProps) {
   const router = useRouter();
-  const [items, setItems] = useState(() => dedupeOneSidePerMarket(initialItems));
+  const [items, setItems] = useState(() => hydrateSportsItems(initialItems));
   const [categories, setCategories] = useState(initialCategories);
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [activeSport, setActiveSport] = useState<string | null>(null);
@@ -48,6 +61,18 @@ export function SportsSignalsView({
   const [message, setMessage] = useState<string | null>(null);
   const [parlaySelection, setParlaySelection] = useState<Set<string>>(new Set());
   const [intelligenceEnabled, setIntelligenceEnabled] = useState(false);
+  const [boardAsOf, setBoardAsOf] = useState<string | null>(
+    () => readSportsBoardCache()?.boardAsOf ?? boardAsOfFromItems(initialItems),
+  );
+  const [lastActionAt, setLastActionAt] = useState<string | null>(
+    () => readSportsBoardCache()?.lastActionAt ?? null,
+  );
+  const [lastActionKind, setLastActionKind] = useState<
+    "scan" | "live" | "rescore" | "openai" | null
+  >(() => readSportsBoardCache()?.lastActionKind ?? null);
+  const [oddsFetchedAt, setOddsFetchedAt] = useState<string | null>(
+    () => readSportsBoardCache()?.oddsFetchedAt ?? null,
+  );
   const { status: oddsStatus, refresh: refreshOddsStatus } = useOddsApiStatus();
   const insightFetchFallbackUsed = useRef(false);
   const fetchBlocked = Boolean(
@@ -130,29 +155,78 @@ export function SportsSignalsView({
     }
   }, []);
 
+  const applyBoard = useCallback(
+    (
+      next: SportsSignal[],
+      meta?: SportsListMeta | null,
+      opts?: { replaceEmpty?: boolean },
+    ) => {
+      const replaceEmpty = opts?.replaceEmpty ?? false;
+      const board = dedupeOneSidePerMarket(next);
+      setItems((prev) => {
+        if (board.length === 0 && prev.length > 0 && !replaceEmpty) {
+          // Keep the saved board when a remount refetch returns empty/failed.
+          return prev;
+        }
+        return board;
+      });
+      if (board.length === 0 && !replaceEmpty) {
+        // Still refresh odds timestamps from meta without clearing picks.
+        if (meta?.odds_fetched_at) {
+          setOddsFetchedAt(meta.odds_fetched_at);
+          writeSportsBoardCache(readSportsBoardCache()?.items ?? [], {
+            oddsFetchedAt: meta.odds_fetched_at,
+          });
+        }
+        return;
+      }
+      const asOf = meta?.board_as_of ?? boardAsOfFromItems(board);
+      if (asOf) setBoardAsOf(asOf);
+      if (meta?.odds_fetched_at) setOddsFetchedAt(meta.odds_fetched_at);
+      writeSportsBoardCache(board, {
+        boardAsOf: asOf,
+        oddsFetchedAt: meta?.odds_fetched_at ?? undefined,
+      });
+    },
+    [],
+  );
+
   const loadItems = useCallback(
-    async (token?: string, category?: string | null, sport?: string | null) => {
+    async (
+      token?: string,
+      category?: string | null,
+      sport?: string | null,
+      opts?: { replaceEmpty?: boolean },
+    ) => {
       const apiUrl = getApiUrl();
       // Always fetch the full upcoming slate — Window/Sort/Bet type filter client-side.
       // Fetching a narrow window then switching to a wider one used to leave the board stuck.
       const params = new URLSearchParams({ limit: "200", window: "all" });
       if (category) params.set("category", category);
       if (sport) params.set("sport", sport);
-      const res = await fetch(`${apiUrl}/signals/sports?${params}`, {
-        headers: apiRequestHeaders(token),
-        cache: "no-store",
-        credentials: usesBffProxy() ? "include" : "same-origin",
-      });
-      if (res.ok) {
-        const data = await res.json();
+      try {
+        const res = await fetch(`${apiUrl}/signals/sports?${params}`, {
+          headers: apiRequestHeaders(token),
+          cache: "no-store",
+          credentials: usesBffProxy() ? "include" : "same-origin",
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          items?: SportsSignal[];
+          meta?: SportsListMeta;
+        };
         const base = dedupeOneSidePerMarket(data.items ?? []);
-        setItems(base);
+        applyBoard(base, data.meta, { replaceEmpty: opts?.replaceEmpty });
         // Second pass: guarantee Kalshi pulse even if upstream API has no enrichment.
         const withKalshi = await attachKalshiPulse(base);
-        if (withKalshi !== base) setItems(withKalshi);
+        if (withKalshi !== base) {
+          applyBoard(withKalshi, data.meta, { replaceEmpty: opts?.replaceEmpty });
+        }
+      } catch {
+        // Keep existing / cached board on network errors.
       }
     },
-    [attachKalshiPulse],
+    [attachKalshiPulse, applyBoard],
   );
 
   async function handleWindowChange(next: SportsWindowKey) {
@@ -168,23 +242,30 @@ export function SportsSignalsView({
   }
 
   useEffect(() => {
+    // Soft remount: show cached/SSR board immediately; refresh without clearing on empty.
+    // Do NOT await resolve-outcomes here — that was wiping the board on every navigation.
     void (async () => {
       const token = await getToken();
       if (!(token || usesBffProxy())) return;
-      // Grade finished Atlas + user picks as soon as final scores exist, then refresh board.
-      try {
-        await fetch(`${getApiUrl()}/engine/resolve-outcomes?limit=60&module=sports`, {
-          method: "POST",
-          headers: apiRequestHeaders(token),
-          credentials: usesBffProxy() ? "include" : "same-origin",
-        });
-      } catch {
-        /* non-fatal — list still expires concluded games server-side */
-      }
-      await loadItems(token, activeCategory);
+      await loadItems(token, activeCategory, activeSport, { replaceEmpty: false });
+      void refreshOddsStatus();
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const fetched = oddsStatus?.cache_fetched_at;
+    if (!fetched) return;
+    setOddsFetchedAt(fetched);
+    writeSportsBoardCache(readSportsBoardCache()?.items ?? [], { oddsFetchedAt: fetched });
+  }, [oddsStatus?.cache_fetched_at]);
+
+  function rememberAction(kind: "scan" | "live" | "rescore" | "openai") {
+    const at = new Date().toISOString();
+    setLastActionAt(at);
+    setLastActionKind(kind);
+    markSportsBoardAction(kind);
+  }
 
   useEffect(() => {
     if (initialCategories.length) return;
@@ -209,13 +290,14 @@ export function SportsSignalsView({
       setFilter("all");
     }
     const token = await getToken();
-    await loadItems(token, slug, null);
+    // Category/sport changes are intentional filters — allow empty results.
+    await loadItems(token, slug, null, { replaceEmpty: true });
   }
 
   async function handleSportChange(sport: string | null) {
     setActiveSport(sport);
     const token = await getToken();
-    await loadItems(token, activeCategory, sport);
+    await loadItems(token, activeCategory, sport, { replaceEmpty: true });
   }
 
   async function refreshSports(mode: "scan" | "live" | "rescore") {
@@ -267,6 +349,7 @@ export function SportsSignalsView({
       const cacheUsed = body.cache_used as boolean | undefined;
       const liveOddsPulled = Boolean(body.live_odds_pulled || body.insight_pending);
       const apiMessage = body.message as string | undefined;
+      rememberAction(mode);
       setMessage(
         apiMessage ??
           (kept
@@ -285,7 +368,7 @@ export function SportsSignalsView({
 
       await Promise.all([
         loadCategories(token),
-        loadItems(token, null, null),
+        loadItems(token, null, null, { replaceEmpty: true }),
         refreshOddsStatus(),
       ]);
       router.refresh();
@@ -394,6 +477,7 @@ export function SportsSignalsView({
         return;
       }
       insightFetchFallbackUsed.current = false;
+      rememberAction("openai");
       // Keep the full board visible, but float Insight picks to the top so the run is obvious.
       setWindow("all");
       setFilter("all");
@@ -402,21 +486,7 @@ export function SportsSignalsView({
       setActiveCategory(null);
       await Promise.all([
         loadCategories(token),
-        (async () => {
-          const listParams = new URLSearchParams({
-            limit: "200",
-            window: "all",
-          });
-          const listRes = await fetch(`${apiUrl}/signals/sports?${listParams}`, {
-            headers: apiRequestHeaders(token),
-            cache: "no-store",
-            credentials: usesBffProxy() ? "include" : "same-origin",
-          });
-          if (listRes.ok) {
-            const data = await listRes.json();
-            setItems(dedupeOneSidePerMarket(data.items ?? []));
-          }
-        })(),
+        loadItems(token, null, null, { replaceEmpty: true }),
         refreshOddsStatus(),
       ]);
       router.refresh();
@@ -453,6 +523,11 @@ export function SportsSignalsView({
         cacheNeedsLive={cacheNeedsLive}
         creditsRemaining={oddsStatus?.total_remaining}
         keyCount={oddsStatus?.key_count}
+        oddsFetchedAt={oddsFetchedAt ?? oddsStatus?.cache_fetched_at}
+        oddsAgeMinutes={oddsStatus?.cache_age_minutes}
+        boardAsOf={boardAsOf}
+        lastActionAt={lastActionAt}
+        lastActionKind={lastActionKind}
       />
 
       <OddsQuotaBanner status={oddsStatus} />
