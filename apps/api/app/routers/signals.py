@@ -166,6 +166,18 @@ async def list_sports_signals(
         window=window,
     )
     items = [service.format_sports_item(row) for row in rows]
+    try:
+        from app.services.kalshi_public_pulse import enrich_sports_rows_with_kalshi
+
+        # Prices only on list — history candles made the enrich timeout so cards stayed empty.
+        items = await enrich_sports_rows_with_kalshi(
+            items,
+            max_rows=min(len(items), 48),
+            include_history=False,
+            timeout_sec=8.0,
+        )
+    except Exception:
+        pass
     return {
         "items": items,
         "total": len(items),
@@ -187,7 +199,15 @@ async def get_sports_signal(
     row = await service.get_sports(signal_id)
     if not row:
         raise HTTPException(status_code=404, detail="Sports signal not found")
-    return service.format_sports_item(row)
+    item = service.format_sports_item(row)
+    try:
+        from app.services.kalshi_public_pulse import enrich_sports_rows_with_kalshi
+
+        enriched = await enrich_sports_rows_with_kalshi([item], max_rows=1, timeout_sec=4.0)
+        item = enriched[0] if enriched else item
+    except Exception:
+        pass
+    return item
 
 
 @router.get("/top")

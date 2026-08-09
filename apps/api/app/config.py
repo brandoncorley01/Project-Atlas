@@ -81,6 +81,9 @@ class Settings(BaseSettings):
     atlas_max_news_confidence_adjustment: float = 6.0
     atlas_max_total_intelligence_adjustment: float = 12.0
 
+    # Kalshi public-probability pulse on sports cards (no API key; public trade API).
+    atlas_kalshi_public_pulse_enabled: bool = True
+
     # Market & Options Intelligence
     atlas_market_intelligence_enabled: bool = True
     atlas_options_flow_provider: str = "yahoo_derived"

@@ -11,6 +11,10 @@ import { LogOutcomeButtons } from "@/components/performance/LogOutcomeButtons";
 import { PickPerformanceBadge } from "@/components/performance/PickPerformanceBadge";
 import { AtlasExplainButton } from "@/components/ai/AtlasExplainButton";
 import { AnalystPickSection } from "@/components/sports/AnalystPickSection";
+import {
+  KalshiPublicPulse,
+  type KalshiPublicMarket,
+} from "@/components/sports/KalshiPublicPulse";
 import { sportBetMetadata } from "@/lib/watchlist-api";
 import { CATEGORY_SLUG_LABELS } from "@/lib/sports-categories";
 import { getSportMeta } from "@/lib/sport-meta";
@@ -53,6 +57,7 @@ export interface SportsSignal {
   pick_source?: string | null;
   openai_web?: boolean;
   user_entry?: boolean;
+  public_market?: KalshiPublicMarket | null;
   scoring_snapshot?: {
     source?: string;
     openai_web?: boolean;
@@ -62,6 +67,7 @@ export interface SportsSignal {
     is_fight_prop?: boolean;
     prop_market?: string;
     fanduel_verified?: boolean;
+    public_market?: KalshiPublicMarket | null;
     [key: string]: unknown;
   } | null;
   team_stats?: {
@@ -333,6 +339,13 @@ export function SportsSignalCard({
 
       {bookOdds.length > 0 && (
         <BookOddsStrip books={bookOdds} preferredBook={preferredBook} compact={!expanded} />
+      )}
+
+      {(row.public_market || row.scoring_snapshot?.public_market) && (
+        <KalshiPublicPulse
+          market={(row.public_market || row.scoring_snapshot?.public_market) as KalshiPublicMarket}
+          compact={!expanded}
+        />
       )}
 
       <div className="mt-4 flex flex-wrap items-center gap-3">

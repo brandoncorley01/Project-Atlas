@@ -23,4 +23,15 @@ export const MOBILE_LAYOUT_PREVIEW_SIGNAL: SportsSignal = {
     { key: "fanduel", title: "FanDuel", american: -110, is_primary: true },
     { key: "draftkings", title: "DraftKings", american: -112 },
   ],
+  public_market: {
+    source: "kalshi",
+    series_ticker: "KXMLBGAME",
+    event_ticker: "KXMLBGAME-PREVIEW",
+    title: "Arizona vs San Diego",
+    side_a: { abbr: "SD", label: "San Diego", implied_pct: 54 },
+    side_b: { abbr: "ARI", label: "Arizona", implied_pct: 46 },
+    history_a: [51, 52, 50, 53, 55, 54, 56, 53, 54, 55, 54, 54],
+    history_b: [49, 48, 50, 47, 45, 46, 44, 47, 46, 45, 46, 46],
+    stance_vs_pick: "sure",
+  },
 };

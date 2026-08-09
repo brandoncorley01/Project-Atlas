@@ -5,6 +5,7 @@ import { CATEGORY_SLUG_LABELS } from "@/lib/sports-categories";
 import { getSupabaseEnv } from "@/lib/env";
 import { createClient } from "@/lib/supabase/server";
 import { apiFetch } from "@/lib/api";
+import { enrichSportsItemsWithKalshi } from "@/lib/kalshi-public-pulse";
 
 export default async function SportsDetailPage({
   params,
@@ -20,7 +21,12 @@ export default async function SportsDetailPage({
     const token = session.data.session?.access_token;
     if (token) {
       try {
-        signal = await apiFetch<SportsSignal>(`/signals/sports/${id}`, token);
+        const raw = await apiFetch<SportsSignal>(`/signals/sports/${id}`, token);
+        const [enriched] = await enrichSportsItemsWithKalshi(
+          [raw as unknown as Record<string, unknown>],
+          { maxRows: 1 },
+        );
+        signal = (enriched as unknown as SportsSignal) ?? raw;
       } catch {
         signal = null;
       }
