@@ -99,6 +99,35 @@ export function SportsSignalsView({
     }
   }, []);
 
+  const attachKalshiPulse = useCallback(async (rows: SportsSignal[]) => {
+    if (!rows.length) return rows;
+    // Skip round-trip when the BFF/API already attached pulses.
+    if (rows.some((r) => r.public_market || r.scoring_snapshot?.public_market)) {
+      return rows;
+    }
+    try {
+      const res = await fetch("/api/kalshi/enrich", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        cache: "no-store",
+        body: JSON.stringify({ items: rows.slice(0, 60) }),
+      });
+      if (!res.ok) return rows;
+      const data = (await res.json()) as { items?: SportsSignal[] };
+      const enriched = data.items ?? [];
+      if (!enriched.length) return rows;
+      const byId = new Map(enriched.map((r) => [r.id, r]));
+      return rows.map((row) => {
+        const next = byId.get(row.id);
+        if (!next?.public_market) return row;
+        return { ...row, public_market: next.public_market };
+      });
+    } catch {
+      return rows;
+    }
+  }, []);
+
   const loadItems = useCallback(
     async (token?: string, category?: string | null, sport?: string | null) => {
       const apiUrl = getApiUrl();
@@ -114,10 +143,14 @@ export function SportsSignalsView({
       });
       if (res.ok) {
         const data = await res.json();
-        setItems(dedupeOneSidePerMarket(data.items ?? []));
+        const base = dedupeOneSidePerMarket(data.items ?? []);
+        setItems(base);
+        // Second pass: guarantee Kalshi pulse even if upstream API has no enrichment.
+        const withKalshi = await attachKalshiPulse(base);
+        if (withKalshi !== base) setItems(withKalshi);
       }
     },
-    [],
+    [attachKalshiPulse],
   );
 
   async function handleWindowChange(next: SportsWindowKey) {
