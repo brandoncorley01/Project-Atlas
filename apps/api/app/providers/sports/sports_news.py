@@ -18,6 +18,11 @@ USER_AGENT = "ProjectAtlas/1.0 (sports-analysis; +https://github.com)"
 
 SPORTS_RSS_FEEDS = [
     ("espn", "https://www.espn.com/espn/rss/news"),
+    ("espn_mlb", "https://www.espn.com/espn/rss/mlb/news"),
+    ("espn_nba", "https://www.espn.com/espn/rss/nba/news"),
+    ("espn_nfl", "https://www.espn.com/espn/rss/nfl/news"),
+    ("espn_nhl", "https://www.espn.com/espn/rss/nhl/news"),
+    ("espn_soccer", "https://www.espn.com/espn/rss/soccer/news"),
     ("cbssports", "https://www.cbssports.com/rss/headlines/"),
     ("bbc_sport", "https://feeds.bbci.co.uk/sport/rss.xml"),
 ]
@@ -28,7 +33,8 @@ SPORT_KEYWORDS: dict[str, tuple[str, ...]] = {
     "WNBA": ("wnba", "women's basketball", "aces", "liberty", "fever"),
     "MLB": ("mlb", "baseball", "pitcher", "home run", "world series", "inning"),
     "NHL": ("nhl", "hockey", "stanley cup", "goalie"),
-    "MLS": ("mls", "soccer", "premier league", "champions league", "fifa", "liga mx"),
+    # Keep MLS scoped — do NOT pull EPL/UCL headlines into MLS matchups.
+    "MLS": ("mls", "major league soccer", "liga mx"),
     "EPL": ("epl", "premier league", "arsenal", "liverpool", "manchester"),
     "UFC": ("ufc", "mma", "fight", "octagon"),
     "Boxing": ("boxing", "heavyweight", "title fight", "knockout"),
@@ -60,6 +66,10 @@ SPORT_CONFLICTS: dict[str, tuple[str, ...]] = {
         "quarterback",
         "nba",
         "nfl",
+        "nhl",
+        "stanley cup",
+        "ufc",
+        "mma",
     ),
     "NBA": (
         "world cup",
@@ -72,6 +82,20 @@ SPORT_CONFLICTS: dict[str, tuple[str, ...]] = {
         "stanley cup",
         "usmnt",
         "fifa",
+        "nhl",
+        "ufc",
+        "wnba",
+    ),
+    "WNBA": (
+        "nba",
+        "nfl",
+        "mlb",
+        "nhl",
+        "touchdown",
+        "home run",
+        "pitcher",
+        "ufc",
+        "premier league",
     ),
     "NFL": (
         "world cup",
@@ -83,6 +107,8 @@ SPORT_CONFLICTS: dict[str, tuple[str, ...]] = {
         "usmnt",
         "fifa",
         "stanley cup",
+        "nhl",
+        "ufc",
     ),
     "NHL": (
         "touchdown",
@@ -93,11 +119,75 @@ SPORT_CONFLICTS: dict[str, tuple[str, ...]] = {
         "usmnt",
         "fifa",
         "premier league",
+        "nfl",
+        "ufc",
     ),
-    "MLS": ("touchdown", "quarterback", "home run", "pitcher", "mlb", "nba", "nfl"),
+    "MLS": (
+        "touchdown",
+        "quarterback",
+        "home run",
+        "pitcher",
+        "mlb",
+        "nba",
+        "nfl",
+        "nhl",
+        "premier league",
+        "champions league",
+        "la liga",
+        "bundesliga",
+        "serie a",
+        "epl",
+    ),
+    "EPL": (
+        "mls",
+        "major league soccer",
+        "nfl",
+        "nba",
+        "mlb",
+        "nhl",
+        "touchdown",
+        "home run",
+        "ufc",
+    ),
+    "UFC": (
+        "nfl",
+        "nba",
+        "mlb",
+        "nhl",
+        "premier league",
+        "touchdown",
+        "home run",
+        "soccer",
+    ),
+    "Boxing": ("ufc", "mma", "nfl", "nba", "mlb", "nhl", "soccer"),
+    "Tennis": ("nfl", "nba", "mlb", "nhl", "ufc", "soccer", "touchdown"),
+    "Golf": ("nfl", "nba", "mlb", "nhl", "ufc", "soccer", "touchdown"),
 }
 
-MIN_NEWS_MATCH_SCORE = 7.0
+# Ambiguous shared mascots — require a multi-word / city+mascot hit.
+AMBIGUOUS_MASCOTS = frozenset(
+    {
+        "united",
+        "city",
+        "rangers",
+        "giants",
+        "kings",
+        "jets",
+        "cardinals",
+        "panthers",
+        "wild",
+        "fc",
+        "athletic",
+        "royale",
+        "stars",
+        "fire",
+    }
+)
+
+# Keep short but distinctive mascots that are otherwise stripped by len>=4.
+SHORT_MASCOT_ALLOW = frozenset({"sox", "avs", "avs.", "red sox", "white sox"})
+
+MIN_NEWS_MATCH_SCORE = 6.5
 MIN_PRIMARY_HITS = 1
 
 
@@ -105,6 +195,8 @@ MIN_PRIMARY_HITS = 1
 class TeamMatchTokens:
     primary: tuple[str, ...]
     secondary: tuple[str, ...]
+    selection_primary: tuple[str, ...] = ()
+    event_sides: tuple[str, ...] = ()
 
     @property
     def display_names(self) -> list[str]:
@@ -208,7 +300,12 @@ def _add_team_tokens(tokens: TeamMatchTokens, team_phrase: str) -> TeamMatchToke
     secondary = set(tokens.secondary)
     cleaned = _clean_team_phrase(team_phrase)
     if len(cleaned) < 3:
-        return TeamMatchTokens(tuple(sorted(primary)), tuple(sorted(secondary)))
+        return TeamMatchTokens(
+            tuple(sorted(primary)),
+            tuple(sorted(secondary)),
+            tokens.selection_primary,
+            tokens.event_sides,
+        )
 
     words = [w for w in cleaned.split() if w]
     low = cleaned.lower()
@@ -216,7 +313,8 @@ def _add_team_tokens(tokens: TeamMatchTokens, team_phrase: str) -> TeamMatchToke
 
     if len(words) >= 2:
         mascot = words[-1].lower()
-        if len(mascot) >= 3:
+        # Keep short distinctive mascots (sox); skip ultra-generic 3-letter tokens.
+        if len(mascot) >= 4 or mascot in SHORT_MASCOT_ALLOW:
             primary.add(mascot)
         city = " ".join(words[:-1]).lower()
         if city and city != mascot:
@@ -224,7 +322,12 @@ def _add_team_tokens(tokens: TeamMatchTokens, team_phrase: str) -> TeamMatchToke
     elif len(words) == 1 and len(words[0]) >= 5:
         primary.add(words[0].lower())
 
-    return TeamMatchTokens(tuple(sorted(primary)), tuple(sorted(secondary)))
+    return TeamMatchTokens(
+        tuple(sorted(primary)),
+        tuple(sorted(secondary)),
+        tokens.selection_primary,
+        tokens.event_sides,
+    )
 
 
 def extract_event_tokens(event_name: str, selection: str) -> TeamMatchTokens:
@@ -233,18 +336,44 @@ def extract_event_tokens(event_name: str, selection: str) -> TeamMatchTokens:
     Secondary = city-only phrases — never sufficient on their own.
     """
     tokens = TeamMatchTokens(primary=(), secondary=())
+    sides: list[str] = []
 
     for part in re.split(r"\s+(?:vs\.?|v\.?|@|at)\s+", event_name, flags=re.I):
+        cleaned = _clean_team_phrase(part)
+        if cleaned:
+            sides.append(cleaned.lower())
         tokens = _add_team_tokens(tokens, part)
 
     selection_team = _clean_selection_team(selection)
+    selection_primary: set[str] = set()
     if selection_team:
         tokens = _add_team_tokens(tokens, selection_team)
+        # Full selection phrase + its mascot count as the selected side.
+        selection_primary.add(selection_team.lower())
+        sel_words = selection_team.lower().split()
+        if sel_words:
+            mascot = sel_words[-1]
+            if len(mascot) >= 4 or mascot in SHORT_MASCOT_ALLOW:
+                selection_primary.add(mascot)
 
-    # Drop very short primary tokens that cause noise.
-    primary = tuple(t for t in tokens.primary if len(t) >= 4 or " " in t)
+    # Drop very short primary tokens that cause noise — keep allowlisted short mascots.
+    primary = tuple(
+        t
+        for t in tokens.primary
+        if len(t) >= 4 or " " in t or t in SHORT_MASCOT_ALLOW
+    )
     secondary = tuple(t for t in tokens.secondary if len(t) >= 4)
-    return TeamMatchTokens(primary=primary, secondary=secondary)
+    sel_primary = tuple(
+        t
+        for t in selection_primary
+        if len(t) >= 4 or " " in t or t in SHORT_MASCOT_ALLOW
+    )
+    return TeamMatchTokens(
+        primary=primary,
+        secondary=secondary,
+        selection_primary=sel_primary,
+        event_sides=tuple(sides),
+    )
 
 
 def _sport_keywords(sport: str) -> tuple[str, ...]:
@@ -270,33 +399,113 @@ def _has_sport_conflict(sport: str, hay: str) -> bool:
     return False
 
 
+def _has_sport_signal(hay: str, sport_words: tuple[str, ...]) -> bool:
+    return any(_contains_phrase(hay, word) for word in sport_words)
+
+
 def _score_headline(
     hay: str,
     tokens: TeamMatchTokens,
     sport_words: tuple[str, ...],
-) -> tuple[float, int, list[str]]:
+) -> tuple[float, int, list[str], int]:
+    """Return score, primary_hits, matched tokens, and distinct event-side hits."""
     score = 0.0
     primary_hits = 0
     matched: list[str] = []
+    side_hits = 0
 
     for token in tokens.primary:
-        if _contains_phrase(hay, token):
-            weight = 6.0 if " " in token else 5.0
-            score += weight
-            primary_hits += 1
-            matched.append(token)
+        if not _contains_phrase(hay, token):
+            continue
+        # Ambiguous single-token mascots alone are weak — only count with full phrase.
+        if " " not in token and token in AMBIGUOUS_MASCOTS:
+            # Only count if a fuller primary (city + mascot) also hit, scored later.
+            continue
+        weight = 6.0 if " " in token else 5.0
+        if token in SHORT_MASCOT_ALLOW and " " not in token:
+            weight = 5.5
+        score += weight
+        primary_hits += 1
+        matched.append(token)
+
+    # Count ambiguous mascot only when multi-word side phrase also matches.
+    for token in tokens.primary:
+        if " " in token or token not in AMBIGUOUS_MASCOTS:
+            continue
+        if not _contains_phrase(hay, token):
+            continue
+        fuller = any((" " in p and token in p and _contains_phrase(hay, p)) for p in tokens.primary)
+        if fuller:
+            continue  # already counted via fuller phrase
+        # City+mascot not present — do not count bare "united"/"rangers".
+        continue
 
     for token in tokens.secondary:
         if _contains_phrase(hay, token):
             score += 1.0
             matched.append(token)
 
-    for word in sport_words:
-        if _contains_phrase(hay, word):
-            score += 0.5
-            break
+    sides_matched: set[str] = set()
+    ambiguous_sides: set[str] = set()
+    for side in tokens.event_sides:
+        if not side:
+            continue
+        if _contains_phrase(hay, side):
+            sides_matched.add(side)
+            continue
+        words = side.split()
+        if not words:
+            continue
+        mascot = words[-1]
+        if not ((len(mascot) >= 4 or mascot in SHORT_MASCOT_ALLOW) and _contains_phrase(hay, mascot)):
+            continue
+        # Ambiguous bare mascot (rangers/united) is only a soft side hit.
+        if mascot in AMBIGUOUS_MASCOTS and not _contains_phrase(hay, side):
+            ambiguous_sides.add(side)
+            continue
+        sides_matched.add(side)
+    # If one clear side hit exists, allow an ambiguous opposite mascot (e.g. Sounders + Galaxy).
+    if sides_matched and ambiguous_sides:
+        sides_matched.update(ambiguous_sides)
+    side_hits = len(sides_matched)
 
-    return score, primary_hits, matched
+    if _has_sport_signal(hay, sport_words):
+        score += 1.5
+
+    return score, primary_hits, matched, side_hits
+
+
+def _passes_match_gate(
+    *,
+    sport: str,
+    hay: str,
+    tokens: TeamMatchTokens,
+    sport_words: tuple[str, ...],
+    score: float,
+    primary_hits: int,
+    side_hits: int,
+    matched_tokens: list[str],
+) -> bool:
+    """Strict board verification — both sides or selection side + sport."""
+    if primary_hits < MIN_PRIMARY_HITS or score < MIN_NEWS_MATCH_SCORE:
+        return False
+
+    sport_hit = _has_sport_signal(hay, sport_words)
+    # When we know the sport vocabulary, require a sport signal OR two-team matchup hit.
+    known_sport = any(k.upper() in sport.upper() for k in SPORT_KEYWORDS)
+    if known_sport and not sport_hit and side_hits < 2:
+        return False
+
+    selection_hit = any(t in matched_tokens or _contains_phrase(hay, t) for t in tokens.selection_primary)
+    both_sides = side_hits >= 2
+    if both_sides:
+        return True
+    if selection_hit and (sport_hit or score >= 11.0):
+        return True
+    # Totals / props without a clean selection team: require both event sides.
+    if not tokens.selection_primary:
+        return both_sides and sport_hit
+    return False
 
 
 def _match_percent(score: float, primary_hits: int) -> int:
@@ -326,8 +535,17 @@ def match_news_to_signal(
         if _has_sport_conflict(sport, hay):
             continue
 
-        score, primary_hits, matched_tokens = _score_headline(hay, tokens, sport_words)
-        if primary_hits < MIN_PRIMARY_HITS or score < MIN_NEWS_MATCH_SCORE:
+        score, primary_hits, matched_tokens, side_hits = _score_headline(hay, tokens, sport_words)
+        if not _passes_match_gate(
+            sport=sport,
+            hay=hay,
+            tokens=tokens,
+            sport_words=sport_words,
+            score=score,
+            primary_hits=primary_hits,
+            side_hits=side_hits,
+            matched_tokens=matched_tokens,
+        ):
             continue
 
         pct = _match_percent(score, primary_hits)
@@ -339,6 +557,8 @@ def match_news_to_signal(
                     **item,
                     "relevance_score": pct,
                     "matched_tokens": matched_tokens,
+                    "context_tier": "matchup",
+                    "side_hits": side_hits,
                 },
             )
         )
@@ -354,8 +574,8 @@ def match_news_for_insight(
     limit: int = 8,
 ) -> list[dict[str, Any]]:
     """
-    Broader matching for Atlas insight — team/selection hits first, then sport-context
-    headlines so the model always has general data to reason from.
+    Broader matching for Atlas insight — verified matchup hits first, then softer
+    team/sport context for the model (not for board "verified news").
     """
     direct = match_news_to_signal(signal, news_pool, limit=limit)
     if len(direct) >= 3:
@@ -377,18 +597,18 @@ def match_news_for_insight(
         if _has_sport_conflict(sport, hay):
             continue
 
-        score, primary_hits, matched = _score_headline(hay, tokens, sport_words)
-        # Soft: any team token OR clear sport keyword
-        sport_hit = any(_contains_phrase(hay, w) for w in sport_words)
-        if primary_hits >= 1 or (sport_hit and score >= 2.0):
+        score, primary_hits, matched, side_hits = _score_headline(hay, tokens, sport_words)
+        selection_hit = any(_contains_phrase(hay, t) for t in tokens.selection_primary)
+        # Soft team context: selection side named, or both sides — never bare sport only.
+        if primary_hits >= 1 and (selection_hit or side_hits >= 2):
             soft.append(
                 (
-                    score + (10 if primary_hits else 0),
+                    score + 10,
                     {
                         **item,
                         "relevance_score": _match_percent(max(score, 3.0), max(primary_hits, 0)),
                         "matched_tokens": matched,
-                        "context_tier": "team" if primary_hits else "sport",
+                        "context_tier": "team",
                     },
                 )
             )
@@ -403,7 +623,7 @@ def match_news_for_insight(
         if len(direct) >= limit:
             break
 
-    # Still thin — attach top sport-tagged headlines as general context
+    # Still thin — attach top sport-tagged headlines as general LLM context only.
     if len(direct) < 3 and sport_words:
         for item in news_pool:
             if len(direct) >= limit:
