@@ -406,40 +406,42 @@ class SportsRefreshService:
         tag_pool_categories(setups)
 
         news_pool: list[dict[str, Any]] = []
-        # News enrichment is nice-to-have; skip on cache scans so the board returns fast.
-        if not used_cache:
-            try:
-                news_pool = await fetch_sports_news(limit_per_feed=10)
-            except Exception as exc:
-                logger.warning("Sports news fetch skipped: %s", exc)
+        # Always try a light news pass so Rescore/cache boards get matchup-verified
+        # headlines (strict matcher is cheap; RSS is the slower part).
+        try:
+            news_pool = await fetch_sports_news(limit_per_feed=8 if used_cache else 12)
+        except Exception as exc:
+            logger.warning("Sports news fetch skipped: %s", exc)
 
         for row in setups:
-            if news_pool:
-                matched = match_news_to_signal(row, news_pool)
-                analysis = build_news_analysis(row, matched)
-                row["explanation"] = analysis["explanation"]
-                row["bull_case"] = analysis["bull_case"]
-                row["bear_case"] = analysis["bear_case"]
-                snap = row.setdefault("scoring_snapshot", {})
-                snap["related_news"] = [
-                    {
-                        "title": n.get("title"),
-                        "url": n.get("url"),
-                        "source": n.get("source"),
-                        "summary": n.get("summary"),
-                        "published_at": n.get("published_at"),
-                        "relevance_score": n.get("relevance_score"),
-                        "matched_tokens": n.get("matched_tokens"),
-                    }
-                    for n in matched
-                ]
-                snap["analysis_summary"] = analysis["analysis_summary"]
-                snap["news_count"] = len(matched)
-                snap["news_verified"] = bool(analysis.get("news_verified"))
-                snap["timing_tier"] = timing_tier(row)
-            else:
-                snap = row.setdefault("scoring_snapshot", {})
-                snap["timing_tier"] = timing_tier(row)
+            snap = row.setdefault("scoring_snapshot", {})
+            snap["timing_tier"] = timing_tier(row)
+            if not news_pool:
+                continue
+            matched = match_news_to_signal(row, news_pool)
+            # Keep prior verified news if this pass finds nothing (avoid wiping good context).
+            if not matched and snap.get("news_verified") and snap.get("related_news"):
+                continue
+            analysis = build_news_analysis(row, matched)
+            row["explanation"] = analysis["explanation"]
+            row["bull_case"] = analysis["bull_case"]
+            row["bear_case"] = analysis["bear_case"]
+            snap["related_news"] = [
+                {
+                    "title": n.get("title"),
+                    "url": n.get("url"),
+                    "source": n.get("source"),
+                    "summary": n.get("summary"),
+                    "published_at": n.get("published_at"),
+                    "relevance_score": n.get("relevance_score"),
+                    "matched_tokens": n.get("matched_tokens"),
+                    "context_tier": n.get("context_tier"),
+                }
+                for n in matched
+            ]
+            snap["analysis_summary"] = analysis["analysis_summary"]
+            snap["news_count"] = len(matched)
+            snap["news_verified"] = bool(analysis.get("news_verified"))
 
         setups = sort_for_display([row for row in setups if is_sports_actionable(row)])
 
@@ -602,7 +604,7 @@ class SportsRefreshService:
 
                     await SportsIntelligenceService(self.db, self.user_id).refresh_active_signals(
                         saved,
-                        limit=min(8, len(saved)),
+                        limit=min(16, len(saved)),
                     )
                 except Exception as exc:
                     logger.warning("Post-scan intelligence refresh skipped: %s", exc)

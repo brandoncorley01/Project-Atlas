@@ -7,11 +7,48 @@ import re
 from typing import Any
 
 from app.config import settings
-from app.providers.sports.sports_news import fetch_sports_news, match_news_to_signal
+from app.providers.sports.sports_news import (
+    AMBIGUOUS_MASCOTS,
+    _contains_phrase,
+    fetch_sports_news,
+    match_news_to_signal,
+)
 from app.sports_intelligence.providers.base import SportsIntelligenceProvider
 from app.sports_intelligence.types import RawIntelligenceItem
 
 logger = logging.getLogger(__name__)
+
+_LEAN_WORDS = (
+    "favor",
+    "favours",
+    "lean",
+    "likes",
+    "backing",
+    "pick",
+    "value",
+    "covers",
+    "beat",
+    "edge",
+    "best bet",
+    "recommend",
+    "projected winner",
+    "our pick",
+    "should cover",
+    "can win",
+)
+
+_PICK_PHRASES = (
+    "best bet",
+    "our pick",
+    "pick:",
+    "leans ",
+    "lean ",
+    "favor ",
+    "favours ",
+    "take the ",
+    "backing ",
+    "recommend ",
+)
 
 
 class RssNewsIntelligenceProvider(SportsIntelligenceProvider):
@@ -48,28 +85,38 @@ class RssNewsIntelligenceProvider(SportsIntelligenceProvider):
             summary = str(row.get("summary") or title)[:500]
             source_type = "injury_update" if _is_injury_headline(title, summary) else "news_article"
             predicted = _infer_supported_selection(title, summary, atlas_selection, home, away)
+            # Only promote to analyst_pick when the headline is an explicit lean/pick.
+            is_analyst = bool(predicted) and _has_explicit_pick_language(title, summary)
             items.append(
                 RawIntelligenceItem(
                     external_id=str(row.get("url") or row.get("title") or ""),
-                    source_type="analyst_pick" if predicted else source_type,
+                    source_type="analyst_pick" if is_analyst else source_type,
                     title=title,
                     summary=summary,
                     source_url=row.get("url"),
                     published_at=row.get("published_at"),
                     author_name=str(row.get("source") or "Sports media"),
-                    predicted_selection=predicted,
+                    predicted_selection=predicted if is_analyst else None,
                     predicted_market=str(signal.get("bet_type") or "") or None,
-                    key_arguments=[summary[:180]] if predicted else [],
+                    key_arguments=[summary[:180]] if is_analyst else [],
                     teams_mentioned=_teams_from_row(row, params),
                     injury_mentions=_injury_from_headline(title, summary) if source_type == "injury_update" else [],
                     raw_metadata={
                         "relevance_score": row.get("relevance_score"),
-                        "supports_atlas": bool(predicted),
+                        "supports_atlas": bool(is_analyst),
                         "source_name": str(row.get("source") or "Sports media"),
+                        "context_tier": row.get("context_tier"),
                     },
                 )
             )
         return items
+
+
+def _has_explicit_pick_language(title: str, summary: str) -> bool:
+    hay = f"{title} {summary}".lower()
+    if any(p in hay for p in _PICK_PHRASES):
+        return True
+    return any(_contains_phrase(hay, w) for w in ("favor", "favours", "lean", "best bet", "covers"))
 
 
 def _infer_supported_selection(
@@ -86,43 +133,68 @@ def _infer_supported_selection(
     sel = atlas_selection.lower().strip()
     # Totals
     if sel in {"over", "under"}:
-        if sel in hay and any(w in hay for w in ("over", "under", "total", "o/u")):
-            # Avoid counting the opposite total word as support
+        if not _contains_phrase(hay, sel):
+            return None
+        if any(w in hay for w in ("over", "under", "total", "o/u")):
             opposite = "under" if sel == "over" else "over"
-            if opposite in hay and hay.find(sel) > hay.find(opposite):
+            if _contains_phrase(hay, opposite) and hay.find(sel) > hay.find(opposite):
                 return None
             return atlas_selection
         return None
 
-    # Team / side — require selection (or core team token) in headline with lean language
-    tokens = [t for t in re.split(r"[\s/]+", sel) if len(t) > 2]
-    if not any(t in hay for t in tokens):
-        # Try home/away if selection is a formatted spread label
-        for team in (home, away):
-            if team and team.lower() in sel and team.lower() in hay:
-                tokens = [team.lower()]
+    # Prefer full selection / full team phrases with word boundaries.
+    team_phrases = [sel]
+    for team in (home, away):
+        t = str(team or "").strip().lower()
+        if t and (t in sel or sel in t):
+            team_phrases.append(t)
+
+    named_side = False
+    for phrase in team_phrases:
+        if not phrase:
+            continue
+        if _contains_phrase(hay, phrase):
+            named_side = True
+            break
+        words = [w for w in re.split(r"[\s/]+", phrase) if len(w) > 2]
+        if not words:
+            continue
+        # Require city+mascot for ambiguous mascots; otherwise mascot word-boundary is OK.
+        mascot = words[-1]
+        if mascot in AMBIGUOUS_MASCOTS:
+            if len(words) >= 2 and _contains_phrase(hay, " ".join(words)):
+                named_side = True
                 break
-        else:
-            return None
+            continue
+        if _contains_phrase(hay, mascot) and (
+            len(words) == 1 or _contains_phrase(hay, words[0]) or _contains_phrase(hay, phrase)
+        ):
+            named_side = True
+            break
+
+    if not named_side:
+        return None
 
     negative = (
-        "injury", "injured", "out for", "ruled out", "doubtful", "suspend",
-        "blowout loss", "eliminated", "benched",
+        "injury",
+        "injured",
+        "out for",
+        "ruled out",
+        "doubtful",
+        "suspend",
+        "blowout loss",
+        "eliminated",
+        "benched",
     )
     if any(n in hay for n in negative) and not any(
         w in hay for w in ("despite", "returns", "cleared", "expected to play")
     ):
         return None
 
-    lean = (
-        "favor", "favours", "lean", "like", "back", "pick", "play", "value",
-        "covers", "wins", "beat", "edge", "best bet", "take", "recommend",
-        "unlock", "preview", "keys to", "can win", "should",
-    )
-    if any(w in hay for w in lean) or any(t in hay for t in tokens[:2]):
-        # Headline names Atlas's side — treat as supporting context from that outlet
-        return atlas_selection
-    return None
+    # Require lean/pick language — mere name mention is news, not analyst backing.
+    if not any(_contains_phrase(hay, w) if " " not in w else w in hay for w in _LEAN_WORDS):
+        return None
+    return atlas_selection
 
 
 def _is_injury_headline(title: str, summary: str) -> bool:

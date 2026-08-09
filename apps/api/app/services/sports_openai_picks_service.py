@@ -67,10 +67,18 @@ def _news_stub_from_item(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _attach_web_news(item: dict[str, Any], news_pool: list[dict[str, Any]]) -> dict[str, Any]:
-    """Match free RSS headlines to this catalog pick (no Odds credits)."""
+    """Match free RSS headlines to this catalog pick (no Odds credits).
+
+    Soft sport-tier headlines may inform Atlas Insight context, but only
+    matchup/team-tier hits are marked news_verified for the board UI.
+    """
     if not news_pool:
         return item
-    matched = match_news_for_insight(_news_stub_from_item(item), news_pool, limit=4)
+    from app.providers.sports.sports_news import match_news_to_signal
+
+    stub = _news_stub_from_item(item)
+    verified = match_news_to_signal(stub, news_pool, limit=4)
+    matched = verified or match_news_for_insight(stub, news_pool, limit=4)
     if not matched:
         return item
     related = []
@@ -79,12 +87,26 @@ def _attach_web_news(item: dict[str, Any], news_pool: list[dict[str, Any]]) -> d
         title = str(n.get("title") or "").strip()
         if not title:
             continue
+        tier = str(n.get("context_tier") or "")
+        # Never surface pure sport-context as board "verified" related news.
+        if tier == "sport" and not verified:
+            sources.append(
+                {
+                    "type": "news",
+                    "title": title[:160],
+                    "url": n.get("url"),
+                    "provider": n.get("source") or n.get("provider") or "rss",
+                    "context_tier": "sport",
+                }
+            )
+            continue
         related.append(
             {
                 "title": title[:160],
                 "url": n.get("url"),
                 "source": n.get("source") or n.get("provider"),
                 "relevance_score": n.get("relevance_score"),
+                "context_tier": tier or "matchup",
             }
         )
         sources.append(
@@ -95,15 +117,19 @@ def _attach_web_news(item: dict[str, Any], news_pool: list[dict[str, Any]]) -> d
                 "provider": n.get("source") or n.get("provider") or "rss",
             }
         )
-    if not related:
-        return item
     item = dict(item)
+    if sources:
+        item["_context_sources"] = sources
+    if not related:
+        # Soft context only — do not stamp verified.
+        item["_news_verified"] = False
+        return item
     item["_related_news"] = related
-    item["_context_sources"] = sources
-    item["_news_verified"] = True
+    item["_news_verified"] = bool(verified)
     item["_news_headline"] = related[0]["title"]
-    # Small ranking nudge when public coverage exists for this matchup.
-    item["_learning_boost"] = float(item.get("_learning_boost") or 0) + 1.5
+    # Small ranking nudge only for truly verified matchup coverage.
+    if verified:
+        item["_learning_boost"] = float(item.get("_learning_boost") or 0) + 1.5
     return item
 
 
