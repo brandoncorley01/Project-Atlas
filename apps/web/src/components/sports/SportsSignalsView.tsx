@@ -535,7 +535,10 @@ export function SportsSignalsView({
       <SportsEventSearch
         onBetLogged={async () => {
           const token = await getToken();
-          await Promise.all([loadCategories(token), loadItems(token, activeCategory)]);
+          await Promise.all([
+            loadCategories(token),
+            loadItems(token, activeCategory, activeSport, { replaceEmpty: false }),
+          ]);
           router.refresh();
         }}
       />
