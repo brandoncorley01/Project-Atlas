@@ -101,27 +101,29 @@ export function SportsSignalsView({
 
   const attachKalshiPulse = useCallback(async (rows: SportsSignal[]) => {
     if (!rows.length) return rows;
-    // Skip round-trip when the BFF/API already attached pulses.
-    if (rows.some((r) => r.public_market || r.scoring_snapshot?.public_market)) {
-      return rows;
-    }
+    const needs = rows.filter((r) => !r.public_market && !r.scoring_snapshot?.public_market);
+    if (!needs.length) return rows;
     try {
       const res = await fetch("/api/kalshi/enrich", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         cache: "no-store",
-        body: JSON.stringify({ items: rows.slice(0, 60) }),
+        body: JSON.stringify({ items: needs.slice(0, 60) }),
       });
       if (!res.ok) return rows;
       const data = (await res.json()) as { items?: SportsSignal[] };
       const enriched = data.items ?? [];
       if (!enriched.length) return rows;
-      const byId = new Map(enriched.map((r) => [r.id, r]));
+      const byId = new Map(
+        enriched
+          .filter((r) => r.public_market)
+          .map((r) => [r.id, r.public_market] as const),
+      );
+      if (!byId.size) return rows;
       return rows.map((row) => {
-        const next = byId.get(row.id);
-        if (!next?.public_market) return row;
-        return { ...row, public_market: next.public_market };
+        const pulse = byId.get(row.id);
+        return pulse ? { ...row, public_market: pulse } : row;
       });
     } catch {
       return rows;
