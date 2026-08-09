@@ -83,6 +83,7 @@ export interface SportsSignal {
   invalidation?: string | null;
   suggested_action?: string | null;
   risk_warning?: string;
+  data_as_of?: string | null;
   data_as_of_label?: string | null;
   hours_until_start?: number | null;
   is_stale?: boolean;

@@ -27,7 +27,7 @@ export function boardAsOfFromItems(items: SportsSignal[]): string | null {
   let best: string | null = null;
   let bestMs = 0;
   for (const row of items) {
-    const raw = row.data_as_of;
+    const raw = row.data_as_of ?? null;
     if (typeof raw !== "string" || !raw) continue;
     const ms = Date.parse(raw);
     if (!Number.isFinite(ms)) continue;
