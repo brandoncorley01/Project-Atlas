@@ -145,6 +145,17 @@ async def create_sports_user_bet(
     return {**result, "item": formatted}
 
 
+@router.post("/sports/user-bets/recover")
+async def recover_sports_user_bets(
+    user_id: str = Depends(get_current_user_id),
+    token: str = Depends(get_access_token),
+) -> dict:
+    """Reactivate Search bets that were incorrectly expired or purged from the board."""
+    from app.services.sports_user_bets_service import SportsUserBetsService
+
+    return await SportsUserBetsService(SupabaseClient(token), user_id).recover_user_bets()
+
+
 @router.get("/sports")
 async def list_sports_signals(
     user_id: str = Depends(get_current_user_id),

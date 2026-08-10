@@ -278,8 +278,8 @@ function marketFamilyKey(row: SportsSignal): string {
     row.id;
   const betType = (row.bet_type || "moneyline").toLowerCase();
   const sourceKey = isUserSportsPick(row) ? "user" : isOpenAiSportsPick(row) ? "openai" : "odds";
-  // Player props need selection in the key or every prop on a game collapses to one card.
-  if (isPlayerPropPick(row)) {
+  // Player props + user Search bets need selection in the key or sides collapse to one card.
+  if (isPlayerPropPick(row) || isUserSportsPick(row)) {
     return `${eventId}|${betType}|${row.selection}|${sourceKey}`;
   }
   return `${eventId}|${betType}|${sourceKey}`;

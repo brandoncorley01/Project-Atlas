@@ -176,9 +176,10 @@ class SportsUserBetsService:
             stake_f = None
 
         now = datetime.now(UTC).isoformat()
-        confidence = 55.0
-        risk = 50.0
-        opportunity = 50.0
+        confidence = 62.0
+        risk = 48.0
+        # Keep Search bets above typical scan noise so list fetches don't truncate them away.
+        opportunity = 82.0
         explanation = notes or (
             f"Your logged bet: {selection} on {event_name} at {odds_american:+d}. "
             "Atlas will track and grade this pick to improve learning."
@@ -240,11 +241,17 @@ class SportsUserBetsService:
             "data_as_of": now,
         }
 
-        saved = await self.db.insert("sports_signals", [row])
-        if not saved:
-            return {"ok": False, "message": "Could not save bet — try again."}
+        # Prefer reactivating a matching expired Search bet over inserting a duplicate.
+        revived = await self._try_reactivate_match(row)
+        if revived:
+            item = revived
+            saved = [revived]
+        else:
+            saved = await self.db.insert("sports_signals", [row])
+            if not saved:
+                return {"ok": False, "message": "Could not save bet — try again."}
+            item = saved[0]
 
-        item = saved[0]
         try:
             from app.services.signal_registry_service import SignalRegistryService
 
@@ -261,4 +268,280 @@ class SportsUserBetsService:
                 f"Logged {selection} on {event_name} — Atlas is tracking this pick for learning "
                 "(0 Odds API credits)."
             ),
+        }
+
+    @staticmethod
+    def _is_user_entry_row(row: dict[str, Any]) -> bool:
+        from app.services.sports_ranking import is_user_entry_row
+
+        return is_user_entry_row(row)
+
+    def _identity_key(self, row: dict[str, Any]) -> str:
+        snap = row.get("scoring_snapshot") or {}
+        lm = row.get("line_movement") or {}
+        event_id = str(snap.get("event_id") or lm.get("event_id") or "").strip()
+        event_name = str(row.get("event_name") or "").strip().lower()
+        bet_type = str(row.get("bet_type") or "").strip().lower()
+        selection = str(row.get("selection") or "").strip().lower()
+        return f"{event_id or event_name}|{bet_type}|{selection}"
+
+    async def _try_reactivate_match(self, desired: dict[str, Any]) -> dict[str, Any] | None:
+        """If an expired twin Search bet exists and is still listable, reactivate it."""
+        from app.services.freshness import is_sports_listable
+
+        try:
+            expired = await self.db.select(
+                "sports_signals",
+                filters={"user_id": f"eq.{self.user_id}", "status": "eq.expired"},
+                order="data_as_of.desc",
+                limit=250,
+            )
+        except Exception as exc:
+            logger.warning("User bet reactivate lookup failed: %s", exc)
+            return None
+
+        want = self._identity_key(desired)
+        for row in expired:
+            if not self._is_user_entry_row(row):
+                continue
+            if self._identity_key(row) != want:
+                continue
+            # Rebuild listable check against desired kickoff when expired row lost start.
+            probe = {**row, "event_start": desired.get("event_start") or row.get("event_start")}
+            if not is_sports_listable(probe):
+                continue
+            sid = row.get("id")
+            if not sid:
+                continue
+            patch = {
+                "status": "active",
+                "data_as_of": desired.get("data_as_of"),
+                "odds_american": desired.get("odds_american"),
+                "odds_decimal": desired.get("odds_decimal"),
+                "opportunity_score": desired.get("opportunity_score"),
+                "confidence_score": desired.get("confidence_score"),
+                "risk_score": desired.get("risk_score"),
+                "event_start": desired.get("event_start") or row.get("event_start"),
+                "line_movement": desired.get("line_movement") or row.get("line_movement"),
+                "scoring_snapshot": desired.get("scoring_snapshot") or row.get("scoring_snapshot"),
+                "recommendation": desired.get("recommendation"),
+                "explanation": desired.get("explanation"),
+                "suggested_action": desired.get("suggested_action"),
+            }
+            try:
+                updated = await self.db.update(
+                    "sports_signals",
+                    {"id": f"eq.{sid}", "user_id": f"eq.{self.user_id}"},
+                    patch,
+                )
+                if updated:
+                    return updated[0]
+            except Exception as exc:
+                logger.warning("Failed to reactivate user bet %s: %s", sid, exc)
+        return None
+
+    async def recover_user_bets(self) -> dict[str, Any]:
+        """Reactivate expired Search bets that still belong on the live board.
+
+        Also restores missing live rows from signal_performance snapshots when the
+        sports_signals row was purged incorrectly.
+        """
+        from app.services.freshness import is_sports_listable
+
+        now = datetime.now(UTC).isoformat()
+        restored_ids: list[str] = []
+        rebuilt = 0
+
+        try:
+            expired = await self.db.select(
+                "sports_signals",
+                filters={"user_id": f"eq.{self.user_id}", "status": "eq.expired"},
+                order="data_as_of.desc",
+                limit=400,
+            )
+        except Exception as exc:
+            logger.warning("Recover user bets: expired select failed: %s", exc)
+            expired = []
+
+        for row in expired:
+            if not self._is_user_entry_row(row):
+                continue
+            if not is_sports_listable(row):
+                continue
+            sid = row.get("id")
+            if not sid:
+                continue
+            try:
+                updated = await self.db.update(
+                    "sports_signals",
+                    {"id": f"eq.{sid}", "user_id": f"eq.{self.user_id}"},
+                    {
+                        "status": "active",
+                        "data_as_of": now,
+                        "opportunity_score": max(
+                            float(row.get("opportunity_score") or 0),
+                            82.0,
+                        ),
+                    },
+                )
+                if updated:
+                    restored_ids.append(str(sid))
+            except Exception as exc:
+                logger.warning("Recover user bet %s failed: %s", sid, exc)
+
+        # Rebuild from performance registry if the live row is gone entirely.
+        try:
+            active = await self.db.select(
+                "sports_signals",
+                filters={"user_id": f"eq.{self.user_id}", "status": "eq.active"},
+                select="id",
+                limit=500,
+            )
+            active_ids = {str(r.get("id")) for r in active if r.get("id")}
+            perf = await self.db.select(
+                "signal_performance",
+                filters={
+                    "user_id": f"eq.{self.user_id}",
+                    "module": "eq.sports",
+                    "outcome": "eq.pending",
+                },
+                order="created_at.desc",
+                limit=300,
+            )
+        except Exception as exc:
+            logger.warning("Recover user bets: performance lookup failed: %s", exc)
+            perf = []
+            active_ids = set()
+
+        rebuild_rows: list[dict[str, Any]] = []
+        for p in perf:
+            sid = str(p.get("signal_id") or "")
+            if not sid or sid in active_ids or sid in restored_ids:
+                continue
+            snap = p.get("signal_snapshot") or {}
+            if not isinstance(snap, dict):
+                continue
+            nested = snap.get("scoring_snapshot") if isinstance(snap.get("scoring_snapshot"), dict) else {}
+            probe = {**snap, "scoring_snapshot": nested or snap}
+            if not self._is_user_entry_row(probe):
+                continue
+            if not is_sports_listable(probe):
+                continue
+            # Only rebuild if the sports_signals row is missing (deleted), not merely expired
+            # (expired path above already handled listable ones).
+            try:
+                existing = await self.db.select(
+                    "sports_signals",
+                    filters={"id": f"eq.{sid}", "user_id": f"eq.{self.user_id}"},
+                    select="id,status",
+                    limit=1,
+                )
+            except Exception:
+                existing = []
+            if existing:
+                continue
+            row = self._row_from_performance_snapshot(sid, snap, nested or {})
+            if row:
+                rebuild_rows.append(row)
+
+        if rebuild_rows:
+            try:
+                inserted = await self.db.insert("sports_signals", rebuild_rows)
+                rebuilt = len(inserted or [])
+                if inserted:
+                    try:
+                        from app.services.signal_registry_service import SignalRegistryService
+
+                        await SignalRegistryService(self.db, self.user_id).register_batch(
+                            "sports", inserted
+                        )
+                    except Exception as exc:
+                        logger.warning("Recover rebuild registry skipped: %s", exc)
+            except Exception as exc:
+                logger.warning("Recover rebuild insert failed: %s", exc)
+
+        return {
+            "ok": True,
+            "restored": len(restored_ids),
+            "restored_ids": restored_ids,
+            "rebuilt": rebuilt,
+            "message": (
+                f"Recovered {len(restored_ids)} Search bet(s)"
+                + (f", rebuilt {rebuilt} from history" if rebuilt else "")
+                + "."
+                if (restored_ids or rebuilt)
+                else "No missing Search bets to restore."
+            ),
+        }
+
+    def _row_from_performance_snapshot(
+        self,
+        signal_id: str,
+        snap: dict[str, Any],
+        nested: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        event_name = str(snap.get("event_name") or nested.get("event_name") or "").strip()
+        selection = str(snap.get("selection") or nested.get("selection") or "").strip()
+        if not event_name or not selection:
+            return None
+        try:
+            odds_american = int(
+                snap.get("odds_american")
+                if snap.get("odds_american") is not None
+                else nested.get("odds_american")
+                or 0
+            )
+        except (TypeError, ValueError):
+            return None
+        if odds_american == 0:
+            return None
+        bet_type = str(snap.get("bet_type") or nested.get("bet_type") or "moneyline").lower()
+        now = datetime.now(UTC).isoformat()
+        book_key = str(nested.get("preferred_book") or "fanduel")
+        book_title = str(nested.get("preferred_book_title") or "FanDuel")
+        return {
+            "id": signal_id,
+            "user_id": self.user_id,
+            "sport": str(snap.get("sport") or nested.get("sport") or "Sports")[:40],
+            "event_name": event_name[:160],
+            "event_start": snap.get("event_start") or nested.get("event_start"),
+            "bet_type": bet_type,
+            "selection": selection[:120],
+            "odds_american": odds_american,
+            "odds_decimal": american_to_decimal(odds_american),
+            "expected_value": snap.get("expected_value"),
+            "line_movement": snap.get("line_movement")
+            if isinstance(snap.get("line_movement"), dict)
+            else {
+                "preferred_book": book_key,
+                "preferred_book_title": book_title,
+                "source": SOURCE,
+                "event_id": nested.get("event_id"),
+            },
+            "confidence_score": float(snap.get("confidence_score") or 62),
+            "risk_score": float(snap.get("risk_score") or 48),
+            "opportunity_score": max(float(snap.get("opportunity_score") or 0), 82.0),
+            "recommendation": snap.get("recommendation")
+            or f"My bet · {bet_type.title()} — {selection} · {event_name}",
+            "explanation": snap.get("explanation")
+            or f"Restored Search bet: {selection} on {event_name}.",
+            "bull_case": snap.get("bull_case") or "You logged this play for tracking and learning.",
+            "bear_case": snap.get("bear_case")
+            or "Lines move — recheck FanDuel/DraftKings before betting more.",
+            "invalidation": snap.get("invalidation")
+            or "Scratch if the game is postponed or the wrong market was logged.",
+            "suggested_action": snap.get("suggested_action")
+            or f"Track {selection} at {odds_american:+d}",
+            "risk_warning": snap.get("risk_warning")
+            or "User-entered picks feed Atlas learning.",
+            "scoring_snapshot": {
+                **nested,
+                "source": SOURCE,
+                "user_entry": True,
+                "pick_origin": "user",
+                "user_tracked": True,
+                "recovered_from_performance": True,
+            },
+            "status": "active",
+            "data_as_of": now,
         }

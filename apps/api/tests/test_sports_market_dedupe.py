@@ -11,15 +11,24 @@ def _row(
     selection: str,
     opportunity: float,
     event_id: str = "evt-1",
+    source: str | None = None,
 ) -> dict:
+    snap: dict = {"event_id": event_id, "edge_pct": opportunity / 10}
+    lm: dict = {"edge_pct": opportunity / 10}
+    if source:
+        snap["source"] = source
+        lm["source"] = source
+        if source == "user_entry":
+            snap["user_entry"] = True
+            snap["pick_origin"] = "user"
     return {
         "id": sid,
         "event_name": event,
         "bet_type": bet_type,
         "selection": selection,
         "opportunity_score": opportunity,
-        "scoring_snapshot": {"event_id": event_id, "edge_pct": opportunity / 10},
-        "line_movement": {"edge_pct": opportunity / 10},
+        "scoring_snapshot": snap,
+        "line_movement": lm,
         "event_start": "2099-07-11T00:00:00Z",
     }
 
@@ -50,3 +59,45 @@ def test_dedupe_drops_over_under_pair():
     kept = dedupe_one_side_per_market(rows)
     assert len(kept) == 1
     assert kept[0]["selection"] == "Under 8.5"
+
+
+def test_user_entry_keeps_both_moneyline_sides():
+    rows = [
+        _row(
+            sid="u1",
+            event="Away @ Home",
+            bet_type="moneyline",
+            selection="Away",
+            opportunity=82,
+            source="user_entry",
+        ),
+        _row(
+            sid="u2",
+            event="Away @ Home",
+            bet_type="moneyline",
+            selection="Home",
+            opportunity=82,
+            source="user_entry",
+        ),
+    ]
+    kept = dedupe_one_side_per_market(rows)
+    assert len(kept) == 2
+    assert {r["selection"] for r in kept} == {"Away", "Home"}
+    assert market_family_key(rows[0]) == "evt-1|moneyline|Away|user_entry"
+
+
+def test_user_entry_does_not_collapse_with_odds_pick():
+    rows = [
+        _row(sid="o1", event="Away @ Home", bet_type="moneyline", selection="Home", opportunity=70),
+        _row(
+            sid="u1",
+            event="Away @ Home",
+            bet_type="moneyline",
+            selection="Away",
+            opportunity=82,
+            source="user_entry",
+        ),
+    ]
+    kept = dedupe_one_side_per_market(rows)
+    assert len(kept) == 2
+    assert {r["id"] for r in kept} == {"o1", "u1"}

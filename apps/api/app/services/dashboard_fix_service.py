@@ -13,6 +13,7 @@ from app.services.parlay_service import ParlayService
 from app.services.signal_registry_service import SignalRegistryService
 from app.services.signal_service import SignalService
 from app.services.stale_signal_service import StaleSignalService
+from app.services.sports_user_bets_service import SportsUserBetsService
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,12 @@ async def run_fix_all(
         await _step(
             "refresh_news",
             run_refresh_news_job(user_id, token),
+        )
+    )
+    steps.append(
+        await _step(
+            "recover_sports_user_bets",
+            SportsUserBetsService(db, user_id).recover_user_bets(),
         )
     )
 

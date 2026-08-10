@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useState, type FormEvent } from "react";
 import { apiRequestHeaders, getApiUrl, usesBffProxy } from "@/lib/api-url";
+import type { SportsSignal } from "@/components/sports/SportsSignalCard";
 
 export interface BookAvailability {
   book_key: string;
@@ -171,7 +172,7 @@ export function SportsEventSearch({
   onParlayLegAdded,
   embedded = false,
 }: {
-  onBetLogged?: () => void | Promise<void>;
+  onBetLogged?: (item?: SportsSignal | null) => void | Promise<void>;
   /** `parlay` = FanDuel-only search that adds legs to a ticket builder. */
   intent?: "log" | "parlay";
   onParlayLegAdded?: (leg: ParlayLegSignal) => void | Promise<void>;
@@ -425,17 +426,7 @@ export function SportsEventSearch({
         setMessage(typeof data.detail === "string" ? data.detail : "Could not save bet");
         return;
       }
-      const item = data.item as
-        | {
-            id?: string;
-            sport?: string;
-            event_name?: string;
-            bet_type?: string;
-            selection?: string;
-            odds_american?: number;
-            event_start?: string | null;
-          }
-        | undefined;
+      const item = data.item as SportsSignal | undefined;
       if (isParlay && item?.id) {
         await onParlayLegAdded?.({
           id: String(item.id),
@@ -449,7 +440,7 @@ export function SportsEventSearch({
         setMessage(`Added FanDuel leg: ${selection}`);
       } else {
         setMessage((data.message as string) || "Bet logged for Atlas learning");
-        await onBetLogged?.();
+        await onBetLogged?.(item ?? null);
       }
       setSelected(null);
       setMarket(null);
