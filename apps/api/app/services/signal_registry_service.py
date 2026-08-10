@@ -268,12 +268,21 @@ class SignalRegistryService:
         existing = await self.performance.get_outcome(module=module, signal_id=signal_id)
         if existing:
             return False
+        snapshot = self._snapshot_for_register(row)
+        nested = snapshot.get("scoring_snapshot") if isinstance(snapshot.get("scoring_snapshot"), dict) else {}
+        is_user = (
+            nested.get("pick_origin") == "user"
+            or nested.get("user_entry")
+            or nested.get("source") == "user_entry"
+            or snapshot.get("pick_origin") == "user"
+        )
         await self.performance.log_outcome(
             module=module,
             signal_id=signal_id,
             outcome="pending",
-            resolution_source=TRACKING_SOURCE,
-            signal_snapshot=self._snapshot_for_register(row),
+            # User Search bets must not stamp atlas_tracked via auto_scan.
+            resolution_source="manual" if is_user else TRACKING_SOURCE,
+            signal_snapshot=snapshot,
         )
         return True
 

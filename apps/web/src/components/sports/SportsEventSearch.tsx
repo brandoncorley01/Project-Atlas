@@ -439,8 +439,9 @@ export function SportsEventSearch({
         });
         setMessage(`Added FanDuel leg: ${selection}`);
       } else {
-        setMessage((data.message as string) || "Bet logged for Atlas learning");
+        setMessage((data.message as string) || "Bet saved to Watchlist");
         await onBetLogged?.(item ?? null);
+        globalThis.dispatchEvent(new Event("atlas:watchlist-updated"));
       }
       setSelected(null);
       setMarket(null);
@@ -470,7 +471,7 @@ export function SportsEventSearch({
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h2 className="text-sm font-semibold text-foreground">
-            {isParlay ? "Add a leg" : "Search & log my bet"}
+            {isParlay ? "Add a leg" : "Search & save to Watchlist"}
           </h2>
           <p className="mt-1 text-xs text-muted">
             {isParlay
@@ -777,7 +778,7 @@ export function SportsEventSearch({
                 : "Saving…"
               : isParlay
                 ? "Add a leg"
-                : "Log bet for Atlas learning"}
+                : "Save bet to Watchlist"}
           </button>
         </div>
       )}
