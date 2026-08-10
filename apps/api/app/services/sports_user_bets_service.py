@@ -252,6 +252,8 @@ class SportsUserBetsService:
                 return {"ok": False, "message": "Could not save bet — try again."}
             item = saved[0]
 
+        watchlist_item = await self._save_bet_to_watchlist(item)
+
         try:
             from app.services.signal_registry_service import SignalRegistryService
 
@@ -263,12 +265,50 @@ class SportsUserBetsService:
             "ok": True,
             "signals_created": 1,
             "item": item,
+            "watchlist_item": watchlist_item,
             "credits_used": 0,
             "message": (
-                f"Logged {selection} on {event_name} — Atlas is tracking this pick for learning "
+                f"Saved {selection} on {event_name} to Watchlist — Atlas is tracking this pick "
                 "(0 Odds API credits)."
             ),
         }
+
+    async def _save_bet_to_watchlist(self, signal: dict[str, Any]) -> dict[str, Any] | None:
+        """Persist a Search/My bet onto the Default watchlist Bets tab."""
+        sid = str(signal.get("id") or "").strip()
+        if not sid:
+            return None
+        meta = {
+            "signal_id": sid,
+            "sport": signal.get("sport") or "Sports",
+            "event_name": signal.get("event_name") or "",
+            "bet_type": signal.get("bet_type") or "moneyline",
+            "selection": signal.get("selection") or "",
+            "odds_american": signal.get("odds_american"),
+            "opportunity_score": signal.get("opportunity_score"),
+            "expected_value": signal.get("expected_value"),
+            "event_start": signal.get("event_start"),
+            "label": (
+                f"{signal.get('selection') or ''} · {signal.get('event_name') or ''}".strip(" ·")
+            ),
+            "watchlist_kind": "sport_bet",
+            "user_entry": True,
+            "pick_origin": "user",
+            "source": SOURCE,
+        }
+        try:
+            from app.services.watchlist_service import WatchlistService
+
+            # Store as legacy sport_event — DB check constraints often reject sport_bet;
+            # watchlist_kind drives the Bets tab (same mapping as the web client).
+            return await WatchlistService(self.db, self.user_id).add_item(
+                symbol=sid,
+                item_type="sport_event",
+                metadata=meta,
+            )
+        except Exception as exc:
+            logger.warning("Watchlist save for Search bet %s failed: %s", sid, exc)
+            return None
 
     @staticmethod
     def _is_user_entry_row(row: dict[str, Any]) -> bool:
@@ -386,6 +426,7 @@ class SportsUserBetsService:
                 )
                 if updated:
                     restored_ids.append(str(sid))
+                    await self._save_bet_to_watchlist(updated[0] if updated else {**row, "id": sid})
             except Exception as exc:
                 logger.warning("Recover user bet %s failed: %s", sid, exc)
 
@@ -418,7 +459,8 @@ class SportsUserBetsService:
             sid = str(p.get("signal_id") or "")
             if not sid or sid in active_ids or sid in restored_ids:
                 continue
-            snap = p.get("signal_snapshot") or {}
+            # Performance rows store the snapshot under scoring_snapshot.
+            snap = p.get("scoring_snapshot") or p.get("signal_snapshot") or {}
             if not isinstance(snap, dict):
                 continue
             nested = snap.get("scoring_snapshot") if isinstance(snap.get("scoring_snapshot"), dict) else {}
@@ -449,6 +491,8 @@ class SportsUserBetsService:
                 inserted = await self.db.insert("sports_signals", rebuild_rows)
                 rebuilt = len(inserted or [])
                 if inserted:
+                    for row in inserted:
+                        await self._save_bet_to_watchlist(row)
                     try:
                         from app.services.signal_registry_service import SignalRegistryService
 
@@ -460,16 +504,38 @@ class SportsUserBetsService:
             except Exception as exc:
                 logger.warning("Recover rebuild insert failed: %s", exc)
 
+        # Also push any active Search bets that never made it onto the watchlist.
+        watchlisted = 0
+        try:
+            active_user = await self.db.select(
+                "sports_signals",
+                filters={"user_id": f"eq.{self.user_id}", "status": "eq.active"},
+                order="data_as_of.desc",
+                limit=300,
+            )
+            for row in active_user:
+                if not self._is_user_entry_row(row):
+                    continue
+                if not is_sports_listable(row):
+                    continue
+                saved_wl = await self._save_bet_to_watchlist(row)
+                if saved_wl:
+                    watchlisted += 1
+        except Exception as exc:
+            logger.warning("Recover watchlist sync skipped: %s", exc)
+
         return {
             "ok": True,
             "restored": len(restored_ids),
             "restored_ids": restored_ids,
             "rebuilt": rebuilt,
+            "watchlisted": watchlisted,
             "message": (
                 f"Recovered {len(restored_ids)} Search bet(s)"
                 + (f", rebuilt {rebuilt} from history" if rebuilt else "")
+                + (f", synced {watchlisted} to Watchlist" if watchlisted else "")
                 + "."
-                if (restored_ids or rebuilt)
+                if (restored_ids or rebuilt or watchlisted)
                 else "No missing Search bets to restore."
             ),
         }
