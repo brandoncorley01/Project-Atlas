@@ -19,6 +19,7 @@ import {
   filterBySport,
   filterByWindow,
   filterSports,
+  isUserSportsPick,
   sortSports,
   type SportsFilterKey,
   type SportsSortKey,
@@ -75,6 +76,8 @@ export function SportsSignalsView({
   );
   const { status: oddsStatus, refresh: refreshOddsStatus } = useOddsApiStatus();
   const insightFetchFallbackUsed = useRef(false);
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
   const fetchBlocked = Boolean(
     oddsStatus?.quota_exhausted || oddsStatus?.live_fetch_allowed === false,
   );
@@ -159,19 +162,13 @@ export function SportsSignalsView({
     (
       next: SportsSignal[],
       meta?: SportsListMeta | null,
-      opts?: { replaceEmpty?: boolean },
+      opts?: { replaceEmpty?: boolean; preserveUserBets?: boolean },
     ) => {
       const replaceEmpty = opts?.replaceEmpty ?? false;
-      const board = dedupeOneSidePerMarket(next);
-      setItems((prev) => {
-        if (board.length === 0 && prev.length > 0 && !replaceEmpty) {
-          // Keep the saved board when a remount refetch returns empty/failed.
-          return prev;
-        }
-        return board;
-      });
-      if (board.length === 0 && !replaceEmpty) {
-        // Still refresh odds timestamps from meta without clearing picks.
+      const preserveUserBets = opts?.preserveUserBets ?? !replaceEmpty;
+      const prev = itemsRef.current;
+      let board = dedupeOneSidePerMarket(next);
+      if (board.length === 0 && prev.length > 0 && !replaceEmpty) {
         if (meta?.odds_fetched_at) {
           setOddsFetchedAt(meta.odds_fetched_at);
           writeSportsBoardCache(readSportsBoardCache()?.items ?? [], {
@@ -180,6 +177,16 @@ export function SportsSignalsView({
         }
         return;
       }
+      if (preserveUserBets && prev.length > 0) {
+        const boardIds = new Set(board.map((i) => i.id).filter(Boolean));
+        const missingUser = prev.filter(
+          (i) => isUserSportsPick(i) && i.id && !boardIds.has(i.id),
+        );
+        if (missingUser.length) {
+          board = dedupeOneSidePerMarket([...missingUser, ...board]);
+        }
+      }
+      setItems(board);
       const asOf = meta?.board_as_of ?? boardAsOfFromItems(board);
       if (asOf) setBoardAsOf(asOf);
       if (meta?.odds_fetched_at) setOddsFetchedAt(meta.odds_fetched_at);
@@ -190,6 +197,17 @@ export function SportsSignalsView({
     },
     [],
   );
+
+  const upsertLoggedBet = useCallback((item: SportsSignal) => {
+    setItems((prev) => {
+      const without = prev.filter((r) => r.id !== item.id);
+      const next = dedupeOneSidePerMarket([item, ...without]);
+      writeSportsBoardCache(next, {
+        boardAsOf: boardAsOfFromItems(next) ?? undefined,
+      });
+      return next;
+    });
+  }, []);
 
   const loadItems = useCallback(
     async (
@@ -247,6 +265,15 @@ export function SportsSignalsView({
     void (async () => {
       const token = await getToken();
       if (!(token || usesBffProxy())) return;
+      try {
+        await fetch(`${getApiUrl()}/signals/sports/user-bets/recover`, {
+          method: "POST",
+          headers: apiRequestHeaders(token),
+          credentials: usesBffProxy() ? "include" : "same-origin",
+        });
+      } catch {
+        // Recovery is best-effort — still refresh the board.
+      }
       await loadItems(token, activeCategory, activeSport, { replaceEmpty: false });
       void refreshOddsStatus();
     })();
@@ -533,7 +560,8 @@ export function SportsSignalsView({
       <OddsQuotaBanner status={oddsStatus} />
 
       <SportsEventSearch
-        onBetLogged={async () => {
+        onBetLogged={async (item) => {
+          if (item?.id) upsertLoggedBet(item);
           const token = await getToken();
           await Promise.all([
             loadCategories(token),

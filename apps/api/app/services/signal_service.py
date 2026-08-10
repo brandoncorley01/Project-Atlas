@@ -49,14 +49,9 @@ def _is_openai_web_row(row: dict) -> bool:
 
 
 def _is_user_entry_row(row: dict) -> bool:
-    snap = row.get("scoring_snapshot") or {}
-    lm = row.get("line_movement") or {}
-    return (
-        bool(snap.get("user_entry"))
-        or str(snap.get("source") or "") == "user_entry"
-        or str(lm.get("source") or "") == "user_entry"
-        or str(snap.get("pick_origin") or "") == "user"
-    )
+    from app.services.sports_ranking import is_user_entry_row
+
+    return is_user_entry_row(row)
 
 
 def _sports_window_match(row: dict, window: str) -> bool:
@@ -315,6 +310,29 @@ class SignalService:
             limit=fetch_limit,
             offset=offset if not category else 0,
         )
+        # Always union Search / My bets — low opportunity scores can fall outside the top-N
+        # opportunity-ordered fetch and disappear from the board after refresh.
+        if status == "active" and offset == 0:
+            try:
+                recent = await self.db.select(
+                    "sports_signals",
+                    filters={
+                        "user_id": f"eq.{self.user_id}",
+                        "status": "eq.active",
+                    },
+                    order="data_as_of.desc",
+                    limit=200,
+                )
+                by_id = {str(r.get("id")): r for r in rows if r.get("id")}
+                for r in recent:
+                    if not _is_user_entry_row(r):
+                        continue
+                    rid = str(r.get("id") or "")
+                    if rid and rid not in by_id:
+                        by_id[rid] = r
+                        rows.append(r)
+            except Exception as exc:
+                logger.warning("Sports list user-bet union skipped: %s", exc)
         if sport:
             sport_norm = str(sport).strip().lower().replace(" ", "_")
             def _sport_match(row: dict) -> bool:

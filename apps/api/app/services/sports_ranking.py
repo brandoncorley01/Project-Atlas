@@ -147,6 +147,18 @@ def sort_for_display(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     )
 
 
+def is_user_entry_row(row: dict[str, Any]) -> bool:
+    snap = row.get("scoring_snapshot") or {}
+    lm = row.get("line_movement") or {}
+    return (
+        bool(snap.get("user_entry"))
+        or str(snap.get("source") or "") == "user_entry"
+        or str(lm.get("source") or "") == "user_entry"
+        or str(snap.get("pick_origin") or "") == "user"
+        or str(row.get("pick_source") or "") == "user_entry"
+    )
+
+
 def market_family_key(row: dict[str, Any]) -> str:
     """One Atlas decision per event + bet type (never both sides of ML/spread/total)."""
     snap = row.get("scoring_snapshot") or {}
@@ -158,7 +170,11 @@ def market_family_key(row: dict[str, Any]) -> str:
     if bet_type == "player_prop" or snap.get("is_player_prop"):
         selection = str(row.get("selection") or "")
         return f"{event_id}|{bet_type}|{selection}|{source}"
-    if source in {"openai_web", "user_entry"}:
+    # User Search bets: include selection so both sides / multiple logged plays stay visible.
+    if source == "user_entry" or is_user_entry_row(row):
+        selection = str(row.get("selection") or "")
+        return f"{event_id}|{bet_type}|{selection}|user_entry"
+    if source == "openai_web":
         return f"{event_id}|{bet_type}|{source}"
     return f"{event_id}|{bet_type}"
 

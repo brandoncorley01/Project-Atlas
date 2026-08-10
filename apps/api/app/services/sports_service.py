@@ -18,6 +18,7 @@ from app.services.sports_ranking import (
     composite_score,
     dedupe_one_side_per_market,
     is_near_term,
+    is_user_entry_row,
     is_within_horizon,
     market_family_key,
     sort_for_display,
@@ -196,7 +197,12 @@ class SportsRefreshService:
         if len(rows) <= 1:
             return 0
         keep_ids = {str(r.get("id")) for r in dedupe_one_side_per_market(rows) if r.get("id")}
-        losers = [r for r in rows if str(r.get("id")) not in keep_ids]
+        # Never expire user Search bets as "contradicting sides" — they are intentional logs.
+        losers = [
+            r
+            for r in rows
+            if str(r.get("id")) not in keep_ids and not is_user_entry_row(r)
+        ]
         purged = 0
         for row in losers:
             sid = row.get("id")
