@@ -22,11 +22,39 @@ async def _step(name: str, coro) -> dict[str, Any]:
     try:
         result = await coro
         payload = result if isinstance(result, dict) else {"result": result}
-        return {"step": name, "ok": True, **payload}
+        # Prefer the coro’s own ok flag when present (e.g. sports scan ok=False).
+        ok = True if "ok" not in payload else bool(payload.get("ok"))
+        out = {"step": name, **payload, "ok": ok}
+        if not ok and not out.get("error"):
+            out["error"] = str(
+                payload.get("message")
+                or payload.get("error")
+                or f"{name} failed"
+            )
+        return out
     except Exception as exc:
         msg = str(exc).strip() or exc.__class__.__name__
+        detail = getattr(exc, "detail", None)
+        if isinstance(detail, str) and detail.strip():
+            msg = detail.strip()
         logger.warning("fix-all step %s failed: %s", name, msg)
         return {"step": name, "ok": False, "error": msg}
+
+
+def _failed_step_summary(steps: list[dict[str, Any]]) -> str | None:
+    failed = [s for s in steps if not s.get("ok")]
+    if not failed:
+        return None
+    parts: list[str] = []
+    for s in failed[:3]:
+        name = str(s.get("step") or "step")
+        err = str(s.get("error") or s.get("message") or "failed").strip()
+        parts.append(f"{name}: {err[:140]}")
+    extra = len(failed) - len(parts)
+    summary = " · ".join(parts)
+    if extra > 0:
+        summary += f" · +{extra} more"
+    return summary
 
 
 async def run_fix_all(
@@ -39,17 +67,97 @@ async def run_fix_all(
     """Repair dashboard health and optionally scan empty boards.
 
     Order:
-      1. expire stale
-      2. backfill tracking
-      3. resolve outcomes
-      4. refresh news
-      5. scan empty modules (options / stocks / sports)
-      6. build parlays if sports was scanned
+      1. Detect empty boards first (so we know what to scan)
+      2. Scan empty modules early (sports/options/stocks) — before slow maintenance
+         that can push Fix all past the BFF timeout
+      3. expire stale / backfill / resolve / news / recover user bets
+      4. build parlays if sports was scanned
     """
     db = SupabaseClient(token)
     write_db = get_write_db(token)
     steps: list[dict[str, Any]] = []
 
+    # Detect empty boards up front so scans start before slow grading/news work.
+    signal_service = SignalService(db, user_id)
+    top = await signal_service.top_opportunities(limit=3)
+    budget = await signal_service.budget_opportunities(limit=3)
+    stocks = await signal_service.stock_opportunities(limit=3, skip_expire=True)
+    sports = await signal_service.sports_opportunities(limit=3, skip_expire=True, window="week")
+
+    needs = {
+        "options": len(top) == 0 and len(budget) == 0,
+        "stocks": len(stocks) == 0,
+        "sports": len(sports) == 0,
+    }
+
+    requested = {m.strip().lower() for m in (modules or []) if m}
+    if not requested and scan_empty:
+        requested = {k for k, empty in needs.items() if empty}
+    elif requested:
+        pass
+    else:
+        requested = set()
+
+    sports_scanned = False
+    sports_created = 0
+
+    # Empty-board scans first — Home "Fix all" is usually about filling Sports/Options.
+    if "sports" in requested:
+        from app.services.sports_service import SportsRefreshService
+
+        sports_step = await _step(
+            "refresh_sports",
+            SportsRefreshService(write_db, user_id).refresh_sports(
+                replace=True,
+                limit=80,
+                force_refresh=False,
+                cache_only=False,
+            ),
+        )
+        steps.append(sports_step)
+        sports_scanned = bool(sports_step.get("ok"))
+        sports_created = int(sports_step.get("signals_created") or 0)
+        # Successful HTTP path that still left sports empty with an error payload.
+        if sports_scanned and sports_created == 0 and needs["sports"]:
+            err = str(sports_step.get("error") or sports_step.get("message") or "").strip()
+            lower = err.lower()
+            if any(
+                needle in lower
+                for needle in (
+                    "cache",
+                    "credit",
+                    "odds api",
+                    "not configured",
+                    "failed to save",
+                    "network",
+                    "dns",
+                )
+            ):
+                sports_step["ok"] = False
+                sports_step["error"] = err or "Sports scan did not fill the board"
+                sports_scanned = False
+
+    if "options" in requested:
+        from app.services.options_service import OptionsRefreshService
+
+        steps.append(
+            await _step(
+                "refresh_options",
+                OptionsRefreshService(db, user_id).refresh_live_options(replace=True, limit=12),
+            )
+        )
+
+    if "stocks" in requested:
+        from app.services.stock_service import StockRefreshService
+
+        steps.append(
+            await _step(
+                "refresh_stocks",
+                StockRefreshService(db, user_id).refresh_stocks(replace=True, limit=12),
+            )
+        )
+
+    # Maintenance after scans so a long grade/news pass cannot starve empty boards.
     steps.append(
         await _step(
             "expire_stale",
@@ -81,65 +189,6 @@ async def run_fix_all(
         )
     )
 
-    # Detect empty boards after maintenance.
-    signal_service = SignalService(db, user_id)
-    top = await signal_service.top_opportunities(limit=3)
-    budget = await signal_service.budget_opportunities(limit=3)
-    stocks = await signal_service.stock_opportunities(limit=3, skip_expire=True)
-    sports = await signal_service.sports_opportunities(limit=3, skip_expire=True, window="week")
-
-    needs = {
-        "options": len(top) == 0 and len(budget) == 0,
-        "stocks": len(stocks) == 0,
-        "sports": len(sports) == 0,
-    }
-
-    requested = {m.strip().lower() for m in (modules or []) if m}
-    if not requested and scan_empty:
-        requested = {k for k, empty in needs.items() if empty}
-    elif requested:
-        # Honor explicit module list even if boards aren't empty.
-        pass
-    else:
-        requested = set()
-
-    sports_scanned = False
-
-    if "options" in requested:
-        from app.services.options_service import OptionsRefreshService
-
-        steps.append(
-            await _step(
-                "refresh_options",
-                OptionsRefreshService(db, user_id).refresh_live_options(replace=True, limit=12),
-            )
-        )
-
-    if "stocks" in requested:
-        from app.services.stock_service import StockRefreshService
-
-        steps.append(
-            await _step(
-                "refresh_stocks",
-                StockRefreshService(db, user_id).refresh_stocks(replace=True, limit=12),
-            )
-        )
-
-    if "sports" in requested:
-        from app.services.sports_service import SportsRefreshService
-
-        sports_step = await _step(
-            "refresh_sports",
-            SportsRefreshService(write_db, user_id).refresh_sports(
-                replace=True,
-                limit=80,
-                force_refresh=False,
-                cache_only=False,
-            ),
-        )
-        steps.append(sports_step)
-        sports_scanned = bool(sports_step.get("ok"))
-
     if sports_scanned or "parlays" in requested:
         steps.append(
             await _step(
@@ -170,6 +219,13 @@ async def run_fix_all(
     scanned = sorted(requested)
     if scanned:
         message_parts.append("scanned: " + ", ".join(scanned))
+    failed_summary = _failed_step_summary(steps)
+    if failed_summary:
+        message_parts.append(failed_summary)
+    elif needs_after.get("sports") and "sports" in requested:
+        message_parts.append(
+            "Sports board still empty — open Sports and tap Fetch live odds once to seed the cache"
+        )
 
     return {
         "status": "ok" if fail_count == 0 else "partial",

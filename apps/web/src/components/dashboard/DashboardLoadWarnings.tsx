@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import type { DashboardWarning } from "@/lib/dashboard-warnings";
+import { humanStepName, type FixAllStep } from "@/lib/dashboard-fix";
 
 const SEVERITY_STYLES: Record<DashboardWarning["severity"], string> = {
   error: "border-red-500/40 bg-red-500/10",
@@ -21,6 +22,7 @@ interface DashboardLoadWarningsProps {
   includeInfo?: boolean;
   fixing?: boolean;
   fixMessage?: string | null;
+  fixSteps?: FixAllStep[];
   onFixAll?: () => void;
   onRetry?: () => void;
 }
@@ -30,6 +32,7 @@ export function DashboardLoadWarnings({
   includeInfo = false,
   fixing = false,
   fixMessage = null,
+  fixSteps = [],
   onFixAll,
   onRetry,
 }: DashboardLoadWarningsProps) {
@@ -39,22 +42,25 @@ export function DashboardLoadWarnings({
     : errors.length > 0
       ? errors
       : warnings.filter((w) => w.severity === "warn");
+  const failedSteps = fixSteps.filter((s) => !s.ok);
 
   // Always show the strip when Fix all is available and there is something to show,
   // or when the parent forces visibility via errors.
-  if (visible.length === 0 && !fixMessage) return null;
+  if (visible.length === 0 && !fixMessage && failedSteps.length === 0) return null;
 
   const title =
     errors.length > 0
       ? `${errors.length} load error${errors.length === 1 ? "" : "s"}`
-      : visible.length > 0
-        ? `${visible.length} notice${visible.length === 1 ? "" : "s"}`
-        : "Repair status";
+      : failedSteps.length > 0
+        ? `${failedSteps.length} Fix all step${failedSteps.length === 1 ? "" : "s"} need attention`
+        : visible.length > 0
+          ? `${visible.length} notice${visible.length === 1 ? "" : "s"}`
+          : "Repair status";
 
   return (
     <details
       className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 open:pb-1"
-      open={errors.length > 0 || Boolean(fixMessage)}
+      open={errors.length > 0 || Boolean(fixMessage) || failedSteps.length > 0}
     >
       <summary className="cursor-pointer list-none px-4 py-3 text-sm">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -83,6 +89,33 @@ export function DashboardLoadWarnings({
         <p className="mx-4 mb-2 rounded-md border border-border/70 bg-background/40 px-3 py-2 text-xs text-muted">
           {fixMessage}
         </p>
+      )}
+
+      {failedSteps.length > 0 && (
+        <ul className="space-y-2 px-4 pb-3">
+          {failedSteps.map((s) => (
+            <li
+              key={s.step}
+              className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2.5"
+            >
+              <p className="text-sm font-medium text-foreground">
+                <span className="mr-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Failed
+                </span>
+                {humanStepName(s.step)}
+              </p>
+              <p className="mt-1 text-xs leading-relaxed text-muted">
+                {String(s.error || s.message || "Step failed")}
+              </p>
+              {s.step === "refresh_sports" && (
+                <p className="mt-1 text-xs text-muted">
+                  <span className="font-medium text-foreground/80">How to fix: </span>
+                  Open Sports → Fetch live odds once to seed FanDuel/DraftKings lines, then Scan.
+                </p>
+              )}
+            </li>
+          ))}
+        </ul>
       )}
 
       {visible.length > 0 && (
@@ -143,6 +176,12 @@ export function DashboardLoadWarnings({
             Retry Home load
           </button>
         )}
+        <Link
+          href="/sports"
+          className="text-xs font-semibold text-muted hover:text-accent hover:underline"
+        >
+          Open Sports →
+        </Link>
       </div>
     </details>
   );

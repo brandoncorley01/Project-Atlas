@@ -19,6 +19,21 @@ export interface FixAllResult {
   fail_count?: number;
 }
 
+function humanStepName(step: string): string {
+  const labels: Record<string, string> = {
+    refresh_sports: "Sports scan",
+    refresh_options: "Options scan",
+    refresh_stocks: "Stocks scan",
+    expire_stale: "Cleanup",
+    signal_backfill: "Tracking backfill",
+    resolve_outcomes: "Auto-grade",
+    refresh_news: "News refresh",
+    recover_sports_user_bets: "Recover Search bets",
+    build_parlays: "Build parlays",
+  };
+  return labels[step] || step.replaceAll("_", " ");
+}
+
 /** Run proactive Home repair (maintain + scan empty boards). */
 export async function runDashboardFixAll(opts?: {
   scanEmpty?: boolean;
@@ -50,7 +65,11 @@ export async function runDashboardFixAll(opts?: {
     try {
       data = (await res.json()) as Record<string, unknown>;
     } catch {
-      return { ok: false, message: "Invalid response from Fix all", steps: [] };
+      return {
+        ok: false,
+        message: "Fix all returned an invalid response — retry in a moment",
+        steps: [],
+      };
     }
     if (!res.ok) {
       const detail = data.detail;
@@ -60,11 +79,27 @@ export async function runDashboardFixAll(opts?: {
         steps: Array.isArray(data.steps) ? (data.steps as FixAllStep[]) : [],
       };
     }
+    const steps = Array.isArray(data.steps) ? (data.steps as FixAllStep[]) : [];
+    const failCount =
+      typeof data.fail_count === "number" ? data.fail_count : steps.filter((s) => !s.ok).length;
+    let message = typeof data.message === "string" ? data.message : "Fix all finished";
+    if (failCount > 0) {
+      const failed = steps.filter((s) => !s.ok).slice(0, 2);
+      if (failed.length && !failed.some((s) => message.includes(String(s.step)))) {
+        const extra = failed
+          .map(
+            (s) =>
+              `${humanStepName(s.step)}: ${String(s.error || s.message || "failed").slice(0, 120)}`,
+          )
+          .join(" · ");
+        message = `${message} · ${extra}`;
+      }
+    }
     return {
-      ok: (data.fail_count as number | undefined) === 0 || data.status === "ok",
+      ok: failCount === 0 || data.status === "ok",
       status: typeof data.status === "string" ? data.status : undefined,
-      message: typeof data.message === "string" ? data.message : "Fix all finished",
-      steps: Array.isArray(data.steps) ? (data.steps as FixAllStep[]) : [],
+      message,
+      steps,
       modules_scanned: Array.isArray(data.modules_scanned)
         ? (data.modules_scanned as string[])
         : undefined,
@@ -72,17 +107,24 @@ export async function runDashboardFixAll(opts?: {
         data.needs_refresh_after && typeof data.needs_refresh_after === "object"
           ? (data.needs_refresh_after as Record<string, boolean>)
           : undefined,
-      fail_count: typeof data.fail_count === "number" ? data.fail_count : undefined,
+      fail_count: failCount,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Fix all failed";
-    if (msg.includes("timeout") || msg.includes("aborted")) {
+    const timedOut =
+      msg.includes("timeout") ||
+      msg.includes("aborted") ||
+      (err instanceof DOMException && (err.name === "TimeoutError" || err.name === "AbortError"));
+    if (timedOut) {
       return {
         ok: false,
-        message: "Fix all timed out — some steps may still finish. Retry Home in a minute.",
+        message:
+          "Fix all timed out — Sports may still need a scan. Open Sports → Fetch live odds, then retry Home.",
         steps: [],
       };
     }
-    return { ok: false, message: msg, steps: [] };
+    return { ok: false, message: msg || "Fix all failed — retry Home", steps: [] };
   }
 }
+
+export { humanStepName };

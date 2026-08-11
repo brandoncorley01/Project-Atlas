@@ -22,7 +22,7 @@ import {
   softNotices,
   type DashboardWarning,
 } from "@/lib/dashboard-warnings";
-import { runDashboardFixAll } from "@/lib/dashboard-fix";
+import { runDashboardFixAll, type FixAllStep } from "@/lib/dashboard-fix";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SectionHeader } from "@/components/ui/SectionHeader";
 import { StatusPill } from "@/components/ui/StatusPill";
@@ -95,6 +95,7 @@ export function DashboardView() {
   const [loadWarnings, setLoadWarnings] = useState<DashboardWarning[]>([]);
   const [fixingAll, setFixingAll] = useState(false);
   const [fixAllMessage, setFixAllMessage] = useState<string | null>(null);
+  const [fixAllSteps, setFixAllSteps] = useState<FixAllStep[]>([]);
 
   const loadDashboard = useCallback(async (opts?: { background?: boolean }) => {
     if (loadInFlightRef.current) return;
@@ -241,12 +242,14 @@ export function DashboardView() {
   const handleFixAll = useCallback(async () => {
     if (fixingAll) return;
     setFixingAll(true);
-    setFixAllMessage("Running Fix all — cleaning, grading, refreshing news, scanning empty boards…");
+    setFixAllSteps([]);
+    setFixAllMessage("Running Fix all — scanning empty boards first, then cleanup…");
     setApiStatus("Fix all running…");
     setApiStatusColor("text-warning");
     try {
       const result = await runDashboardFixAll({ scanEmpty: true });
       setFixAllMessage(result.message);
+      setFixAllSteps(result.steps ?? []);
       await loadDashboard({ background: false });
       if (!result.ok) {
         setApiStatus(`API connected · Fix all needs attention — see details`);
@@ -254,6 +257,7 @@ export function DashboardView() {
       }
     } catch (err) {
       setFixAllMessage(err instanceof Error ? err.message : "Fix all failed");
+      setFixAllSteps([]);
     } finally {
       setFixingAll(false);
     }
@@ -377,6 +381,7 @@ export function DashboardView() {
             includeInfo={Boolean(fixAllMessage) || hasActionableWarnings}
             fixing={fixingAll}
             fixMessage={fixAllMessage}
+            fixSteps={fixAllSteps}
             onFixAll={() => void handleFixAll()}
             onRetry={() => void loadDashboard()}
           />

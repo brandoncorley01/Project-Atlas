@@ -43,6 +43,7 @@ function proxyTimeoutFor(subpath: string): number {
     || subpath === "engine/refresh-sports"
     || subpath.startsWith("engine/refresh-sports")
   ) {
+    // Fix all scans empty boards first then runs maintenance — needs the full budget.
     return ENGINE_LONG_PROXY_TIMEOUT_MS;
   }
   return PROXY_TIMEOUT_MS;
