@@ -70,7 +70,7 @@ async def refresh_sports(
     """Fetch odds from The Odds API and rank +EV moneyline, spread, total, and futures plays.
 
     - Default / Scan: use warm cache when available; live-seed when cache is empty/stale
-      (even under ODDS_SPEND_MODE=cache_only).
+      (even under ODDS_SPEND_MODE=cache_only). Do not pass cache_only for Scan.
     - force_refresh=true (Fetch live odds): spend Odds credits for US-core books, then Atlas Insight.
     - cache_only=true (Rescore): never spend Odds credits; requires existing cache.
     """
@@ -89,7 +89,8 @@ async def refresh_sports(
         cache_only=cache_only,
     )
     set_last_job("refresh_sports")
-    return {"status": "ok", "module": "sports", **result}
+    status = "error" if result.get("ok") is False else "ok"
+    return {"status": status, "module": "sports", **result}
 
 
 @router.post("/refresh-sports-openai")

@@ -222,9 +222,9 @@ class SportsRefreshService:
     @staticmethod
     def _live_odds_pulled(*, cache_only: bool, fetch_stats: dict[str, Any]) -> bool:
         """True when this refresh spent Odds credits or wrote a fresh live pull to cache."""
-        return not cache_only and bool(fetch_stats.get("configured")) and not bool(
-            fetch_stats.get("cached")
-        )
+        if cache_only or fetch_stats.get("cached") or fetch_stats.get("cache_only"):
+            return False
+        return bool(fetch_stats.get("configured")) and int(fetch_stats.get("credits_used") or 0) > 0
 
     async def refresh_sports(
         self,
@@ -265,6 +265,7 @@ class SportsRefreshService:
                 "events_scanned": 0,
                 "stats": {"configured": False, "error": str(exc)},
                 "top_opportunity": None,
+                "ok": False,
                 "message": _odds_error_message(exc),
             }
         except OSError as exc:
@@ -274,6 +275,7 @@ class SportsRefreshService:
                 "events_scanned": 0,
                 "stats": {"configured": True, "error": str(exc)},
                 "top_opportunity": None,
+                "ok": False,
                 "message": (
                     "Network/DNS error reaching external services. "
                     "Check the PC running the API has internet, then tap Restart and try again."
@@ -286,6 +288,7 @@ class SportsRefreshService:
                 "events_scanned": 0,
                 "stats": fetch_stats,
                 "top_opportunity": None,
+                "ok": False,
                 "message": fetch_stats.get("error") or "ODDS_API_KEY is not configured",
             }
 
@@ -298,6 +301,7 @@ class SportsRefreshService:
                 "credits_used": int(fetch_stats.get("credits_used") or 0),
                 "cache_used": bool(fetch_stats.get("cached")),
                 "top_opportunity": None,
+                "ok": False,
                 "message": fetch_stats.get("error"),
             }
 
@@ -310,6 +314,7 @@ class SportsRefreshService:
                 "events_scanned": 0,
                 "stats": fetch_stats,
                 "top_opportunity": None,
+                "ok": False,
                 "message": (
                     f"All {key_count} Odds API {plural} out of monthly credits, and no cached "
                     "odds are available yet. Add another free key at the-odds-api.com to "
@@ -323,14 +328,17 @@ class SportsRefreshService:
                 "events_scanned": 0,
                 "stats": fetch_stats,
                 "top_opportunity": None,
+                "ok": False,
                 "message": fetch_stats.get("error")
                 or fetch_stats.get("message")
                 or "Odds credits too low for a live scan — use Rescore on cached lines.",
             }
 
         live_odds_pulled = self._live_odds_pulled(cache_only=cache_only, fetch_stats=fetch_stats)
-        used_cache = bool(cache_only or fetch_stats.get("cached") or fetch_stats.get("stale"))
-
+        # Trust provider stats over the request flag — a warm cache serve sets cached=True.
+        used_cache = bool(fetch_stats.get("cached") or fetch_stats.get("stale")) or (
+            cache_only and not live_odds_pulled
+        )
         setups: list[dict[str, Any]] = []
         # Scores pulls cost Odds credits and can take minutes across 40+ leagues —
         # never do that on cache Scan/Rescore.
@@ -494,10 +502,47 @@ class SportsRefreshService:
                 "calibration": calibration,
                 "live_odds_pulled": live_odds_pulled,
                 "insight_pending": live_odds_pulled,
+                "ok": True,
                 "message": msg,
             }
 
-        if replace and setups:
+        # Insert new Odds-derived rows BEFORE deleting old ones so a failed save
+        # cannot wipe the board (previous delete-then-insert left an empty slate).
+        saved: list[dict[str, Any]] = []
+        insert_errors: list[str] = []
+        if setups:
+            chunk_size = 40
+            for start in range(0, len(setups), chunk_size):
+                chunk = setups[start : start + chunk_size]
+                try:
+                    inserted = await self.db.insert("sports_signals", chunk)
+                    if inserted:
+                        saved.extend(inserted)
+                except Exception as exc:
+                    detail = getattr(exc, "detail", None) or str(exc)
+                    insert_errors.append(str(detail)[:180])
+                    logger.warning("Sports insert chunk failed (%s rows): %s", len(chunk), exc)
+
+        if setups and not saved:
+            msg = (
+                "Sports scan scored picks but failed to save them — your board was left unchanged. "
+                f"{insert_errors[0] if insert_errors else 'Database write failed.'}"
+            )
+            return {
+                "signals_created": 0,
+                "signals_kept": True,
+                "events_scanned": len(events),
+                "stats": fetch_stats,
+                "top_opportunity": float(setups[0]["opportunity_score"]) if setups else None,
+                "credits_used": int(fetch_stats.get("credits_used") or 0),
+                "cache_used": bool(fetch_stats.get("cached")),
+                "live_odds_pulled": live_odds_pulled,
+                "insight_pending": False,
+                "ok": False,
+                "message": msg,
+            }
+
+        if replace and saved:
             # Grade finished picks from durable snapshots before wiping Odds-derived rows.
             try:
                 from app.services.outcome_resolver import OutcomeResolverService
@@ -514,15 +559,19 @@ class SportsRefreshService:
             except Exception as exc:
                 logger.warning("Pre-replace sports auto-grade skipped: %s", exc)
 
-            # Keep OpenAI web-desk picks — Odds scans only replace Odds-derived rows.
+            saved_ids = {str(r.get("id")) for r in saved if r.get("id")}
+            # Keep OpenAI web-desk picks + user Search bets — Odds scans only replace Odds rows.
             active = await self.db.select(
                 "sports_signals",
                 filters={"user_id": f"eq.{self.user_id}", "status": "eq.active"},
                 select="id,scoring_snapshot,line_movement",
-                limit=300,
+                limit=400,
             )
             delete_ids: list[str] = []
             for row in active:
+                sid = str(row.get("id") or "")
+                if not sid or sid in saved_ids:
+                    continue
                 snap = row.get("scoring_snapshot") or {}
                 lm = row.get("line_movement") or {}
                 source = str(snap.get("source") or lm.get("source") or "")
@@ -534,9 +583,7 @@ class SportsRefreshService:
                     or str(snap.get("pick_origin") or "") == "user"
                 ):
                     continue
-                sid = row.get("id")
-                if sid:
-                    delete_ids.append(str(sid))
+                delete_ids.append(sid)
             # Batch deletes — one-by-one was taking minutes and timing out the UI.
             for start in range(0, len(delete_ids), 40):
                 chunk = delete_ids[start : start + 40]
@@ -559,19 +606,6 @@ class SportsRefreshService:
                 )
             except Exception as exc:
                 logger.warning("Expire parlays after sports rescan: %s", exc)
-
-        saved: list[dict[str, Any]] = []
-        if setups:
-            # Chunk inserts — a 90–120 row payload with snapshots can trip gateway limits.
-            chunk_size = 40
-            for start in range(0, len(setups), chunk_size):
-                chunk = setups[start : start + chunk_size]
-                try:
-                    inserted = await self.db.insert("sports_signals", chunk)
-                    if inserted:
-                        saved.extend(inserted)
-                except Exception as exc:
-                    logger.warning("Sports insert chunk failed (%s rows): %s", len(chunk), exc)
 
         if saved:
             if not used_cache:
@@ -648,10 +682,17 @@ class SportsRefreshService:
             "cache_used": bool(fetch_stats.get("cached")),
             "live_odds_pulled": live_odds_pulled,
             "insight_pending": live_odds_pulled,
-            "parlays_invalidated": replace,
+            "parlays_invalidated": bool(replace and saved),
             "graded_resolved": graded_resolved,
             "calibration": calibration,
-            "message": self._result_message(setups, fetch_stats, parlays_invalidated=replace, calibration=calibration),
+            "ok": True,
+            "message": self._result_message(
+                setups,
+                fetch_stats,
+                parlays_invalidated=bool(replace and saved),
+                calibration=calibration,
+                saved_count=len(saved),
+            ),
         }
         if live_odds_pulled:
             base = str(result.get("message") or "").strip()
@@ -667,6 +708,7 @@ class SportsRefreshService:
         *,
         parlays_invalidated: bool = False,
         calibration: dict[str, Any] | None = None,
+        saved_count: int | None = None,
     ) -> str | None:
         source = _source_note(stats)
         credits = int(stats.get("credits_used") or 0)
@@ -675,11 +717,11 @@ class SportsRefreshService:
             if stats.get("cached")
             else f" · ~{credits} API credits used"
         )
-        scanned = int(stats.get("sports_scanned") or 0)
         near_leagues = stats.get("leagues_with_near_term_games") or []
         near_label = ", ".join(near_leagues[:6]) if near_leagues else "none in the next 7 days"
         dropped = int(stats.get("events_dropped_far_out") or 0)
         skipped = stats.get("skipped_off_season") or []
+        persisted = len(setups) if saved_count is None else saved_count
 
         scan_note = ""
         if stats.get("credit_guard") or stats.get("credits_blocked"):
@@ -727,10 +769,7 @@ class SportsRefreshService:
             else:
                 base += "Edges may be below threshold — widen filters or rescan later. "
             return f"{base}{source}"
-        if stats.get("cached"):
-            base = f"{scan_note} · saved {len(setups)} plays"
-        else:
-            base = f"{scan_note} · saved {len(setups)} plays"
+        base = f"{scan_note} · saved {persisted} plays"
         if calibration and calibration.get("active") and calibration.get("learning_notes"):
             base += f" · Atlas learning: {calibration['learning_notes'][0]}"
         if parlays_invalidated and setups:

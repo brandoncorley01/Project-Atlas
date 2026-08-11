@@ -341,11 +341,11 @@ export function SportsSignalsView({
     const apiUrl = getApiUrl();
     const params = new URLSearchParams();
     if (mode === "live") params.set("force_refresh", "true");
-    // Rescore is always cache-only. Scan uses free cache when warm; otherwise the API
-    // live-seeds even under ODDS_SPEND_MODE=cache_only (cold Render disk / empty cache).
+    // Rescore is always cache-only.
+    // Scan must NOT send cache_only — the API already serves a warm cache for free when
+    // available, and live-seeds when the cache is cold. Sending cache_only from a stale
+    // client status blocked that live-seed and made Scan look broken after redeploys.
     if (mode === "rescore") {
-      params.set("cache_only", "true");
-    } else if (mode === "scan" && cacheRescoreFree) {
       params.set("cache_only", "true");
     }
     const query = params.toString() ? `?${params}` : "";
@@ -356,9 +356,23 @@ export function SportsSignalsView({
         credentials: usesBffProxy() ? "include" : "same-origin",
         signal: AbortSignal.timeout(180000),
       });
-      const body = await res.json();
-      if (!res.ok) {
-        const detail = typeof body.detail === "string" ? body.detail : "Scan failed";
+      let body: Record<string, unknown> = {};
+      try {
+        body = await res.json();
+      } catch {
+        setMessage(
+          res.status === 503
+            ? "Sports scan timed out — try Rescore (0 credits) or Fetch live odds."
+            : `Sports scan failed (HTTP ${res.status}). Try again in a moment.`,
+        );
+        setLoading(null);
+        return;
+      }
+      if (!res.ok || body.ok === false || body.status === "error") {
+        const detail =
+          (typeof body.message === "string" && body.message) ||
+          (typeof body.detail === "string" && body.detail) ||
+          "Scan failed";
         setMessage(
           res.status === 404
             ? "Sports scan endpoint not found — restart API with .\\scripts\\start-dev.ps1"
@@ -370,7 +384,7 @@ export function SportsSignalsView({
         return;
       }
 
-      const created = body.signals_created as number;
+      const created = Number(body.signals_created ?? 0);
       const kept = body.signals_kept as boolean | undefined;
       const creditsUsed = body.credits_used as number | undefined;
       const cacheUsed = body.cache_used as boolean | undefined;
@@ -395,7 +409,9 @@ export function SportsSignalsView({
 
       await Promise.all([
         loadCategories(token),
-        loadItems(token, null, null, { replaceEmpty: true }),
+        // Only force-clear the board when the scan actually produced (or intentionally kept) picks.
+        // A failed save previously wiped the UI even though Odds rows were deleted server-side.
+        loadItems(token, null, null, { replaceEmpty: created > 0 || Boolean(kept) }),
         refreshOddsStatus(),
       ]);
       router.refresh();
@@ -407,8 +423,14 @@ export function SportsSignalsView({
         await refreshOpenAiPicks({ quietPrefix: apiMessage });
         return;
       }
-    } catch {
-      setMessage("Backend not responding — run .\\scripts\\start-dev.ps1");
+    } catch (err) {
+      const timedOut =
+        err instanceof DOMException && (err.name === "TimeoutError" || err.name === "AbortError");
+      setMessage(
+        timedOut
+          ? "Sports scan timed out — try Rescore (0 credits) or Fetch live odds."
+          : "Backend not responding — run .\\scripts\\start-dev.ps1",
+      );
     }
     setLoading(null);
   }
@@ -596,7 +618,7 @@ export function SportsSignalsView({
             disabled={busy}
             title={
               cacheRescoreFree
-                ? "Scan sports odds from warm cache (0 credits). Use Fetch for a fresh live slate."
+                ? "Scan sports odds — uses warm cache when available (0 credits). Use Fetch for a brand-new live slate."
                 : "Scan sports odds — seeds live FanDuel/DraftKings lines if cache is empty, then ranks plays."
             }
             className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-md shadow-violet-600/25 disabled:opacity-50"

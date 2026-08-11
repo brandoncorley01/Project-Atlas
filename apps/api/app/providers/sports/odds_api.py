@@ -1058,6 +1058,9 @@ async def fetch_all_sports_odds(
     # Spend lock: prefer a usable near-term cache (0 credits). If cache is empty/stale,
     # intentional Scan may live-pull to seed — same as Fetch — so production cold starts work.
     # force_refresh always live-pulls when credits allow.
+    #
+    # Scan clients must not send cache_only (that blocked live-seed when status was stale).
+    # Rescore still sends cache_only and hard-fails when the cache is empty.
     serve_cache_only = bool(cache_only) or (spend_locked and not force_refresh and cache_usable)
     if serve_cache_only:
         if not cache_usable:
