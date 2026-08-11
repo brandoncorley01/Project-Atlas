@@ -117,25 +117,14 @@ async def run_fix_all(
         steps.append(sports_step)
         sports_scanned = bool(sports_step.get("ok"))
         sports_created = int(sports_step.get("signals_created") or 0)
-        # Successful HTTP path that still left sports empty with an error payload.
-        if sports_scanned and sports_created == 0 and needs["sports"]:
+        # Any empty sports board after an intentional scan is a failed repair step.
+        if needs["sports"] and sports_created == 0:
             err = str(sports_step.get("error") or sports_step.get("message") or "").strip()
-            lower = err.lower()
-            if any(
-                needle in lower
-                for needle in (
-                    "cache",
-                    "credit",
-                    "odds api",
-                    "not configured",
-                    "failed to save",
-                    "network",
-                    "dns",
-                )
-            ):
-                sports_step["ok"] = False
-                sports_step["error"] = err or "Sports scan did not fill the board"
-                sports_scanned = False
+            sports_step["ok"] = False
+            sports_step["error"] = err or (
+                "Sports scan did not fill the board — open Sports and tap Fetch live odds once"
+            )
+            sports_scanned = False
 
     if "options" in requested:
         from app.services.options_service import OptionsRefreshService

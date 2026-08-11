@@ -221,10 +221,15 @@ class SportsRefreshService:
 
     @staticmethod
     def _live_odds_pulled(*, cache_only: bool, fetch_stats: dict[str, Any]) -> bool:
-        """True when this refresh spent Odds credits or wrote a fresh live pull to cache."""
+        """True when this refresh actually wrote fresh live odds (not aspirational credits)."""
         if cache_only or fetch_stats.get("cached") or fetch_stats.get("cache_only"):
             return False
-        return bool(fetch_stats.get("configured")) and int(fetch_stats.get("credits_used") or 0) > 0
+        if fetch_stats.get("error") or fetch_stats.get("credits_blocked"):
+            return False
+        events = int(fetch_stats.get("events") or 0)
+        return bool(fetch_stats.get("configured")) and events > 0 and int(
+            fetch_stats.get("credits_used") or 0
+        ) > 0
 
     async def refresh_sports(
         self,
@@ -339,16 +344,43 @@ class SportsRefreshService:
         used_cache = bool(fetch_stats.get("cached") or fetch_stats.get("stale")) or (
             cache_only and not live_odds_pulled
         )
+
+        # Live pull attempted but returned nothing usable — fail closed (do not pretend success).
+        if (
+            not used_cache
+            and not events
+            and (force_refresh or fetch_stats.get("error") or int(fetch_stats.get("credits_used") or 0) > 0)
+        ):
+            return {
+                "signals_created": 0,
+                "events_scanned": 0,
+                "stats": fetch_stats,
+                "credits_used": int(fetch_stats.get("credits_used") or 0),
+                "cache_used": False,
+                "top_opportunity": None,
+                "ok": False,
+                "message": fetch_stats.get("error")
+                or fetch_stats.get("message")
+                or (
+                    "Live odds pull returned no upcoming games. "
+                    "Tap Fetch live odds once, or add another ODDS_API_KEY."
+                ),
+            }
+
         setups: list[dict[str, Any]] = []
         # Scores pulls cost Odds credits and can take minutes across 40+ leagues —
-        # never do that on cache Scan/Rescore.
+        # never do that on cache Scan/Rescore, or under ODDS_SPEND_MODE=cache_only
+        # after an intentional cold seed (would burn more credits + risk timeouts).
         stats_index: dict[str, Any] = {}
-        if not used_cache:
+        spend_locked = not config.settings.odds_live_spending_allowed()
+        if not used_cache and not spend_locked:
             try:
                 stats_index = await build_stats_index(events)
             except Exception as exc:
                 logger.warning("Team stats skipped (non-fatal): %s", exc)
                 stats_index = {}
+        elif not used_cache and spend_locked:
+            fetch_stats["scores_skipped"] = "spend_locked"
 
         from app.services.calibration_service import CalibrationService
 
@@ -399,7 +431,8 @@ class SportsRefreshService:
         # OpenAI slate ranking is optional polish — never block a dense cache scan.
         # Quota/timeouts previously burned 60–120s and the BFF dropped the response,
         # so the UI showed "no changes" even after a successful board fill.
-        if setups and config.settings.openai_api_key and not used_cache:
+        # Under spend lock, skip after cold seed too — keep Scan fast enough for Vercel/BFF.
+        if setups and config.settings.openai_api_key and not used_cache and not spend_locked:
             try:
                 from app.services.sports_slate_ai import rank_slate_with_openai
 

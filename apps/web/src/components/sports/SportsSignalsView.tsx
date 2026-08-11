@@ -418,10 +418,19 @@ export function SportsSignalsView({
       globalThis.dispatchEvent(new Event("atlas:dashboard-refresh"));
 
       // Separate request after live odds — avoids one long Fetch+Insight call that 503s the BFF.
-      if (liveOddsPulled) {
+      // Only chain Insight when Scan/Fetch actually saved plays; otherwise Insight has nothing
+      // to rank and quietPrefix would block the Fetch-live fallback.
+      if (liveOddsPulled && created > 0) {
         setLoading(null);
         await refreshOpenAiPicks({ quietPrefix: apiMessage });
         return;
+      }
+      if (liveOddsPulled && created <= 0) {
+        setMessage(
+          apiMessage
+            ? `${apiMessage} · Board still empty — tap Fetch live odds, then Atlas Insight.`
+            : "Live odds pulled but no plays ranked — tap Fetch live odds, then Atlas Insight.",
+        );
       }
     } catch (err) {
       const timedOut =

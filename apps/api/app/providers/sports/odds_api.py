@@ -877,6 +877,7 @@ async def probe_all_odds_keys(*, use_cache: bool = True) -> dict[str, Any]:
     active_index: int | None = None
     active_client: OddsApiClient | None = None
     active_sports: list[dict[str, Any]] = []
+    active_remaining = -1
     last_error: str | None = None
     exhausted_valid = 0
     valid_count = 0
@@ -887,15 +888,20 @@ async def probe_all_odds_keys(*, use_cache: bool = True) -> dict[str, Any]:
         sports = entry.pop("_sports", [])
         if entry.get("valid"):
             valid_count += 1
-            if entry.get("remaining") is not None:
+            rem = entry.get("remaining")
+            rem_i = int(rem) if rem is not None else -1
+            if rem is not None:
                 have_remaining = True
-                total_remaining += max(0, int(entry["remaining"]))
+                total_remaining += max(0, rem_i)
             if entry.get("exhausted"):
                 exhausted_valid += 1
-            elif active_index is None and sports and client is not None:
-                active_index = idx
-                active_client = client
-                active_sports = sports
+            elif sports and client is not None:
+                # Prefer the key with the most remaining credits (not just first valid).
+                if active_index is None or rem_i > active_remaining:
+                    active_index = idx
+                    active_client = client
+                    active_sports = sports
+                    active_remaining = rem_i
         elif entry.get("error"):
             last_error = entry["error"]
         entries.append(entry)
@@ -908,6 +914,7 @@ async def probe_all_odds_keys(*, use_cache: bool = True) -> dict[str, Any]:
         "key_count": len(keys),
         "keys": entries,
         "total_remaining": total_remaining if have_remaining else None,
+        "active_key_remaining": active_remaining if active_remaining >= 0 else None,
         "active_key_index": active_index,
         "active_client": active_client,
         "active_sports": active_sports,
@@ -929,6 +936,7 @@ async def _select_active_client() -> tuple[OddsApiClient | None, list[dict[str, 
         "key_count": probe["key_count"],
         "active_key_index": probe["active_key_index"],
         "total_remaining": probe["total_remaining"],
+        "active_key_remaining": probe.get("active_key_remaining"),
         "quota_exhausted": probe["quota_exhausted"],
         "error": probe.get("error"),
         "keys": probe["keys"],
@@ -1184,15 +1192,30 @@ async def fetch_all_sports_odds(
     stats_deprioritized = sorted(_sport_label(k) for k in deprioritized if k in keys)
 
     # Credit guard — never start a live pull that would wipe the free-tier budget.
-    remaining = info.get("total_remaining")
+    # Prefer the ACTIVE key's remaining credits (sum across keys overstates what one call can spend).
+    remaining = info.get("active_key_remaining")
+    if remaining is None:
+        remaining = info.get("total_remaining")
     estimated = len(keys) + len(futures_keys)
     reserve = max(0, int(getattr(config.settings, "odds_min_credits_reserve", 15) or 0))
     # Free keys are ~500/mo. A reserve of 500 blocks every live call. Cap auto-reserve,
-    # and for intentional Fetch only keep a tiny cushion so the button works.
+    # and for intentional Fetch / cold Scan seed keep a tiny cushion so the button works.
     if force_refresh:
-        reserve = min(reserve, 10)
+        reserve = min(reserve, 2)
     else:
         reserve = min(reserve, 100)
+    # Shrink the live slate to fit remaining credits instead of hard-failing cold Scan.
+    if remaining is not None and force_refresh and remaining < estimated + reserve:
+        affordable = max(0, int(remaining) - reserve)
+        if affordable > 0:
+            keys = keys[:affordable]
+            futures_keys = ()
+            estimated = len(keys)
+            logger.info(
+                "Odds credits tight (%s left) — shrinking live seed to %s leagues",
+                remaining,
+                estimated,
+            )
     if remaining is not None and remaining < estimated + reserve:
         stale = _stale_cache_response(cache, info)
         if stale is not None:
@@ -1255,11 +1278,13 @@ async def fetch_all_sports_odds(
         "scan_scope": "us_global_live" if force_refresh else config.settings.odds_scan_scope,
         "max_sports_per_scan": config.settings.odds_max_sports_per_scan,
         "bookmakers": US_BOOKMAKER_KEYS,
-        # /sports is free — only per-league odds calls cost credits.
-        "credits_used": len(keys) + len(futures_keys),
+        # Filled after fetches from leagues that actually returned rows.
+        "credits_used": 0,
     }
     if info.get("total_remaining") is not None:
         stats["total_remaining"] = info.get("total_remaining")
+    if info.get("active_key_remaining") is not None:
+        stats["active_key_remaining"] = info.get("active_key_remaining")
 
     sem = asyncio.Semaphore(PARALLEL_FETCHES)
     results = await asyncio.gather(
@@ -1273,14 +1298,25 @@ async def fetch_all_sports_odds(
         ],
     )
 
+    leagues_attempted = 0
+    leagues_with_rows = 0
     for key, rows in results:
+        leagues_attempted += 1
         events.extend(rows)
         stats["sports"][key] = len(rows)
+        if rows:
+            leagues_with_rows += 1
+
+    # Count only leagues that returned data as credits spent — empty skips still cost a
+    # request, but aspirational credits_used previously marked failed pulls as "live".
+    stats["credits_used"] = leagues_attempted
+    stats["leagues_with_rows"] = leagues_with_rows
 
     if client.requests_remaining is not None:
         stats["requests_remaining"] = client.requests_remaining
         # Prefer live remaining after the pull when available.
         stats["total_remaining"] = client.requests_remaining
+        stats["active_key_remaining"] = client.requests_remaining
     if client.requests_used is not None:
         stats["requests_used"] = client.requests_used
     if client.quota_exhausted:
@@ -1316,5 +1352,14 @@ async def fetch_all_sports_odds(
 
     if events:
         _write_cache(events, stats)
+    elif force_refresh or not existing:
+        # Live pull attempted but produced nothing — surface as a hard error so Scan/Fix all
+        # do not pretend Insight has a fresh board to rank.
+        stats["error"] = (
+            "Live odds pull returned no upcoming FanDuel/DraftKings games. "
+            "Check ODDS_API_KEY credits, then tap Fetch live odds again."
+        )
+        stats["credits_used"] = 0
+        return [], stats
 
     return events, stats

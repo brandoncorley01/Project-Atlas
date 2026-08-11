@@ -125,16 +125,30 @@ async def test_refresh_sports_deletes_old_odds_rows_only_after_successful_insert
     assert "new-0" not in delete_filter["id"]
 
 
-def test_live_odds_pulled_requires_credits_spent():
+def test_live_odds_pulled_requires_events_and_credits():
     assert SportsRefreshService._live_odds_pulled(
         cache_only=False,
-        fetch_stats={"configured": True, "cached": False, "credits_used": 4},
+        fetch_stats={"configured": True, "cached": False, "credits_used": 4, "events": 12},
     )
     assert not SportsRefreshService._live_odds_pulled(
         cache_only=False,
-        fetch_stats={"configured": True, "cached": True, "credits_used": 0},
+        fetch_stats={"configured": True, "cached": False, "credits_used": 4, "events": 0},
+    )
+    assert not SportsRefreshService._live_odds_pulled(
+        cache_only=False,
+        fetch_stats={"configured": True, "cached": True, "credits_used": 0, "events": 12},
     )
     assert not SportsRefreshService._live_odds_pulled(
         cache_only=True,
-        fetch_stats={"configured": True, "cached": False, "credits_used": 4},
+        fetch_stats={"configured": True, "cached": False, "credits_used": 4, "events": 12},
+    )
+    assert not SportsRefreshService._live_odds_pulled(
+        cache_only=False,
+        fetch_stats={
+            "configured": True,
+            "cached": False,
+            "credits_used": 4,
+            "events": 0,
+            "error": "Live odds pull returned no upcoming games",
+        },
     )
