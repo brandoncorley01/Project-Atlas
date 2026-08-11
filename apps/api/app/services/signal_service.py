@@ -119,15 +119,97 @@ def _options_row_identity(row: dict) -> str:
     return contract_identity_key(candidate)
 
 
+def _options_symbol_expiration_key(row: dict) -> str:
+    underlying = str(row.get("underlying") or "").upper()
+    exp = row.get("expiration")
+    if hasattr(exp, "isoformat"):
+        exp = exp.isoformat()
+    elif isinstance(exp, str):
+        exp = exp[:10]
+    return f"{underlying}:{exp}"
+
+
+def _options_row_direction_rank(row: dict) -> tuple[float, float, float]:
+    snap = row.get("scoring_snapshot") or {}
+    return (
+        _safe_float(row.get("confidence_score")),
+        _safe_float(snap.get("profit_probability")),
+        _safe_float(row.get("opportunity_score")),
+    )
+
+
+def _hedge_strategy_from_row(row: dict) -> dict:
+    snap = row.get("scoring_snapshot") or {}
+    premium = _safe_float(row.get("premium"))
+    contract_cost = snap.get("contract_cost")
+    if contract_cost is None:
+        contract_cost = round(premium * 100, 2)
+    exp = row.get("expiration")
+    if hasattr(exp, "isoformat"):
+        exp = exp.isoformat()
+    elif isinstance(exp, str):
+        exp = exp[:10]
+    return {
+        "role": "opposite_side_hedge",
+        "option_type": str(row.get("option_type") or "").lower(),
+        "strike": _safe_float(row.get("strike")),
+        "expiration": exp,
+        "premium": premium,
+        "contract_cost": _safe_float(contract_cost),
+        "confidence_score": _safe_float(row.get("confidence_score")),
+        "risk_score": _safe_float(row.get("risk_score")),
+        "opportunity_score": _safe_float(row.get("opportunity_score")),
+        "profit_probability": _safe_float(snap.get("profit_probability")),
+        "delta": row.get("delta"),
+        "bid": row.get("bid"),
+        "ask": row.get("ask"),
+        "rationale": (
+            "Same-expiry opposite side — Atlas's hedge if the primary directional thesis fails."
+        ),
+    }
+
+
 def _dedupe_options_rows(rows: list[dict]) -> list[dict]:
-    seen: set[str] = set()
-    out: list[dict] = []
+    """Dedupe exact contracts, then keep one confident direction per symbol+expiry."""
+    seen_contract: set[str] = set()
+    unique: list[dict] = []
     for row in rows:
         key = _options_row_identity(row)
-        if key in seen:
+        if key in seen_contract:
             continue
-        seen.add(key)
-        out.append(row)
+        seen_contract.add(key)
+        unique.append(row)
+
+    groups: dict[str, list[dict]] = {}
+    order: list[str] = []
+    for row in unique:
+        key = _options_symbol_expiration_key(row)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(row)
+
+    out: list[dict] = []
+    for key in order:
+        members = groups[key]
+        primary_src = max(members, key=_options_row_direction_rank)
+        primary = dict(primary_src)
+        primary_id = _options_row_identity(primary)
+        primary_type = str(primary.get("option_type") or "").lower()
+        opposite = "put" if primary_type == "call" else "call"
+        snap = dict(primary.get("scoring_snapshot") or {})
+        if not snap.get("hedge_strategy"):
+            hedges = [
+                r
+                for r in members
+                if _options_row_identity(r) != primary_id
+                and str(r.get("option_type") or "").lower() == opposite
+            ]
+            if hedges:
+                hedge = max(hedges, key=_options_row_direction_rank)
+                snap["hedge_strategy"] = _hedge_strategy_from_row(hedge)
+        primary["scoring_snapshot"] = snap
+        out.append(primary)
     return out
 
 
@@ -561,6 +643,7 @@ class SignalService:
         """Full options row for the Retail Options page."""
         summary = self._format_summary(row, "options")
         snapshot = row.get("scoring_snapshot") or {}
+        hedge = snapshot.get("hedge_strategy")
         return {
             **summary,
             "underlying": row.get("underlying") or "?",
@@ -574,6 +657,7 @@ class SignalService:
             "risk_warning": row.get("risk_warning", ""),
             "bull_case": row.get("bull_case"),
             "scoring_snapshot": snapshot,
+            "hedge_strategy": hedge,
         }
 
     @staticmethod
