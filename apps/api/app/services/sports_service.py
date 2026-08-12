@@ -17,6 +17,7 @@ from app.services.freshness import filter_upcoming_events, hours_until_event, is
 from app.services.sports_ranking import (
     composite_score,
     dedupe_one_side_per_market,
+    is_calendar_today,
     is_near_term,
     is_user_entry_row,
     is_within_horizon,
@@ -94,6 +95,22 @@ def _select_diverse_setups(setups: list[dict[str, Any]], *, limit: int) -> list[
             _take(row)
 
     # Round 1b: keep near-term plays on the board so Today / 48h / Week windows aren't empty.
+    # Prefer Eastern calendar-today first — a dense weekend slate used to starve Tonight's
+    # MLB/WNBA when higher-scoring Thu/Fri games filled the near-term floor.
+    today_pool = sorted(
+        (r for r in pool if is_calendar_today(r)),
+        key=composite_score,
+        reverse=True,
+    )
+    if today_pool and limit >= 8:
+        today_floor = min(len(today_pool), max(6, int(round(limit * 0.25))))
+        today_have = sum(1 for r in selected if is_calendar_today(r))
+        for row in today_pool:
+            if today_have >= today_floor or len(selected) >= limit:
+                break
+            if _take(row):
+                today_have += 1
+
     near_pool = sorted(
         (r for r in pool if is_near_term(r)),
         key=composite_score,

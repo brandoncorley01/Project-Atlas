@@ -79,19 +79,20 @@ function getEv(row: SportsSignal): number {
   return ev;
 }
 
-/** Hours until kickoff — prefer API field, else derive from event_start. */
+/** Hours until kickoff — always prefer live clock from event_start when present. */
 export function hoursUntilStart(row: SportsSignal): number | null {
+  if (row.event_start) {
+    try {
+      const ms = new Date(row.event_start).getTime() - Date.now();
+      if (Number.isFinite(ms)) return ms / 3_600_000;
+    } catch {
+      /* fall through */
+    }
+  }
   if (typeof row.hours_until_start === "number" && Number.isFinite(row.hours_until_start)) {
     return row.hours_until_start;
   }
-  if (!row.event_start) return null;
-  try {
-    const ms = new Date(row.event_start).getTime() - Date.now();
-    if (!Number.isFinite(ms)) return null;
-    return ms / 3_600_000;
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 function getSoonest(row: SportsSignal): number {
