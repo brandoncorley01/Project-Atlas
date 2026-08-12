@@ -743,7 +743,7 @@ export function SportsSignalsView({
           }
           description={
             window === "today" && !activeCategory && filter === "all" && !activeSport
-              ? "Nothing kicks off today (US/Eastern). Try Next 48h, This week, or All dates."
+              ? "Nothing upcoming later today (US/Eastern) made the board. If MLB/WNBA are on tonight, tap Fetch live odds again after the latest deploy — then try Next 48h if tips already started."
               : window === "soon" && !activeCategory && filter === "all" && !activeSport
                 ? "No plays in the next 48 hours. Try This week, Next 30 days, or All dates."
                 : activeCategory || activeSport || filter !== "all"

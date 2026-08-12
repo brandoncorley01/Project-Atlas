@@ -588,7 +588,6 @@ def analyze_event(
         )
 
     _promote_combat_candidates(candidates, sport_key=sport_key)
-    combat = _is_combat_sport_key(sport_key)
 
     setups: list[SportsBetSetup] = []
     for cand in candidates:
