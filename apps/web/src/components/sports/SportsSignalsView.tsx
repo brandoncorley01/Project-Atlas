@@ -341,15 +341,27 @@ export function SportsSignalsView({
     const apiUrl = getApiUrl();
     const params = new URLSearchParams();
     if (mode === "live") params.set("force_refresh", "true");
-    // Rescore is always cache-only.
-    // Scan must NOT send cache_only — the API already serves a warm cache for free when
-    // available, and live-seeds when the cache is cold. Sending cache_only from a stale
-    // client status blocked that live-seed and made Scan look broken after redeploys.
-    if (mode === "rescore") {
+    // Scan + Rescore are always cache-only (0 Odds credits).
+    // Only Fetch live odds spends credits — never auto-seed from Scan.
+    if (mode === "scan" || mode === "rescore") {
       params.set("cache_only", "true");
     }
     const query = params.toString() ? `?${params}` : "";
     try {
+      if (mode === "live") {
+        const estimate = oddsStatus?.estimated_live_scan_credits ?? 8;
+        const remaining = oddsStatus?.total_remaining;
+        const ok = globalThis.confirm(
+          `Fetch live odds spends ~${estimate} Odds API credits` +
+            (remaining != null ? ` (${remaining} left)` : "") +
+            ".\n\nOnly tap this when the cache is empty or missing leagues. " +
+            "Scan and Rescore are free.\n\nContinue?",
+        );
+        if (!ok) {
+          setLoading(null);
+          return;
+        }
+      }
       const res = await fetch(`${apiUrl}/engine/refresh-sports${query}`, {
         method: "POST",
         headers: apiRequestHeaders(token),
@@ -397,7 +409,7 @@ export function SportsSignalsView({
             ? "No new edges found — kept your current picks on the board"
             : created > 0
               ? `Found ${created} plays · ${cacheUsed ? "0 Odds credits (cached)" : `~${creditsUsed ?? "?"} Odds credits`}`
-              : "No edges met the threshold — try Fetch live odds or Atlas Insight"),
+              : "No edges met the threshold — try Rescore (0 credits). Fetch only if the cache is empty."),
       );
 
       // Leave filters wide so Odds Scan results stay visible (US + global).
@@ -428,8 +440,8 @@ export function SportsSignalsView({
       if (liveOddsPulled && created <= 0) {
         setMessage(
           apiMessage
-            ? `${apiMessage} · Board still empty — tap Fetch live odds, then Atlas Insight.`
-            : "Live odds pulled but no plays ranked — tap Fetch live odds, then Atlas Insight.",
+            ? `${apiMessage} · Board still empty — tap Rescore (0 credits). Fetch only if cache has no games.`
+            : "Live odds pulled but no plays ranked — tap Rescore (0 credits).",
         );
       }
     } catch (err) {
@@ -564,10 +576,6 @@ export function SportsSignalsView({
   const cacheRescoreFree = oddsStatus?.cache_rescore_free ?? false;
   const cacheFresh = oddsStatus?.cache_fresh ?? false;
   const cacheNeedsLive = oddsStatus?.cache_needs_live_refresh ?? false;
-  // Auto-spend lock still allows intentional Fetch; only hard-stop when quota is gone.
-  const autoSpendLocked = Boolean(
-    oddsStatus?.spend_locked || oddsStatus?.auto_spend_allowed === false,
-  );
   const busy = loading !== null;
 
   return (
@@ -625,11 +633,7 @@ export function SportsSignalsView({
             type="button"
             onClick={() => refreshSports("scan")}
             disabled={busy}
-            title={
-              cacheRescoreFree
-                ? "Scan sports odds — uses warm cache when available (0 credits). Use Fetch for a brand-new live slate."
-                : "Scan sports odds — seeds live FanDuel/DraftKings lines if cache is empty, then ranks plays."
-            }
+            title="Scan sports odds from cache only — 0 Odds credits. Never spends. Use Fetch only when the cache is empty."
             className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-md shadow-violet-600/25 disabled:opacity-50"
           >
             {loading === "scan" ? "Scanning…" : "Scan sports odds"}
@@ -640,14 +644,12 @@ export function SportsSignalsView({
             disabled={busy || fetchBlocked}
             title={
               fetchBlocked
-                ? "Odds credits exhausted — add a new free Odds API key, then Fetch again."
-                : autoSpendLocked
-                  ? "Fetch live FanDuel/DraftKings lines (~8 leagues / credits), then Atlas Insight auto-ranks. Scan/Rescore stay free from cache."
-                  : "Fetch live FanDuel/DraftKings lines (~8 leagues / credits), then Atlas Insight auto-ranks from the fresh board."
+                ? "Odds credits exhausted — add a new free Odds API key, then Fetch again later."
+                : "WARNING: spends ~8 Odds credits. Confirm before running. Prefer Scan/Rescore (free). 20m cooldown after each Fetch."
             }
-            className="rounded-lg border border-violet-500/40 bg-violet-500/10 px-4 py-2 text-sm font-medium text-violet-200 hover:bg-violet-500/20 disabled:opacity-50"
+            className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm font-medium text-rose-100 hover:bg-rose-500/20 disabled:opacity-50"
           >
-            {loading === "live" ? "Fetching…" : "Fetch live odds"}
+            {loading === "live" ? "Fetching…" : "Fetch live odds (uses credits)"}
           </button>
           <button
             type="button"
@@ -743,7 +745,7 @@ export function SportsSignalsView({
           }
           description={
             window === "today" && !activeCategory && filter === "all" && !activeSport
-              ? "Nothing upcoming later today (US/Eastern) made the board. If MLB/WNBA are on tonight, tap Fetch live odds again after the latest deploy — then try Next 48h if tips already started."
+              ? "Nothing upcoming later today (US/Eastern) on the board. Tap Rescore (0 credits) first — do not spam Fetch. Use Next 48h if tips already started."
               : window === "soon" && !activeCategory && filter === "all" && !activeSport
                 ? "No plays in the next 48 hours. Try This week, Next 30 days, or All dates."
                 : activeCategory || activeSport || filter !== "all"

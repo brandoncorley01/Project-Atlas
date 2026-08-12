@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     # Values >= 500 effectively block all live Fetch — keep this well below that.
     odds_min_credits_reserve: int = 25
 
+    # Minimum minutes between explicit Fetch live odds pulls (protects free-tier keys).
+    # Scan / Rescore / Fix all never bypass this — only force_refresh spends, and only
+    # after the cooldown (unless cache is completely empty).
+    odds_live_fetch_cooldown_minutes: int = 20
+
     # Atlas Insight: max soon games to pull FanDuel player props for (each uses ~3 credits).
     # 0 = never spend Odds credits on Insight (use odds/props cache only).
     # User-initiated Insight may still spend when >0 even if ODDS_SPEND_MODE=cache_only.
@@ -166,10 +171,10 @@ class Settings(BaseSettings):
         return bool(self.odds_api_keys)
 
     def odds_intentional_live_allowed(self) -> bool:
-        """User-initiated Search / Insight / cold-cache Scan may hit Odds APIs in cache_only.
+        """Search / Insight may hit Odds APIs in cache_only when explicitly needed.
 
-        Warm-cache Rescore/Scan stay free. Callers must still honor credit
-        reserves so free-tier keys aren't drained overnight.
+        Sports Scan / Rescore must NOT auto-spend — only the Fetch live odds button
+        (force_refresh) may pull. Warm-cache work stays free.
         """
         return bool(self.odds_api_keys)
 

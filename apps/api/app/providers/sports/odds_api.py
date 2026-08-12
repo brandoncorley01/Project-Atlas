@@ -1120,18 +1120,14 @@ async def fetch_all_sports_odds(
     near_keys = frozenset(near_preview.get("near_term_league_keys") or [])
     incomplete_essentials = bool(near_cached) and _cache_needs_live_refresh(near_keys)
 
-    # Rescore (cache_only) never spends.
-    # Spend lock: prefer a usable near-term cache (0 credits). If cache is empty/stale,
-    # intentional Scan may live-pull to seed — same as Fetch — so production cold starts work.
-    # Incomplete in-season slate (missing essentials) also live-seeds on Scan so narrow
-    # caches don't freeze for the full TTL under ODDS_SPEND_MODE=cache_only.
-    # force_refresh always live-pulls when credits allow.
-    #
-    # Scan clients must not send cache_only (that blocked live-seed when status was stale).
-    # Rescore still sends cache_only and hard-fails when the cache is empty.
-    serve_cache_only = bool(cache_only) or (
-        spend_locked and not force_refresh and cache_usable and not incomplete_essentials
-    )
+    # CREDIT SAFETY (hard rules):
+    # - Rescore (cache_only) never spends.
+    # - Scan (force_refresh=false) never spends under ODDS_SPEND_MODE=cache_only —
+    #   serve whatever near-term cache exists, even if narrow. Incomplete slate used
+    #   to auto live-seed and burn credits every tap; that is unacceptable.
+    # - Only explicit Fetch (force_refresh=true) may spend, and even then a cooldown
+    #   blocks rapid re-Fetches when a usable cache already exists.
+    serve_cache_only = bool(cache_only) or (spend_locked and not force_refresh)
     if serve_cache_only:
         if not cache_usable:
             return [], {
@@ -1141,13 +1137,14 @@ async def fetch_all_sports_odds(
                 "spend_locked": spend_locked,
                 "odds_spend_mode": config.settings.odds_spend_mode_normalized(),
                 "credits_used": 0,
+                "cache_needs_live_refresh": True,
                 "error": (
-                    "No upcoming games in the odds cache. Tap Fetch live odds once to seed "
-                    "FanDuel/DraftKings lines (uses a few Odds credits)."
+                    "No upcoming games in the odds cache. Tap Fetch live odds ONCE to seed "
+                    "FanDuel/DraftKings lines (uses Odds credits). Scan and Rescore stay free after that."
                     if cache and raw_cached
                     else (
-                        "No odds cache yet. Tap Fetch live odds once to seed FanDuel/DraftKings lines "
-                        "(uses a few Odds credits). Rescore / Scan stay free after that."
+                        "No odds cache yet. Tap Fetch live odds ONCE to seed FanDuel/DraftKings lines "
+                        "(uses Odds credits). Then use Scan / Rescore for free — do not keep tapping Fetch."
                     )
                 ),
             }
@@ -1174,31 +1171,50 @@ async def fetch_all_sports_odds(
                 "scan_scope": "cache_only" if spend_locked else "rescore",
                 "max_sports_per_scan": config.settings.odds_max_sports_per_scan,
                 "message": (
-                    (
-                        "Odds auto-spend is locked — served cached lines (0 credits). "
-                        "Tap Fetch live odds when you want a fresh slate."
-                        + (
-                            " Cache is missing in-season leagues — Fetch to widen coverage."
-                            if needs_live
-                            else ""
-                        )
+                    "0 Odds credits — scored from cache. "
+                    + (
+                        "Coverage looks narrow; Fetch live odds once if you need more leagues "
+                        "(cooldown protects your credit balance)."
+                        if needs_live or incomplete_essentials
+                        else "Use Rescore anytime for a free re-rank."
                     )
-                    if spend_locked
-                    else None
                 ),
             }
         )
         return events, stats
 
-    if spend_locked and not force_refresh and (not cache_usable or incomplete_essentials):
-        logger.info(
-            "Odds spend lock on but cache %s (%d raw events) — Scan will live-seed",
-            "incomplete" if incomplete_essentials and cache_usable else "unusable",
-            len(raw_cached),
-        )
-        force_refresh = True  # intentional seed under lock when Scan has nothing / narrow slate
+    # Explicit Fetch cooldown — never burn another ~8 credits seconds after the last pull
+    # when we already have upcoming games to Rescore.
+    cooldown_min = max(0, int(getattr(config.settings, "odds_live_fetch_cooldown_minutes", 20) or 0))
+    if force_refresh and cache_usable and cooldown_min > 0:
+        last_live = None
+        cache_stats = dict((cache or {}).get("stats") or {})
+        last_live_raw = cache_stats.get("last_live_fetch_at") or (cache or {}).get("fetched_at")
+        last_live = _cache_age_minutes(str(last_live_raw) if last_live_raw else None)
+        if last_live is not None and last_live < cooldown_min:
+            wait_m = max(1, int(cooldown_min - last_live))
+            events, near_meta = _near_term_cache_events(raw_cached)
+            stats = dict(cache_stats)
+            stats.update(
+                {
+                    "configured": True,
+                    "cached": True,
+                    "cache_only": False,
+                    "fetch_cooldown": True,
+                    "credits_used": 0,
+                    "events": len(events),
+                    "leagues_with_near_term_games": near_meta.get("near_term_leagues") or [],
+                    "cache_needs_live_refresh": incomplete_essentials,
+                    "message": (
+                        f"Fetch cooldown — last live pull was {last_live:.0f}m ago. "
+                        f"Served cache (0 credits). Wait ~{wait_m}m or use Rescore / Scan for free."
+                    ),
+                }
+            )
+            logger.info("Odds Fetch blocked by %sm cooldown (age=%.1fm)", cooldown_min, last_live)
+            return events, stats
 
-    # Serve fresh cache without spending any credits.
+    # Serve fresh cache without spending any credits (non-spend-locked modes).
     if not force_refresh and cache:
         age = _cache_age_minutes(cache.get("fetched_at"))
         ttl = max(0, config.settings.odds_cache_ttl_minutes)
@@ -1207,37 +1223,31 @@ async def fetch_all_sports_odds(
             events, near_meta = _near_term_cache_events(raw_events)
             warm_keys = frozenset(near_meta.get("near_term_league_keys") or [])
             needs_live = _cache_needs_live_refresh(warm_keys) if events else bool(raw_events)
-            # Incomplete warm cache: fall through to live fill instead of freezing a narrow slate.
-            if events and needs_live and not cache_only:
+            # Never auto live-fill from Scan — incomplete cache is a Fetch hint only.
+            if not events and raw_events:
                 logger.info(
-                    "Odds cache warm but missing in-season essentials — live-filling slate"
+                    "Odds cache has %d events but none upcoming — invalidating cache",
+                    len(raw_events),
                 )
-                force_refresh = True
-            else:
-                if not events and raw_events:
-                    logger.info(
-                        "Odds cache has %d events but none upcoming — invalidating cache",
-                        len(raw_events),
-                    )
-                    _invalidate_cache()
-                stats = dict(cache.get("stats") or {})
-                stats.update(
-                    {
-                        "configured": True,
-                        "cached": True,
-                        "stale": False,
-                        "cache_age_minutes": round(age, 1),
-                        "events": len(events),
-                        "events_dropped_past": len(raw_events) - len(events),
-                        "events_dropped_far_out": near_meta.get("dropped_far_out", 0),
-                        "leagues_with_near_term_games": near_meta.get("near_term_leagues") or [],
-                        "cache_needs_live_refresh": needs_live,
-                        "credits_used": 0,
-                        "scan_scope": config.settings.odds_scan_scope,
-                        "max_sports_per_scan": config.settings.odds_max_sports_per_scan,
-                    }
-                )
-                return events, stats
+                _invalidate_cache()
+            stats = dict(cache.get("stats") or {})
+            stats.update(
+                {
+                    "configured": True,
+                    "cached": True,
+                    "stale": False,
+                    "cache_age_minutes": round(age, 1),
+                    "events": len(events),
+                    "events_dropped_past": len(raw_events) - len(events),
+                    "events_dropped_far_out": near_meta.get("dropped_far_out", 0),
+                    "leagues_with_near_term_games": near_meta.get("near_term_leagues") or [],
+                    "cache_needs_live_refresh": needs_live,
+                    "credits_used": 0,
+                    "scan_scope": config.settings.odds_scan_scope,
+                    "max_sports_per_scan": config.settings.odds_max_sports_per_scan,
+                }
+            )
+            return events, stats
 
     client, all_sports, info = await _select_active_client()
 
@@ -1428,13 +1438,16 @@ async def fetch_all_sports_odds(
         )
 
     if events:
+        if int(stats.get("credits_used") or 0) > 0 or (force_refresh and not stats.get("cached")):
+            stats["last_live_fetch_at"] = datetime.now(UTC).isoformat()
         _write_cache(events, stats)
     elif force_refresh or not existing:
         # Live pull attempted but produced nothing — surface as a hard error so Scan/Fix all
         # do not pretend Insight has a fresh board to rank.
         stats["error"] = (
             "Live odds pull returned no upcoming FanDuel/DraftKings games. "
-            "Check ODDS_API_KEY credits, then tap Fetch live odds again."
+            "Check ODDS_API_KEY credits. Prefer Rescore if cache already has games — "
+            "do not keep tapping Fetch."
         )
         stats["credits_used"] = 0
         return [], stats

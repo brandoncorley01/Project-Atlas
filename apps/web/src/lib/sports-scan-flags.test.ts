@@ -1,5 +1,6 @@
 /**
- * Regression: Scan sports odds must not send cache_only (blocks cold live-seed).
+ * Credit safety: Scan and Rescore must send cache_only (0 Odds credits).
+ * Only Fetch (force_refresh) may spend.
  * Run with: npx --yes tsx apps/web/src/lib/sports-scan-flags.test.ts
  */
 import assert from "node:assert/strict";
@@ -12,13 +13,18 @@ const source = readFileSync(join(here, "../components/sports/SportsSignalsView.t
 
 assert.match(
   source,
-  /mode === "rescore"[\s\S]*?params\.set\("cache_only", "true"\)/,
-  "Rescore should still send cache_only",
+  /mode === "scan" \|\| mode === "rescore"[\s\S]*?params\.set\("cache_only", "true"\)/,
+  "Scan and Rescore must send cache_only",
 );
-assert.doesNotMatch(
+assert.match(
   source,
-  /mode === "scan" && cacheRescoreFree/,
-  "Scan must not gate cache_only on cacheRescoreFree",
+  /mode === "live"[\s\S]*?params\.set\("force_refresh", "true"\)/,
+  "Fetch must send force_refresh",
+);
+assert.match(
+  source,
+  /globalThis\.confirm\(/,
+  "Fetch must confirm before spending credits",
 );
 assert.match(
   source,

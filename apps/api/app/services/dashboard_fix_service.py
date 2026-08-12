@@ -111,7 +111,8 @@ async def run_fix_all(
                 replace=True,
                 limit=80,
                 force_refresh=False,
-                cache_only=False,
+                # Never burn Odds credits from Fix all — Sports Fetch is the only spend path.
+                cache_only=True,
             ),
         )
         steps.append(sports_step)
@@ -122,7 +123,8 @@ async def run_fix_all(
             err = str(sports_step.get("error") or sports_step.get("message") or "").strip()
             sports_step["ok"] = False
             sports_step["error"] = err or (
-                "Sports scan did not fill the board — open Sports and tap Fetch live odds once"
+                "Sports cache empty — open Sports and tap Fetch live odds ONCE "
+                "(Scan/Rescore stay free; do not spam Fetch)"
             )
             sports_scanned = False
 
