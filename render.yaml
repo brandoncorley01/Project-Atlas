@@ -34,7 +34,7 @@ services:
       - key: ODDS_SCAN_SCOPE
         value: priority
       - key: ODDS_MAX_SPORTS_PER_SCAN
-        value: "6"
+        value: "8"
       - key: ODDS_CACHE_TTL_MINUTES
         value: "10080"
       - key: ODDS_INCLUDE_FUTURES_ON_LIVE
@@ -93,7 +93,7 @@ services:
       - key: ODDS_SCAN_SCOPE
         value: priority
       - key: ODDS_MAX_SPORTS_PER_SCAN
-        value: "6"
+        value: "8"
       - key: ODDS_CACHE_TTL_MINUTES
         value: "10080"
       - key: ODDS_INCLUDE_FUTURES_ON_LIVE

@@ -377,12 +377,19 @@ def _essential_keys_for_month() -> frozenset[str]:
 
 
 def _cache_needs_live_refresh(near_term_keys: frozenset[str]) -> bool:
-    """True when cached odds omit in-season leagues (e.g. WNBA missing while MLB present)."""
+    """True when cached odds omit enough in-season leagues (e.g. MLB present, WNBA+MLS gone).
+
+    Requires a majority of seasonal essentials — not all — so a single empty rotating
+    card (MMA week off / ended preseason) does not force endless live re-fetches.
+    """
     if not near_term_keys:
         return True
     core_in_season = _essential_keys_for_month()
-    if core_in_season and not core_in_season.issubset(near_term_keys):
-        return True
+    if core_in_season:
+        present = len(core_in_season & near_term_keys)
+        needed = max(2, (len(core_in_season) + 1) // 2)
+        if present < needed:
+            return True
     month = datetime.now(UTC).month
     deprioritized = _off_season_deprioritize_keys()
     preferred = SUMMER_PRIORITY_KEYS if month in (4, 5, 6, 7, 8, 9) else WINTER_PRIORITY_KEYS
@@ -483,7 +490,7 @@ def odds_cache_status() -> dict[str, Any]:
     rescore_free = bool(cache) and within_ttl and bool(near_term)
     if spend_locked and bool(near_term):
         rescore_free = True
-        needs_live = False
+        # Keep needs_live visible — spend lock must not hide a narrow / incomplete slate.
     cache_stats = dict(cache.get("stats") or {}) if cache else {}
     league_catalog = list(cache_stats.get("league_catalog") or [])
     if not league_catalog:
@@ -572,30 +579,61 @@ def _mix_us_and_global_keys(
     global_keys: tuple[str, ...],
     *,
     cap: int,
+    pinned: tuple[str, ...] = (),
 ) -> tuple[str, ...]:
-    """Split a credit cap across US majors and global leagues so neither starves."""
+    """Split a credit cap across US majors and global leagues so neither starves.
+
+    `pinned` keys (usually in-season essentials) always consume slots first.
+    """
     if cap <= 0:
-        return us_keys + global_keys
-    if not global_keys:
-        return us_keys[:cap]
-    if not us_keys:
-        return global_keys[:cap]
-    # ~60% US / ~40% global when both pools have active leagues.
-    if cap >= 3:
-        global_slots = max(1, min(len(global_keys), round(cap * 0.4)))
-    elif cap == 2:
+        return tuple(dict.fromkeys(list(pinned) + list(us_keys) + list(global_keys)))
+
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for key in pinned:
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        ordered.append(key)
+        if len(ordered) >= cap:
+            return tuple(ordered)
+
+    remaining = cap - len(ordered)
+    us_rest = tuple(k for k in us_keys if k not in seen)
+    global_rest = tuple(k for k in global_keys if k not in seen)
+    if not global_rest:
+        for key in us_rest:
+            if key in seen:
+                continue
+            seen.add(key)
+            ordered.append(key)
+            if len(ordered) >= cap:
+                break
+        return tuple(ordered)
+    if not us_rest:
+        for key in global_rest:
+            if key in seen:
+                continue
+            seen.add(key)
+            ordered.append(key)
+            if len(ordered) >= cap:
+                break
+        return tuple(ordered)
+
+    # ~60% US / ~40% global of the *remaining* slots after essentials.
+    if remaining >= 3:
+        global_slots = max(1, min(len(global_rest), round(remaining * 0.4)))
+    elif remaining == 2:
         global_slots = 1
     else:
         global_slots = 0
-    us_slots = max(1, cap - global_slots)
-    picked_us = list(us_keys[:us_slots])
+    us_slots = max(0, remaining - global_slots)
+    picked_us = list(us_rest[:us_slots])
     leftover = us_slots - len(picked_us)
-    picked_global = list(global_keys[: global_slots + leftover])
+    picked_global = list(global_rest[: global_slots + leftover])
     leftover_g = (global_slots + leftover) - len(picked_global)
     if leftover_g > 0:
-        picked_us = list(us_keys[: us_slots + leftover_g])
-    seen: set[str] = set()
-    ordered: list[str] = []
+        picked_us = list(us_rest[: us_slots + leftover_g])
     for key in picked_us + picked_global:
         if key in seen:
             continue
@@ -603,6 +641,24 @@ def _mix_us_and_global_keys(
         ordered.append(key)
         if len(ordered) >= cap:
             break
+    return tuple(ordered)
+
+
+def _essential_keys_available(available: set[str]) -> tuple[str, ...]:
+    """In-season essentials that Odds currently lists as active, US-core order first."""
+    essential = _essential_keys_for_month()
+    if not essential:
+        return ()
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for key in CORE_US_LIVE_KEYS:
+        if key in essential and key in available and key not in seen:
+            ordered.append(key)
+            seen.add(key)
+    for key in _seasonal_key_order(tuple(essential)):
+        if key in available and key not in seen:
+            ordered.append(key)
+            seen.add(key)
     return tuple(ordered)
 
 
@@ -616,19 +672,21 @@ def _limit_sport_keys(keys: tuple[str, ...], *, force_refresh: bool = False) -> 
 
     if tight_live:
         available = set(keys)
-        essential = _essential_keys_for_month()
-        us_core = tuple(k for k in CORE_US_LIVE_KEYS if k in available)
-        us_ordered = tuple(k for k in us_core if k in essential) + tuple(
-            k for k in us_core if k not in essential
-        )
+        pinned = _essential_keys_available(available)
+        us_core = tuple(k for k in CORE_US_LIVE_KEYS if k in available and k not in pinned)
         global_core = tuple(k for k in CORE_GLOBAL_LIVE_KEYS if k in available)
         # Seasonal priority order for globals that aren't already in CORE_GLOBAL.
         seasonal = _seasonal_key_order(tuple(k for k in keys if not is_us_market_sport_key(k)))
         global_ordered = tuple(dict.fromkeys(global_core + seasonal))
-        if not us_ordered and not global_ordered:
+        if not pinned and not us_core and not global_ordered:
             fallback = tuple(k for k in keys if k in set(PRIORITY_SPORT_KEYS))
             return fallback[: cap or 4]
-        return _mix_us_and_global_keys(us_ordered, global_ordered, cap=cap or 4)
+        return _mix_us_and_global_keys(
+            us_core,
+            global_ordered,
+            cap=cap or 4,
+            pinned=pinned,
+        )
 
     if scope == "priority":
         priority = {k for k in PRIORITY_SPORT_KEYS}
@@ -648,16 +706,14 @@ def _limit_sport_keys(keys: tuple[str, ...], *, force_refresh: bool = False) -> 
         back = tuple(k for k in keys if k in deprioritized)
         keys = front + back
 
-    essential = _essential_keys_for_month()
-    us_keys = tuple(k for k in keys if is_us_market_sport_key(k))
+    available = set(keys)
+    pinned = _essential_keys_available(available)
+    us_keys = tuple(k for k in keys if is_us_market_sport_key(k) and k not in pinned)
     global_keys = tuple(k for k in keys if not is_us_market_sport_key(k))
-    us_ordered = tuple(k for k in us_keys if k in essential) + tuple(
-        k for k in us_keys if k not in essential
-    )
 
     if cap > 0:
-        return _mix_us_and_global_keys(us_ordered, global_keys, cap=cap)
-    return us_ordered + global_keys
+        return _mix_us_and_global_keys(us_keys, global_keys, cap=cap, pinned=pinned)
+    return pinned + us_keys + global_keys
 
 
 def _seasonal_key_order(keys: tuple[str, ...]) -> tuple[str, ...]:
@@ -1059,17 +1115,23 @@ async def fetch_all_sports_odds(
     cache = _read_cache()
     spend_locked = not config.settings.odds_live_spending_allowed()
     raw_cached = list(cache.get("events") or []) if cache else []
-    near_cached, _near_preview = _near_term_cache_events(raw_cached) if raw_cached else ([], {})
+    near_cached, near_preview = _near_term_cache_events(raw_cached) if raw_cached else ([], {})
     cache_usable = bool(near_cached)
+    near_keys = frozenset(near_preview.get("near_term_league_keys") or [])
+    incomplete_essentials = bool(near_cached) and _cache_needs_live_refresh(near_keys)
 
     # Rescore (cache_only) never spends.
     # Spend lock: prefer a usable near-term cache (0 credits). If cache is empty/stale,
     # intentional Scan may live-pull to seed — same as Fetch — so production cold starts work.
+    # Incomplete in-season slate (missing essentials) also live-seeds on Scan so narrow
+    # caches don't freeze for the full TTL under ODDS_SPEND_MODE=cache_only.
     # force_refresh always live-pulls when credits allow.
     #
     # Scan clients must not send cache_only (that blocked live-seed when status was stale).
     # Rescore still sends cache_only and hard-fails when the cache is empty.
-    serve_cache_only = bool(cache_only) or (spend_locked and not force_refresh and cache_usable)
+    serve_cache_only = bool(cache_only) or (
+        spend_locked and not force_refresh and cache_usable and not incomplete_essentials
+    )
     if serve_cache_only:
         if not cache_usable:
             return [], {
@@ -1107,13 +1169,20 @@ async def fetch_all_sports_odds(
                 "events_dropped_past": len(raw_cached) - len(events),
                 "events_dropped_far_out": near_meta.get("dropped_far_out", 0),
                 "leagues_with_near_term_games": near_meta.get("near_term_leagues") or [],
-                "cache_needs_live_refresh": False if spend_locked else needs_live,
+                "cache_needs_live_refresh": needs_live,
                 "credits_used": 0,
                 "scan_scope": "cache_only" if spend_locked else "rescore",
                 "max_sports_per_scan": config.settings.odds_max_sports_per_scan,
                 "message": (
-                    "Odds auto-spend is locked — served cached lines (0 credits). "
-                    "Tap Fetch live odds when you want a fresh slate."
+                    (
+                        "Odds auto-spend is locked — served cached lines (0 credits). "
+                        "Tap Fetch live odds when you want a fresh slate."
+                        + (
+                            " Cache is missing in-season leagues — Fetch to widen coverage."
+                            if needs_live
+                            else ""
+                        )
+                    )
                     if spend_locked
                     else None
                 ),
@@ -1121,12 +1190,13 @@ async def fetch_all_sports_odds(
         )
         return events, stats
 
-    if spend_locked and not force_refresh and not cache_usable:
+    if spend_locked and not force_refresh and (not cache_usable or incomplete_essentials):
         logger.info(
-            "Odds spend lock on but cache unusable (%d raw events) — Scan will live-seed",
+            "Odds spend lock on but cache %s (%d raw events) — Scan will live-seed",
+            "incomplete" if incomplete_essentials and cache_usable else "unusable",
             len(raw_cached),
         )
-        force_refresh = True  # intentional seed under lock when Scan has nothing to rescore
+        force_refresh = True  # intentional seed under lock when Scan has nothing / narrow slate
 
     # Serve fresh cache without spending any credits.
     if not force_refresh and cache:
@@ -1135,32 +1205,39 @@ async def fetch_all_sports_odds(
         if age is not None and age <= ttl:
             raw_events = list(cache.get("events") or [])
             events, near_meta = _near_term_cache_events(raw_events)
-            near_keys = frozenset(near_meta.get("near_term_league_keys") or [])
-            needs_live = _cache_needs_live_refresh(near_keys) if events else bool(raw_events)
-            if not events and raw_events:
+            warm_keys = frozenset(near_meta.get("near_term_league_keys") or [])
+            needs_live = _cache_needs_live_refresh(warm_keys) if events else bool(raw_events)
+            # Incomplete warm cache: fall through to live fill instead of freezing a narrow slate.
+            if events and needs_live and not cache_only:
                 logger.info(
-                    "Odds cache has %d events but none upcoming — invalidating cache",
-                    len(raw_events),
+                    "Odds cache warm but missing in-season essentials — live-filling slate"
                 )
-                _invalidate_cache()
-            stats = dict(cache.get("stats") or {})
-            stats.update(
-                {
-                    "configured": True,
-                    "cached": True,
-                    "stale": False,
-                    "cache_age_minutes": round(age, 1),
-                    "events": len(events),
-                    "events_dropped_past": len(raw_events) - len(events),
-                    "events_dropped_far_out": near_meta.get("dropped_far_out", 0),
-                    "leagues_with_near_term_games": near_meta.get("near_term_leagues") or [],
-                    "cache_needs_live_refresh": needs_live,
-                    "credits_used": 0,
-                    "scan_scope": config.settings.odds_scan_scope,
-                    "max_sports_per_scan": config.settings.odds_max_sports_per_scan,
-                }
-            )
-            return events, stats
+                force_refresh = True
+            else:
+                if not events and raw_events:
+                    logger.info(
+                        "Odds cache has %d events but none upcoming — invalidating cache",
+                        len(raw_events),
+                    )
+                    _invalidate_cache()
+                stats = dict(cache.get("stats") or {})
+                stats.update(
+                    {
+                        "configured": True,
+                        "cached": True,
+                        "stale": False,
+                        "cache_age_minutes": round(age, 1),
+                        "events": len(events),
+                        "events_dropped_past": len(raw_events) - len(events),
+                        "events_dropped_far_out": near_meta.get("dropped_far_out", 0),
+                        "leagues_with_near_term_games": near_meta.get("near_term_leagues") or [],
+                        "cache_needs_live_refresh": needs_live,
+                        "credits_used": 0,
+                        "scan_scope": config.settings.odds_scan_scope,
+                        "max_sports_per_scan": config.settings.odds_max_sports_per_scan,
+                    }
+                )
+                return events, stats
 
     client, all_sports, info = await _select_active_client()
 
