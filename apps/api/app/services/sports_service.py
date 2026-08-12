@@ -774,7 +774,11 @@ class SportsRefreshService:
         persisted = len(setups) if saved_count is None else saved_count
 
         scan_note = ""
-        if stats.get("credit_guard") or stats.get("credits_blocked"):
+        if stats.get("fetch_cooldown"):
+            scan_note = str(stats.get("message") or (
+                "Fetch cooldown — served cache (0 Odds credits). Use Rescore / Scan."
+            ))
+        elif stats.get("credit_guard") or stats.get("credits_blocked"):
             scan_note = (
                 stats.get("message")
                 or "Odds credits low — rescored from cache (0 Odds credits). Atlas Insight still ranks FanDuel/DraftKings picks."
@@ -783,8 +787,8 @@ class SportsRefreshService:
             scan_note = f"Rescored from cache · {len(near_leagues)} leagues with games this week ({near_label})"
             if stats.get("cache_needs_live_refresh"):
                 scan_note += (
-                    " · cache is missing in-season leagues (e.g. MLB/WNBA) — "
-                    "use Fetch live odds (~4 credits), not Rescore"
+                    " · coverage looks narrow — Fetch live odds ONCE if needed "
+                    "(~8 credits, then 20m cooldown). Prefer Rescore."
                 )
             if stats.get("openai_slate"):
                 scan_note += f" · OpenAI ranked {stats.get('openai_ranked', '?')} picks"

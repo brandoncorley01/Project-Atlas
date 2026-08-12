@@ -35,6 +35,8 @@ services:
         value: priority
       - key: ODDS_MAX_SPORTS_PER_SCAN
         value: "8"
+      - key: ODDS_LIVE_FETCH_COOLDOWN_MINUTES
+        value: "20"
       - key: ODDS_CACHE_TTL_MINUTES
         value: "10080"
       - key: ODDS_INCLUDE_FUTURES_ON_LIVE
@@ -94,6 +96,8 @@ services:
         value: priority
       - key: ODDS_MAX_SPORTS_PER_SCAN
         value: "8"
+      - key: ODDS_LIVE_FETCH_COOLDOWN_MINUTES
+        value: "20"
       - key: ODDS_CACHE_TTL_MINUTES
         value: "10080"
       - key: ODDS_INCLUDE_FUTURES_ON_LIVE
