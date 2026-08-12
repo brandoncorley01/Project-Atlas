@@ -642,8 +642,8 @@ export function SportsSignalsView({
               fetchBlocked
                 ? "Odds credits exhausted — add a new free Odds API key, then Fetch again."
                 : autoSpendLocked
-                  ? "Fetch live FanDuel/DraftKings lines (~6 leagues / credits), then Atlas Insight auto-ranks. Scan/Rescore stay free from cache."
-                  : "Fetch live FanDuel/DraftKings lines (~6 leagues / credits), then Atlas Insight auto-ranks from the fresh board."
+                  ? "Fetch live FanDuel/DraftKings lines (~8 leagues / credits), then Atlas Insight auto-ranks. Scan/Rescore stay free from cache."
+                  : "Fetch live FanDuel/DraftKings lines (~8 leagues / credits), then Atlas Insight auto-ranks from the fresh board."
             }
             className="rounded-lg border border-violet-500/40 bg-violet-500/10 px-4 py-2 text-sm font-medium text-violet-200 hover:bg-violet-500/20 disabled:opacity-50"
           >

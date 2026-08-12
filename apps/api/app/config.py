@@ -36,8 +36,9 @@ class Settings(BaseSettings):
     odds_cache_ttl_minutes: int = 360
 
     # Max sportsbooks leagues fetched per live scan (1 credit each).
-    # Default 6 = useful US-core slate; 0 = no cap (expensive).
-    odds_max_sports_per_scan: int = 6
+    # Default 8 fits seasonal essentials (≤5) plus US/global fillers.
+    # 0 = no cap (expensive).
+    odds_max_sports_per_scan: int = 8
 
     # priority = in-season majors only (credit-safe); full = every active game sport.
     odds_scan_scope: str = "priority"
