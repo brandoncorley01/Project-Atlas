@@ -599,7 +599,15 @@ def analyze_event(
         min_books = 1 if has_us_book else 2
         # Single-book MMA totals/spreads have edge=0 vs themselves — still list as props.
         is_fight_prop = bool(cand.get("is_fight_prop"))
-        effective_min_edge = 0.0 if (combat and is_fight_prop and has_us_book) else min_edge
+        # Live scans only pull FanDuel+DraftKings. When those two agree, edge≈0 vs the
+        # median — that used to drop entire MLB/WNBA nights from the board. Keep US
+        # book market lines so Today's slate can still fill.
+        us_market_line = has_us_book and edge < min_edge
+        effective_min_edge = (
+            0.0
+            if (has_us_book and (is_fight_prop or us_market_line or slate_mode or cand["book_count"] <= 2))
+            else min_edge
+        )
         if edge < effective_min_edge or cand["book_count"] < min_books:
             continue
 
@@ -622,6 +630,9 @@ def analyze_event(
             setup_strength += 4.0
         if is_fight_prop and has_us_book:
             setup_strength += 6.0
+        # Tonight's US majors (MLB/WNBA/NFL…) clear the strength floor even at edge≈0.
+        if us_market_line and hours is not None and hours <= 24:
+            setup_strength = max(setup_strength, strength_floor + 2.0)
         if setup_strength < strength_floor and not (is_fight_prop and has_us_book):
             continue
 
@@ -644,30 +655,61 @@ def analyze_event(
                 opportunity,
                 34.0 if (hours is not None and hours <= 12) else 28.0,
             )
+        # Same for FanDuel/DK market lines on today's US slate (edge often 0 with 2 books).
+        if us_market_line:
+            if hours is not None and hours <= 12:
+                opportunity = max(opportunity, 30.0)
+            elif hours is not None and hours <= 24:
+                opportunity = max(opportunity, 26.0)
+            elif slate_mode:
+                opportunity = max(opportunity, min(min_opportunity, 20.0))
         effective_min_opportunity = (
-            min(min_opportunity, 18.0) if (is_fight_prop and has_us_book) else min_opportunity
+            min(min_opportunity, 18.0)
+            if (is_fight_prop and has_us_book) or (us_market_line and slate_mode)
+            else min_opportunity
         )
+        if us_market_line and hours is not None and hours <= 24:
+            effective_min_opportunity = min(effective_min_opportunity, 24.0)
         if opportunity < effective_min_opportunity:
             continue
 
-        sharp = "steam" if edge >= 3.5 else ("value" if edge >= 2.0 or is_fight_prop else None)
+        sharp = (
+            "steam"
+            if edge >= 3.5
+            else ("value" if edge >= 2.0 or is_fight_prop else ("market" if us_market_line else None))
+        )
         type_label = "Fight prop" if is_fight_prop else _bet_type_label(bet_type)
 
         kickoff = _format_kickoff(event_start)
         recommendation = f"{type_label} — {selection_label} · {kickoff} ({sport})"
-        explanation = (
-            f"Bet {selection_label} ({type_label.lower()}) on {event_name}, starting {kickoff}. "
-            f"{book_label} line {odds:+d} across {cand['book_count']} books — "
-            f"{edge:.1f}% edge vs market median (EV proxy {ev:+.1f}%)."
-        )
-        bull_case = (
-            f"{book_label} {odds:+d} on {selection_label} is {edge:.1f}% better than the median "
-            f"price at {cand['book_count']} books before {kickoff}."
-        )
-        bear_case = (
-            f"Line moves against {selection_label} before kickoff, or late injury/news "
-            f"not yet in the odds, would weaken this {edge:.1f}% edge."
-        )
+        if us_market_line and edge < 0.5:
+            explanation = (
+                f"Track {selection_label} ({type_label.lower()}) on {event_name}, starting {kickoff}. "
+                f"{book_label} line {odds:+d} on FanDuel/DraftKings — market line on tonight's slate "
+                f"(books agree; no measurable cross-book edge yet)."
+            )
+            bull_case = (
+                f"{book_label} {odds:+d} is the current US retail number for {selection_label} "
+                f"before {kickoff}."
+            )
+            bear_case = (
+                f"Without a cross-book edge, late line moves or injury news can flip this "
+                f"{type_label.lower()} quickly."
+            )
+        else:
+            explanation = (
+                f"Bet {selection_label} ({type_label.lower()}) on {event_name}, starting {kickoff}. "
+                f"{book_label} line {odds:+d} across {cand['book_count']} books — "
+                f"{edge:.1f}% edge vs market median (EV proxy {ev:+.1f}%)."
+            )
+            bull_case = (
+                f"{book_label} {odds:+d} on {selection_label} is {edge:.1f}% better than the median "
+                f"price at {cand['book_count']} books before {kickoff}."
+            )
+            bear_case = (
+                f"Line moves against {selection_label} before kickoff, or late injury/news "
+                f"not yet in the odds, would weaken this {edge:.1f}% edge."
+            )
         invalidation = "Closing line moves 1+ point against this side or odds shorten materially."
         suggested_action = (
             f"Play {odds:+d} on {book_label} for {selection_label}"
@@ -752,6 +794,7 @@ def analyze_event(
                     "home_team": home,
                     "away_team": away,
                     "slate_mode": slate_mode,
+                    "us_market_line": us_market_line,
                     "is_player_prop": bet_type == "player_prop" or is_fight_prop,
                     "is_fight_prop": is_fight_prop,
                     "prop_market": cand.get("prop_market"),
@@ -796,6 +839,7 @@ def analyze_event(
         >= (
             min(min_opportunity, 18.0)
             if bool((s.scoring_snapshot or {}).get("is_fight_prop"))
+            or bool((s.scoring_snapshot or {}).get("us_market_line"))
             else min_opportunity
         )
     ]
@@ -848,7 +892,18 @@ def _select_best_per_market(setups: list[SportsBetSetup]) -> list[SportsBetSetup
             edge = float(snap.get("edge_pct") or 0)
             support = float(snap.get("stats_support") or 0)
             if margin < 1.0 and edge < 1.25 and support < 8:
-                continue
+                # FanDuel/DK-only scans often produce edge≈0 with near-tied sides.
+                # Still pick one side for US market lines / slate fills so Tonight's
+                # MLB/WNBA board isn't wiped empty.
+                if not (
+                    bool(snap.get("us_market_line"))
+                    or bool(snap.get("slate_mode"))
+                    or bool(snap.get("is_fight_prop"))
+                ):
+                    continue
+                snap["decision_note"] = (
+                    "Sides nearly tied on FanDuel/DraftKings — kept the stronger side for the slate."
+                )
             rejected = runner.selection
             snap["rejected_side"] = rejected
             snap["decision_margin"] = margin
