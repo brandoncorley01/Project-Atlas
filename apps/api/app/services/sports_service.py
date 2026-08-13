@@ -751,6 +751,66 @@ class SportsRefreshService:
             )
         return result
 
+    async def repair_sports_board(
+        self,
+        *,
+        replace: bool = True,
+        limit: int = MAX_SIGNALS,
+    ) -> dict[str, Any]:
+        """Recover an empty sports board from Atlas.
+
+        Warm cache (disk or durable Supabase) → free cache-only rescan.
+        Cold cache → one live Fetch that also write-throughs the durable cache.
+        Never treats an empty board as success.
+        """
+        from app.providers.sports.odds_api import odds_cache_status
+
+        status = odds_cache_status()
+        cold = not bool(status.get("has_data"))
+        if cold:
+            result = await self.refresh_sports(
+                replace=replace,
+                limit=limit,
+                force_refresh=True,
+                cache_only=False,
+            )
+            result["repair_mode"] = "live_seed"
+            result["cache_was_cold"] = True
+        else:
+            result = await self.refresh_sports(
+                replace=replace,
+                limit=limit,
+                force_refresh=False,
+                cache_only=True,
+            )
+            result["repair_mode"] = "cache_rescan"
+            result["cache_was_cold"] = False
+
+        created = int(result.get("signals_created") or 0)
+        kept = bool(result.get("signals_kept"))
+        if created == 0 and not kept:
+            result["ok"] = False
+            err = str(result.get("message") or result.get("error") or "").strip()
+            if cold:
+                result["error"] = err or (
+                    "Repair could not seed the odds cache. Check ODDS_API_KEY credits, "
+                    "then tap Repair sports board again."
+                )
+            else:
+                result["error"] = err or (
+                    "Odds cache is warm but no plays ranked. Widen filters or try Fetch live odds."
+                )
+            if not result.get("message"):
+                result["message"] = result["error"]
+        elif cold and created > 0:
+            base = str(result.get("message") or "").strip()
+            result["message"] = (
+                f"{base} · Durable odds cache seeded — Scan/Rescore stay free after redeploys."
+                if base
+                else "Durable odds cache seeded — Scan/Rescore stay free after redeploys."
+            )
+        return result
+
     @staticmethod
     def _result_message(
         setups: list[dict[str, Any]],

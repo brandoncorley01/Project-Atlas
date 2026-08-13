@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     # Minutes to reuse cached odds before spending API credits on a fresh scan.
     odds_cache_ttl_minutes: int = 360
 
+    # Persist Odds slate to Supabase so Scan/Rescore survive Render disk wipes.
+    odds_cache_remote: bool = True
+
     # Max sportsbooks leagues fetched per live scan (1 credit each).
     # Default 8 fits seasonal essentials (≤5) plus US/global fillers.
     # 0 = no cap (expensive).

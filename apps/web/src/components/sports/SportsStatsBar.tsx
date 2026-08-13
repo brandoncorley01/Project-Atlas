@@ -17,7 +17,7 @@ interface SportsStatsBarProps {
   boardAsOf?: string | null;
   /** Browser-tracked last Scan / Fetch / Rescore / Insight. */
   lastActionAt?: string | null;
-  lastActionKind?: "scan" | "live" | "rescore" | "openai" | null;
+  lastActionKind?: "scan" | "live" | "rescore" | "openai" | "repair" | null;
 }
 
 function actionLabel(kind: SportsStatsBarProps["lastActionKind"]): string {
@@ -25,6 +25,7 @@ function actionLabel(kind: SportsStatsBarProps["lastActionKind"]): string {
   if (kind === "rescore") return "Rescore";
   if (kind === "openai") return "Insight";
   if (kind === "scan") return "Scan";
+  if (kind === "repair") return "Repair";
   return "Update";
 }
 

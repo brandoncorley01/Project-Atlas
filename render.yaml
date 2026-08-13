@@ -39,6 +39,8 @@ services:
         value: "20"
       - key: ODDS_CACHE_TTL_MINUTES
         value: "10080"
+      - key: ODDS_CACHE_REMOTE
+        value: "true"
       - key: ODDS_INCLUDE_FUTURES_ON_LIVE
         value: "false"
       - key: ODDS_SPEND_MODE
@@ -100,6 +102,8 @@ services:
         value: "20"
       - key: ODDS_CACHE_TTL_MINUTES
         value: "10080"
+      - key: ODDS_CACHE_REMOTE
+        value: "true"
       - key: ODDS_INCLUDE_FUTURES_ON_LIVE
         value: "false"
       - key: ODDS_SPEND_MODE
