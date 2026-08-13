@@ -871,7 +871,7 @@ export function SportsSignalsView({
           }
           description={
             window === "today" && !activeCategory && filter === "all" && !activeSport
-              ? "Nothing upcoming later today (US/Eastern) on the board. Tap Rescore (0 credits) first — do not spam Fetch. Use Next 48h if tips already started."
+              ? "Nothing upcoming later today (US/Eastern) on the board. Tap Repair sports board — that live-seeds Today's slate when the cache is missing tonight's games."
               : window === "soon" && !activeCategory && filter === "all" && !activeSport
                 ? "No plays in the next 48 hours. Try This week, Next 30 days, or All dates."
                 : activeCategory || activeSport || filter !== "all"
