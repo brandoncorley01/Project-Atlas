@@ -134,6 +134,8 @@ async def providers_status(refresh: bool = False) -> dict:
             "cache_fetched_at": cache_status.get("fetched_at"),
             "cache_fresh": odds_cache_fresh,
             "cache_needs_live_refresh": cache_status.get("cache_needs_live_refresh"),
+            "missing_today_slate": cache_status.get("missing_today_slate"),
+            "today_event_count": cache_status.get("today_event_count"),
             "near_term_leagues": cache_status.get("near_term_leagues") or [],
             "league_catalog": cache_status.get("league_catalog") or [],
             "near_term_event_count": cache_status.get("near_term_event_count"),

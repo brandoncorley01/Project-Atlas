@@ -65,12 +65,15 @@ def test_cache_needs_live_refresh_majority_not_all():
 
 
 def test_odds_cache_status_keeps_needs_live_under_spend_lock():
+    from datetime import UTC, datetime, timedelta
+
+    commence = (datetime.now(UTC) + timedelta(hours=4)).isoformat().replace("+00:00", "Z")
     cache = {
-        "fetched_at": "2026-08-12T00:00:00+00:00",
+        "fetched_at": datetime.now(UTC).isoformat(),
         "events": [
             {
                 "id": "1",
-                "commence_time": "2026-08-13T18:00:00Z",
+                "commence_time": commence,
                 "_sport_key": "baseball_mlb",
                 "_sport_label": "MLB",
                 "sport_title": "MLB",
@@ -90,3 +93,5 @@ def test_odds_cache_status_keeps_needs_live_under_spend_lock():
     assert status["cache_rescore_free"] is True
     assert status["cache_needs_live_refresh"] is True
     assert status["spend_locked"] is True
+    assert status["missing_today_slate"] is False
+    assert status["today_event_count"] >= 1

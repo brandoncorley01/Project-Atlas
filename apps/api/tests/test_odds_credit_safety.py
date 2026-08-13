@@ -14,19 +14,28 @@ def _cache_with_mlb(*, minutes_ago: float = 5.0) -> dict:
 
     fetched = (datetime.now(UTC) - timedelta(minutes=minutes_ago)).isoformat()
     commence = (datetime.now(UTC) + timedelta(hours=3)).isoformat().replace("+00:00", "Z")
+    # Include enough summer essentials so cooldown tests aren't bypassed for "incomplete".
+    events = []
+    for key, label, hid, aid in (
+        ("baseball_mlb", "MLB", "Yankees", "Red Sox"),
+        ("basketball_wnba", "WNBA", "Liberty", "Aces"),
+        ("soccer_usa_mls", "MLS", "NYCFC", "Inter Miami"),
+        ("mma_mixed_martial_arts", "MMA", "Fighter A", "Fighter B"),
+    ):
+        events.append(
+            {
+                "id": f"{key}-g1",
+                "commence_time": commence,
+                "_sport_key": key,
+                "_sport_label": label,
+                "sport_title": label,
+                "home_team": hid,
+                "away_team": aid,
+            }
+        )
     return {
         "fetched_at": fetched,
-        "events": [
-            {
-                "id": "g1",
-                "commence_time": commence,
-                "_sport_key": "baseball_mlb",
-                "_sport_label": "MLB",
-                "sport_title": "MLB",
-                "home_team": "Yankees",
-                "away_team": "Red Sox",
-            }
-        ],
+        "events": events,
         "stats": {
             "last_live_fetch_at": fetched,
             "credits_used": 8,

@@ -121,11 +121,16 @@ async def run_fix_all(
         sports_scanned = bool(sports_step.get("ok"))
         sports_created = int(sports_step.get("signals_created") or 0)
 
-        # Cold cache after redeploy: one live seed via Repair (writes durable cache).
+        # Cold / incomplete / missing-Today cache: one live seed via Repair.
         if needs["sports"] and sports_created == 0:
             cache_status = odds_cache_status()
-            cache_cold = not bool(cache_status.get("has_data"))
-            if cache_cold:
+            need_live = (
+                not bool(cache_status.get("has_data"))
+                or bool(cache_status.get("missing_today_slate"))
+                or bool(cache_status.get("cache_needs_live_refresh"))
+                or int(cache_status.get("today_event_count") or 0) == 0
+            )
+            if need_live:
                 repair_step = await _step(
                     "repair_sports",
                     sports_svc.repair_sports_board(replace=True, limit=80),
@@ -138,7 +143,7 @@ async def run_fix_all(
                     sports_step["ok"] = True
                     sports_step["error"] = None
                     sports_step["message"] = sports_step.get("message") or (
-                        "Cache cold — repaired with live seed"
+                        "Cache missing Today's slate — repaired with live seed"
                     )
                 else:
                     err = str(
@@ -161,6 +166,20 @@ async def run_fix_all(
                     "Sports board empty after cache scan — open Sports → Repair sports board"
                 )
                 sports_scanned = False
+        elif needs["sports"] and sports_created > 0:
+            # Board filled but may still lack Today — Repair if today's odds are missing.
+            cache_status = odds_cache_status()
+            if int(cache_status.get("today_event_count") or 0) == 0 or bool(
+                cache_status.get("missing_today_slate")
+            ):
+                repair_step = await _step(
+                    "repair_sports",
+                    sports_svc.repair_sports_board(replace=True, limit=80),
+                )
+                steps.append(repair_step)
+                if int(repair_step.get("signals_created") or 0) > 0:
+                    sports_created = int(repair_step.get("signals_created") or 0)
+                    sports_scanned = True
 
     if "options" in requested:
         from app.services.options_service import OptionsRefreshService
