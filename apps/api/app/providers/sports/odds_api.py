@@ -429,28 +429,53 @@ def _maybe_compact_cache(cache: dict[str, Any]) -> dict[str, Any]:
 
 def _read_cache() -> dict[str, Any] | None:
     try:
-        if not _CACHE_PATH.exists():
-            return None
-        with _CACHE_PATH.open("r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        if isinstance(data, dict) and isinstance(data.get("events"), list):
-            return _maybe_compact_cache(data)
+        if _CACHE_PATH.exists():
+            with _CACHE_PATH.open("r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            if isinstance(data, dict) and isinstance(data.get("events"), list):
+                return _maybe_compact_cache(data)
     except (OSError, ValueError) as exc:
         logger.info("Odds cache read failed: %s", exc)
+
+    # Disk miss (common after Render redeploy) — hydrate from durable Supabase cache.
+    try:
+        from app.providers.sports.odds_cache_store import load_remote_cache, save_remote_cache
+
+        remote = load_remote_cache()
+        if remote and isinstance(remote.get("events"), list) and remote["events"]:
+            try:
+                with _CACHE_PATH.open("w", encoding="utf-8") as fh:
+                    json.dump(remote, fh)
+            except (OSError, TypeError) as exc:
+                logger.info("Odds disk hydrate write failed: %s", exc)
+            logger.info(
+                "Odds cache hydrated from Supabase (%s events)",
+                len(remote["events"]),
+            )
+            return _maybe_compact_cache(remote)
+    except Exception as exc:
+        logger.info("Odds remote cache hydrate skipped: %s", exc)
     return None
 
 
 def _write_cache(events: list[dict[str, Any]], stats: dict[str, Any]) -> None:
+    payload = {
+        "fetched_at": datetime.now(UTC).isoformat(),
+        "events": events,
+        "stats": {k: v for k, v in stats.items() if k != "cached"},
+    }
     try:
-        payload = {
-            "fetched_at": datetime.now(UTC).isoformat(),
-            "events": events,
-            "stats": {k: v for k, v in stats.items() if k != "cached"},
-        }
         with _CACHE_PATH.open("w", encoding="utf-8") as fh:
             json.dump(payload, fh)
     except (OSError, TypeError) as exc:
         logger.info("Odds cache write failed: %s", exc)
+    try:
+        from app.providers.sports.odds_cache_store import save_remote_cache
+
+        near, _ = _near_term_cache_events(events)
+        save_remote_cache(payload, near_term_count=len(near))
+    except Exception as exc:
+        logger.info("Odds remote cache write skipped: %s", exc)
 
 
 def _invalidate_cache() -> None:
@@ -458,6 +483,12 @@ def _invalidate_cache() -> None:
         _CACHE_PATH.unlink(missing_ok=True)
     except OSError as exc:
         logger.info("Odds cache delete failed: %s", exc)
+    try:
+        from app.providers.sports.odds_cache_store import clear_remote_cache
+
+        clear_remote_cache()
+    except Exception as exc:
+        logger.info("Odds remote cache clear skipped: %s", exc)
 
 
 def _cache_age_minutes(fetched_at: str | None) -> float | None:
@@ -515,6 +546,8 @@ def odds_cache_status() -> dict[str, Any]:
         ),
         "event_count": len(raw_events),
         "fetched_at": cache.get("fetched_at") if cache else None,
+        "remote_hydrated": bool(cache_stats.get("remote_hydrated")),
+        "odds_cache_remote": bool(getattr(config.settings, "odds_cache_remote", True)),
         "stats": cache_stats,
     }
 

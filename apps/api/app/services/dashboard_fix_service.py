@@ -103,30 +103,64 @@ async def run_fix_all(
 
     # Empty-board scans first — Home "Fix all" is usually about filling Sports/Options.
     if "sports" in requested:
+        from app.providers.sports.odds_api import odds_cache_status
         from app.services.sports_service import SportsRefreshService
 
+        sports_svc = SportsRefreshService(write_db, user_id)
+        # Prefer free cache-only first (disk or durable Supabase hydrate).
         sports_step = await _step(
             "refresh_sports",
-            SportsRefreshService(write_db, user_id).refresh_sports(
+            sports_svc.refresh_sports(
                 replace=True,
                 limit=80,
                 force_refresh=False,
-                # Never burn Odds credits from Fix all — Sports Fetch is the only spend path.
                 cache_only=True,
             ),
         )
         steps.append(sports_step)
         sports_scanned = bool(sports_step.get("ok"))
         sports_created = int(sports_step.get("signals_created") or 0)
-        # Any empty sports board after an intentional scan is a failed repair step.
+
+        # Cold cache after redeploy: one live seed via Repair (writes durable cache).
         if needs["sports"] and sports_created == 0:
-            err = str(sports_step.get("error") or sports_step.get("message") or "").strip()
-            sports_step["ok"] = False
-            sports_step["error"] = err or (
-                "Sports cache empty — open Sports and tap Fetch live odds ONCE "
-                "(Scan/Rescore stay free; do not spam Fetch)"
-            )
-            sports_scanned = False
+            cache_status = odds_cache_status()
+            cache_cold = not bool(cache_status.get("has_data"))
+            if cache_cold:
+                repair_step = await _step(
+                    "repair_sports",
+                    sports_svc.repair_sports_board(replace=True, limit=80),
+                )
+                steps.append(repair_step)
+                sports_created = int(repair_step.get("signals_created") or 0)
+                sports_scanned = bool(repair_step.get("ok")) and sports_created > 0
+                if sports_scanned:
+                    # Cache-only miss is expected when cold — don't fail Fix all after a good repair.
+                    sports_step["ok"] = True
+                    sports_step["error"] = None
+                    sports_step["message"] = sports_step.get("message") or (
+                        "Cache cold — repaired with live seed"
+                    )
+                else:
+                    err = str(
+                        repair_step.get("error")
+                        or repair_step.get("message")
+                        or sports_step.get("error")
+                        or sports_step.get("message")
+                        or ""
+                    ).strip()
+                    sports_step["ok"] = False
+                    sports_step["error"] = err or (
+                        "Sports cache empty — open Sports → Repair sports board "
+                        "(or Fetch live odds ONCE)"
+                    )
+                    sports_scanned = False
+            else:
+                err = str(sports_step.get("error") or sports_step.get("message") or "").strip()
+                sports_step["ok"] = False
+                sports_step["error"] = err or (
+                    "Sports board empty after cache scan — open Sports → Repair sports board"
+                )
+                sports_scanned = False
 
     if "options" in requested:
         from app.services.options_service import OptionsRefreshService
@@ -215,7 +249,8 @@ async def run_fix_all(
         message_parts.append(failed_summary)
     elif needs_after.get("sports") and "sports" in requested:
         message_parts.append(
-            "Sports board still empty — open Sports and tap Fetch live odds once to seed the cache"
+            "Sports board still empty — open Sports → Repair sports board "
+            "(or Fetch live odds once)"
         )
 
     return {

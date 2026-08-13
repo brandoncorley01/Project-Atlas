@@ -1,6 +1,7 @@
 /**
  * Credit safety: Scan and Rescore must send cache_only (0 Odds credits).
  * Only Fetch (force_refresh) may spend.
+ * Repair uses /engine/repair-sports (server decides cache vs one live seed).
  * Run with: npx --yes tsx apps/web/src/lib/sports-scan-flags.test.ts
  */
 import assert from "node:assert/strict";
@@ -24,7 +25,17 @@ assert.match(
 assert.match(
   source,
   /globalThis\.confirm\(/,
-  "Fetch must confirm before spending credits",
+  "Fetch/Repair must confirm before spending credits",
+);
+assert.match(
+  source,
+  /\/engine\/repair-sports/,
+  "Repair sports board must call /engine/repair-sports",
+);
+assert.match(
+  source,
+  /Repair sports board/,
+  "Sports UI must expose Repair sports board",
 );
 assert.match(
   source,

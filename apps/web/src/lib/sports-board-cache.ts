@@ -13,7 +13,7 @@ export interface SportsBoardCache {
   savedAt: string;
   /** Last successful Scan / Fetch / Rescore / Atlas Insight from this browser. */
   lastActionAt?: string | null;
-  lastActionKind?: "scan" | "live" | "rescore" | "openai" | null;
+  lastActionKind?: "scan" | "live" | "rescore" | "openai" | "repair" | null;
   /** Max pick data_as_of from the board when saved. */
   boardAsOf?: string | null;
   oddsFetchedAt?: string | null;

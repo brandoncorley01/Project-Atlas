@@ -22,6 +22,7 @@ export interface FixAllResult {
 function humanStepName(step: string): string {
   const labels: Record<string, string> = {
     refresh_sports: "Sports scan",
+    repair_sports: "Sports repair",
     refresh_options: "Options scan",
     refresh_stocks: "Stocks scan",
     expire_stale: "Cleanup",
@@ -119,7 +120,7 @@ export async function runDashboardFixAll(opts?: {
       return {
         ok: false,
         message:
-          "Fix all timed out — Sports may still need a scan. Open Sports → Fetch live odds, then retry Home.",
+          "Fix all timed out — Sports may still need a scan. Open Sports → Repair sports board, then retry Home.",
         steps: [],
       };
     }
