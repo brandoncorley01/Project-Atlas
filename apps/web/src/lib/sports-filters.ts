@@ -190,6 +190,21 @@ export function filterByWindow(items: SportsSignal[], window: SportsWindowKey): 
   });
 }
 
+/** After Scan/Repair, show a window that actually has picks — never hide a successful scan behind empty Today. */
+export function pickWindowWithResults(
+  items: SportsSignal[],
+  preferred: SportsWindowKey = "today",
+): SportsWindowKey {
+  const order: SportsWindowKey[] = [preferred, "today", "soon", "week", "all"];
+  const seen = new Set<SportsWindowKey>();
+  for (const key of order) {
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (filterByWindow(items, key).length > 0) return key;
+  }
+  return preferred;
+}
+
 export function filterSports(items: SportsSignal[], filter: SportsFilterKey): SportsSignal[] {
   switch (filter) {
     case "moneyline":

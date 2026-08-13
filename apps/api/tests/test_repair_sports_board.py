@@ -88,6 +88,47 @@ async def test_repair_cold_cache_live_seeds():
 
 
 @pytest.mark.asyncio
+async def test_repair_keeps_ok_when_picks_saved_even_if_today_empty():
+    """Regression: ok=false after saving picks made the Sports UI skip board reload."""
+    svc = SportsRefreshService(MagicMock(), "user-1")
+    with (
+        patch(
+            "app.providers.sports.odds_api.odds_cache_status",
+            side_effect=[
+                {
+                    "has_data": False,
+                    "missing_today_slate": True,
+                    "today_event_count": 0,
+                },
+                {
+                    "has_data": True,
+                    "missing_today_slate": True,
+                    "today_event_count": 0,
+                },
+            ],
+        ),
+        patch.object(
+            svc,
+            "refresh_sports",
+            new=AsyncMock(
+                return_value={
+                    "ok": True,
+                    "signals_created": 9,
+                    "live_odds_pulled": True,
+                    "message": "saved picks",
+                }
+            ),
+        ),
+    ):
+        result = await svc.repair_sports_board()
+
+    assert result["ok"] is True
+    assert result["signals_created"] == 9
+    assert result.get("today_still_empty") is True
+    assert "error" not in result or result.get("error") in (None, "")
+
+
+@pytest.mark.asyncio
 async def test_repair_fails_closed_when_still_empty():
     svc = SportsRefreshService(MagicMock(), "user-1")
     with (
@@ -97,7 +138,6 @@ async def test_repair_fails_closed_when_still_empty():
                 "has_data": False,
                 "missing_today_slate": True,
                 "today_event_count": 0,
-                "cache_needs_live_refresh": True,
             },
         ),
         patch.object(

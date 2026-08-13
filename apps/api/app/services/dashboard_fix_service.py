@@ -121,13 +121,12 @@ async def run_fix_all(
         sports_scanned = bool(sports_step.get("ok"))
         sports_created = int(sports_step.get("signals_created") or 0)
 
-        # Cold / incomplete / missing-Today cache: one live seed via Repair.
+        # Cold / missing-Today cache: one live seed via Repair.
         if needs["sports"] and sports_created == 0:
             cache_status = odds_cache_status()
             need_live = (
                 not bool(cache_status.get("has_data"))
                 or bool(cache_status.get("missing_today_slate"))
-                or bool(cache_status.get("cache_needs_live_refresh"))
                 or int(cache_status.get("today_event_count") or 0) == 0
             )
             if need_live:
@@ -167,7 +166,7 @@ async def run_fix_all(
                 )
                 sports_scanned = False
         elif needs["sports"] and sports_created > 0:
-            # Board filled but may still lack Today — Repair if today's odds are missing.
+            # Board filled from cache — only live-repair when Tonight is completely missing.
             cache_status = odds_cache_status()
             if int(cache_status.get("today_event_count") or 0) == 0 or bool(
                 cache_status.get("missing_today_slate")
