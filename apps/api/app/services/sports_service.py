@@ -800,11 +800,11 @@ class SportsRefreshService:
 
         status = odds_cache_status()
         today_events = int(status.get("today_event_count") or 0)
-        need_live = (
-            not bool(status.get("has_data"))
-            or bool(status.get("missing_today_slate"))
-            or bool(status.get("cache_needs_live_refresh"))
-            or today_events == 0
+        # Live-seed only when there is nothing usable OR Tonight is missing.
+        # Do NOT live-seed for "incomplete essentials" alone — that burned credits on
+        # every Repair and left Scan broken when the quota was drained.
+        need_live = not bool(status.get("has_data")) or today_events == 0 or bool(
+            status.get("missing_today_slate")
         )
         if need_live:
             result = await self.refresh_sports(
@@ -829,23 +829,20 @@ class SportsRefreshService:
 
         created = int(result.get("signals_created") or 0)
         kept = bool(result.get("signals_kept"))
-        # Prefer failing closed when Today is still empty after an intentional repair,
-        # even if some later-dated picks were saved.
         today_saved = 0
-        if created > 0:
-            # refresh_sports doesn't return rows — re-check cache today count as proxy,
-            # then note board message from stats when available.
+        if created > 0 or kept:
             post = odds_cache_status()
             today_saved = int(post.get("today_event_count") or 0)
         result["today_event_count"] = today_saved
         result["today_picks_expected"] = today_saved > 0
+        result["today_still_empty"] = today_saved == 0
 
         if created == 0 and not kept:
             result["ok"] = False
             err = str(result.get("message") or result.get("error") or "").strip()
             if need_live:
                 result["error"] = err or (
-                    "Repair could not seed Today's slate. Check ODDS_API_KEY credits, "
+                    "Repair could not seed the odds cache. Check ODDS_API_KEY credits, "
                     "then tap Repair sports board again."
                 )
             else:
@@ -854,22 +851,22 @@ class SportsRefreshService:
                 )
             if not result.get("message"):
                 result["message"] = result["error"]
-        elif need_live and created > 0:
+        elif created > 0:
+            # Never mark ok=False when picks were saved — the Sports UI aborts reload on ok=false
+            # and the board looks permanently empty (Scan/Repair "not working at all").
+            result["ok"] = True
             base = str(result.get("message") or "").strip()
-            today_note = (
-                f" · {today_saved} games on Today's odds slate"
-                if today_saved
-                else " · live odds pulled — open Today window for tonight's games"
-            )
-            durable = " · Durable odds cache seeded — Scan/Rescore stay free after redeploys."
-            result["message"] = f"{base}{today_note}{durable}" if base else f"Repaired{today_note}{durable}"
-            # Soft-fail signal for UI: board has picks but still no today events in cache.
-            if today_saved == 0:
-                result["ok"] = False
-                result["error"] = (
-                    "Live pull finished but Today's slate is still empty in the odds cache. "
-                    "Credits may be low, or The Odds API returned no tonight games for scanned leagues."
+            if need_live:
+                today_note = (
+                    f" · {today_saved} games on Today's odds slate"
+                    if today_saved
+                    else " · picks saved — switch Window to Next 48h / All dates if Today is empty"
                 )
+                durable = " · Durable odds cache seeded — Scan/Rescore stay free after redeploys."
+                result["message"] = (
+                    f"{base}{today_note}{durable}" if base else f"Repaired{today_note}{durable}"
+                )
+            result.pop("error", None)
         return result
 
     @staticmethod

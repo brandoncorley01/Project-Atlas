@@ -20,6 +20,7 @@ import {
   filterByWindow,
   filterSports,
   isUserSportsPick,
+  pickWindowWithResults,
   sortSports,
   type SportsFilterKey,
   type SportsSortKey,
@@ -57,7 +58,7 @@ export function SportsSignalsView({
   const [activeSport, setActiveSport] = useState<string | null>(null);
   const [sort, setSort] = useState<SportsSortKey>("soonest");
   const [filter, setFilter] = useState<SportsFilterKey>("all");
-  const [window, setWindow] = useState<SportsWindowKey>("today");
+  const [window, setWindow] = useState<SportsWindowKey>("all");
   const [loading, setLoading] = useState<
     null | "scan" | "live" | "rescore" | "openai" | "repair"
   >(null);
@@ -217,7 +218,7 @@ export function SportsSignalsView({
       category?: string | null,
       sport?: string | null,
       opts?: { replaceEmpty?: boolean },
-    ) => {
+    ): Promise<SportsSignal[]> => {
       const apiUrl = getApiUrl();
       // Always fetch the full upcoming slate — Window/Sort/Bet type filter client-side.
       // Fetching a narrow window then switching to a wider one used to leave the board stuck.
@@ -230,7 +231,7 @@ export function SportsSignalsView({
           cache: "no-store",
           credentials: usesBffProxy() ? "include" : "same-origin",
         });
-        if (!res.ok) return;
+        if (!res.ok) return itemsRef.current;
         const data = (await res.json()) as {
           items?: SportsSignal[];
           meta?: SportsListMeta;
@@ -241,9 +242,14 @@ export function SportsSignalsView({
         const withKalshi = await attachKalshiPulse(base);
         if (withKalshi !== base) {
           applyBoard(withKalshi, data.meta, { replaceEmpty: opts?.replaceEmpty });
+          itemsRef.current = withKalshi;
+          return withKalshi;
         }
+        itemsRef.current = base;
+        return base;
       } catch {
         // Keep existing / cached board on network errors.
+        return itemsRef.current;
       }
     },
     [attachKalshiPulse, applyBoard],
@@ -414,20 +420,17 @@ export function SportsSignalsView({
               : "No edges met the threshold — try Rescore (0 credits). Fetch only if the cache is empty."),
       );
 
-      // Show Tonight's slate after Scan/Fetch — "All dates" hid empty-Today failures.
-      setWindow("today");
       setFilter("all");
       setSort("opportunity");
       setActiveCategory(null);
       setActiveSport(null);
 
-      await Promise.all([
-        loadCategories(token),
-        // Only force-clear the board when the scan actually produced (or intentionally kept) picks.
-        // A failed save previously wiped the UI even though Odds rows were deleted server-side.
-        loadItems(token, null, null, { replaceEmpty: created > 0 || Boolean(kept) }),
-        refreshOddsStatus(),
-      ]);
+      const loaded = await loadItems(token, null, null, {
+        replaceEmpty: created > 0 || Boolean(kept),
+      });
+      await Promise.all([loadCategories(token), refreshOddsStatus()]);
+      // Prefer Today when it has picks; otherwise widen so a successful Scan is never hidden.
+      setWindow(pickWindowWithResults(loaded, "today"));
       router.refresh();
       globalThis.dispatchEvent(new Event("atlas:dashboard-refresh"));
 
@@ -515,6 +518,14 @@ export function SportsSignalsView({
           (typeof body.detail === "string" && body.detail) ||
           "Repair failed";
         setMessage(detail);
+        // Still reload if any picks were saved — ok:false used to abort and leave an empty board.
+        const createdOnError = Number(body.signals_created ?? 0);
+        if (createdOnError > 0) {
+          const loaded = await loadItems(token, null, null, { replaceEmpty: true });
+          await Promise.all([loadCategories(token), refreshOddsStatus()]);
+          setWindow(pickWindowWithResults(loaded, "today"));
+          router.refresh();
+        }
         setLoading(null);
         return;
       }
@@ -531,17 +542,16 @@ export function SportsSignalsView({
             : "Repair finished — board still empty"),
       );
 
-      setWindow("today");
       setFilter("all");
       setSort("opportunity");
       setActiveCategory(null);
       setActiveSport(null);
 
-      await Promise.all([
-        loadCategories(token),
-        loadItems(token, null, null, { replaceEmpty: created > 0 || Boolean(kept) }),
-        refreshOddsStatus(),
-      ]);
+      const loaded = await loadItems(token, null, null, {
+        replaceEmpty: created > 0 || Boolean(kept),
+      });
+      await Promise.all([loadCategories(token), refreshOddsStatus()]);
+      setWindow(pickWindowWithResults(loaded, "today"));
       router.refresh();
       globalThis.dispatchEvent(new Event("atlas:dashboard-refresh"));
 
@@ -685,9 +695,10 @@ export function SportsSignalsView({
   const busy = loading !== null;
   const showRepair =
     items.length === 0 ||
-    !cacheRescoreFree ||
     Boolean(oddsStatus?.missing_today_slate) ||
-    (oddsStatus != null && (oddsStatus.today_event_count ?? 0) === 0);
+    (oddsStatus != null &&
+      oddsStatus.cache_has_data === false &&
+      (oddsStatus.today_event_count ?? 0) === 0);
 
   return (
     <div className="w-full min-w-0 overflow-x-clip">
