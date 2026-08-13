@@ -426,7 +426,7 @@ export function SportsSignalsView({
       setActiveSport(null);
 
       const loaded = await loadItems(token, null, null, {
-        replaceEmpty: created > 0 || Boolean(kept),
+        replaceEmpty: created > 0,
       });
       await Promise.all([loadCategories(token), refreshOddsStatus()]);
       // Prefer Today when it has picks; otherwise widen so a successful Scan is never hidden.
@@ -548,7 +548,7 @@ export function SportsSignalsView({
       setActiveSport(null);
 
       const loaded = await loadItems(token, null, null, {
-        replaceEmpty: created > 0 || Boolean(kept),
+        replaceEmpty: created > 0,
       });
       await Promise.all([loadCategories(token), refreshOddsStatus()]);
       setWindow(pickWindowWithResults(loaded, "today"));

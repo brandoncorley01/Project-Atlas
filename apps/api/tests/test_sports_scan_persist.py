@@ -125,6 +125,35 @@ async def test_refresh_sports_deletes_old_odds_rows_only_after_successful_insert
     assert "new-0" not in delete_filter["id"]
 
 
+@pytest.mark.asyncio
+async def test_refresh_sports_fails_closed_when_empty_board_and_no_setups():
+    db = MagicMock()
+    db.select = AsyncMock(return_value=[])
+    db.insert = AsyncMock()
+    db.delete = AsyncMock()
+    db.update = AsyncMock(return_value=[])
+
+    svc = SportsRefreshService(db, "user-1")
+    events = [{"id": "e1", "commence_time": "2099-01-01T00:00:00Z", "sport_title": "MLB"}]
+    fetch_stats = {"configured": True, "cached": True, "credits_used": 0, "events": 1}
+
+    from contextlib import ExitStack
+
+    with ExitStack() as stack:
+        for p in _patch_scan(events, fetch_stats, _setup_row(0)):
+            stack.enter_context(p)
+        stack.enter_context(patch("app.services.sports_service.analyze_event", return_value=[]))
+        stack.enter_context(
+            patch("app.services.sports_service._select_diverse_setups", return_value=[])
+        )
+        result = await svc.refresh_sports(replace=True, cache_only=True)
+
+    assert result.get("ok") is False
+    assert result["signals_created"] == 0
+    assert result.get("signals_kept") is False
+    db.insert.assert_not_called()
+
+
 def test_live_odds_pulled_requires_events_and_credits():
     assert SportsRefreshService._live_odds_pulled(
         cache_only=False,

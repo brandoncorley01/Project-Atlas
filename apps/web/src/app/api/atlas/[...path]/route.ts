@@ -41,9 +41,11 @@ function proxyTimeoutFor(subpath: string): number {
     || subpath === "engine/refresh-stocks"
     || subpath === "engine/refresh-sports-openai"
     || subpath === "engine/refresh-sports"
+    || subpath === "engine/repair-sports"
     || subpath.startsWith("engine/refresh-sports")
+    || subpath.startsWith("engine/repair-sports")
   ) {
-    // Fix all scans empty boards first then runs maintenance — needs the full budget.
+    // Fix all / sports Scan / Repair / Fetch need the full budget (news + Odds + save).
     return ENGINE_LONG_PROXY_TIMEOUT_MS;
   }
   return PROXY_TIMEOUT_MS;

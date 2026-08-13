@@ -55,7 +55,11 @@ export function SignalsActions() {
       } catch {
         return { ok: false, data: { detail: "Invalid response from API" }, status: response.status };
       }
-      return { ok: response.ok, data, status: response.status };
+      return {
+        ok: response.ok && data.ok !== false && data.status !== "error",
+        data,
+        status: response.status,
+      };
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Request failed";
       if (msg.includes("fetch") || msg.includes("timeout")) {
@@ -129,7 +133,7 @@ export function SignalsActions() {
     setLoading(null);
 
     if (!ok) {
-      const detail = data.detail;
+      const detail = data.detail ?? data.message ?? data.error;
       let text = typeof detail === "string" ? detail : "Request failed";
       if (text.includes("getaddrinfo") || text.includes("11004")) {
         text =
@@ -154,10 +158,10 @@ export function SignalsActions() {
     setMessage(null);
     setMenuOpen(false);
 
-    const sports = await postEngine("/engine/refresh-sports");
+    const sports = await postEngine("/engine/refresh-sports?cache_only=true");
     if (!sports.ok) {
       setLoading(null);
-      const detail = sports.data.detail;
+      const detail = sports.data.detail ?? sports.data.message ?? sports.data.error;
       let text = typeof detail === "string" ? detail : "Sports scan failed";
       if (text.includes("getaddrinfo") || text.includes("11004")) {
         text =
@@ -260,7 +264,7 @@ export function SignalsActions() {
               <button
                 type="button"
                 className="block w-full px-3 py-2 text-left text-xs text-muted hover:bg-surface-hover hover:text-foreground"
-                onClick={() => runScan("/engine/refresh-sports", "sports")}
+                onClick={() => runScan("/engine/refresh-sports?cache_only=true", "sports")}
               >
                 Sports only (no parlays)
               </button>
