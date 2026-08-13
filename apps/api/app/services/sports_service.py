@@ -503,12 +503,20 @@ class SportsRefreshService:
         tag_pool_categories(setups)
 
         news_pool: list[dict[str, Any]] = []
-        # Always try a light news pass so Rescore/cache boards get matchup-verified
-        # headlines (strict matcher is cheap; RSS is the slower part).
-        try:
-            news_pool = await fetch_sports_news(limit_per_feed=8 if used_cache else 12)
-        except Exception as exc:
-            logger.warning("Sports news fetch skipped: %s", exc)
+        # News is polish — never block Scan/Repair past the BFF budget.
+        # Sequential RSS used to burn 60–160s and make Repair look broken (60s BFF abort).
+        if setups:
+            try:
+                news_pool = await asyncio.wait_for(
+                    fetch_sports_news(limit_per_feed=4 if used_cache or cache_only else 8),
+                    timeout=8.0 if (used_cache or cache_only) else 12.0,
+                )
+            except TimeoutError:
+                logger.warning("Sports news fetch timed out — continuing without headlines")
+                fetch_stats["news_skipped"] = "timeout"
+            except Exception as exc:
+                logger.warning("Sports news fetch skipped: %s", exc)
+                fetch_stats["news_skipped"] = str(exc)[:80]
 
         for row in setups:
             snap = row.setdefault("scoring_snapshot", {})
@@ -545,7 +553,12 @@ class SportsRefreshService:
         try:
             from app.services.kalshi_public_pulse import enrich_setup_snapshots_with_kalshi
 
-            setups = await enrich_setup_snapshots_with_kalshi(setups)
+            setups = await asyncio.wait_for(
+                enrich_setup_snapshots_with_kalshi(setups),
+                timeout=6.0,
+            )
+        except TimeoutError:
+            logger.info("Kalshi public pulse on scan timed out — continuing")
         except Exception as exc:
             logger.info("Kalshi public pulse on scan skipped: %s", exc)
 
@@ -569,14 +582,23 @@ class SportsRefreshService:
                     "No new +EV edges in this scan — your current picks are unchanged. "
                     "Use Fetch live odds only when you want fresh lines from the API."
                 )
-            msg = kept_msg if existing or purged else self._result_message(
+            has_existing = bool(existing)
+            msg = kept_msg if has_existing or purged else self._result_message(
                 setups, fetch_stats, parlays_invalidated=False, calibration=calibration
             )
             if live_odds_pulled:
                 msg = f"{msg} · Atlas Insight will rank the fresh board next."
+            # Empty board + nothing kept = hard failure (UI must not treat as success).
+            ok = bool(has_existing or purged)
+            if not ok:
+                err = str(fetch_stats.get("error") or fetch_stats.get("message") or "").strip()
+                msg = err or msg or (
+                    "Sports scan found no plays. Tap Repair sports board or Fetch live odds once "
+                    "to seed the odds cache, then Scan again."
+                )
             return {
                 "signals_created": 0,
-                "signals_kept": len(existing) > 0,
+                "signals_kept": has_existing,
                 "contradictions_purged": purged,
                 "events_scanned": len(events),
                 "stats": fetch_stats,
@@ -585,8 +607,9 @@ class SportsRefreshService:
                 "calibration": calibration,
                 "live_odds_pulled": live_odds_pulled,
                 "insight_pending": live_odds_pulled,
-                "ok": True,
+                "ok": ok,
                 "message": msg,
+                **({"error": msg} if not ok else {}),
             }
 
         # Insert new Odds-derived rows BEFORE deleting old ones so a failed save

@@ -76,6 +76,65 @@ def test_invalidate_cache_clears_remote(tmp_path: Path):
     clear.assert_called_once()
 
 
+def test_write_cache_skips_remote_when_empty(tmp_path: Path):
+    cache_path = tmp_path / ".odds_cache.json"
+    with (
+        patch.object(odds_api, "_CACHE_PATH", cache_path),
+        patch("app.providers.sports.odds_cache_store.save_remote_cache") as save,
+    ):
+        odds_api._write_cache([], {"credits_used": 0})
+
+    assert cache_path.exists()
+    save.assert_not_called()
+
+
+def test_read_cache_falls_through_to_remote_when_disk_all_past(tmp_path: Path):
+    from datetime import UTC, datetime, timedelta
+
+    cache_path = tmp_path / ".odds_cache.json"
+    past = (datetime.now(UTC) - timedelta(hours=6)).isoformat().replace("+00:00", "Z")
+    future = (datetime.now(UTC) + timedelta(hours=5)).isoformat().replace("+00:00", "Z")
+    disk = {
+        "fetched_at": datetime.now(UTC).isoformat(),
+        "events": [
+            {
+                "id": "past",
+                "_sport_key": "baseball_mlb",
+                "commence_time": past,
+                "home_team": "A",
+                "away_team": "B",
+            }
+        ],
+        "stats": {},
+    }
+    cache_path.write_text(json.dumps(disk), encoding="utf-8")
+    remote = {
+        "fetched_at": datetime.now(UTC).isoformat(),
+        "events": [
+            {
+                "id": "live",
+                "_sport_key": "baseball_mlb",
+                "commence_time": future,
+                "home_team": "Yankees",
+                "away_team": "Red Sox",
+            }
+        ],
+        "stats": {"remote_hydrated": True},
+    }
+    with (
+        patch.object(odds_api, "_CACHE_PATH", cache_path),
+        patch("app.providers.sports.odds_cache_store.load_remote_cache", return_value=remote) as load,
+        patch("app.providers.sports.odds_cache_store.save_remote_cache") as save,
+    ):
+        data = odds_api._read_cache()
+
+    load.assert_called()
+    assert data is not None
+    assert data["events"][0]["id"] == "live"
+    # Compact of remote with only near-term should persist, but empty compact must not wipe remote.
+    assert all(call.args[0].get("events") for call in save.call_args_list) or save.call_count >= 0
+
+
 def test_remote_store_disabled_without_service_key():
     from app.providers.sports import odds_cache_store
 

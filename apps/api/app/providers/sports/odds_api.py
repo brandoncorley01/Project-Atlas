@@ -428,8 +428,12 @@ def _cache_needs_live_refresh(near_term_keys: frozenset[str]) -> bool:
     return len(near_term_keys & expected) < 3 and len(near_term_keys) <= 4
 
 
-def _maybe_compact_cache(cache: dict[str, Any]) -> dict[str, Any]:
-    """Rewrite disk cache when it holds mostly far-future noise — no API credits spent."""
+def _maybe_compact_cache(cache: dict[str, Any], *, persist: bool = True) -> dict[str, Any]:
+    """Drop far-future noise from a cache payload.
+
+    Never persist an empty compact to disk/remote — that wiped the durable Odds slate
+    overnight and left Scan permanently cold until the next live Fetch.
+    """
     events = list(cache.get("events") or [])
     if not events:
         return cache
@@ -450,7 +454,15 @@ def _maybe_compact_cache(cache: dict[str, Any]) -> dict[str, Any]:
             "cache_compacted": True,
         }
     )
-    _write_cache(filtered, stats)
+    if not filtered:
+        stats["cache_all_past"] = True
+        return {
+            "fetched_at": cache.get("fetched_at"),
+            "events": [],
+            "stats": stats,
+        }
+    if persist:
+        _write_cache(filtered, stats)
     return {
         "fetched_at": cache.get("fetched_at"),
         "events": filtered,
@@ -459,18 +471,27 @@ def _maybe_compact_cache(cache: dict[str, Any]) -> dict[str, Any]:
 
 
 def _read_cache() -> dict[str, Any] | None:
+    disk_payload: dict[str, Any] | None = None
     try:
         if _CACHE_PATH.exists():
             with _CACHE_PATH.open("r", encoding="utf-8") as fh:
                 data = json.load(fh)
             if isinstance(data, dict) and isinstance(data.get("events"), list):
-                return _maybe_compact_cache(data)
+                disk_payload = data
     except (OSError, ValueError) as exc:
         logger.info("Odds cache read failed: %s", exc)
 
-    # Disk miss (common after Render redeploy) — hydrate from durable Supabase cache.
+    if disk_payload is not None:
+        compacted = _maybe_compact_cache(disk_payload, persist=True)
+        near, _ = _near_term_cache_events(list(compacted.get("events") or []))
+        if near:
+            return compacted
+        # Disk is all past / empty after compact — fall through to durable remote.
+        logger.info("Odds disk cache has no upcoming events — trying Supabase hydrate")
+
+    # Disk miss or all-past (common after Render redeploy / overnight) — hydrate remote.
     try:
-        from app.providers.sports.odds_cache_store import load_remote_cache, save_remote_cache
+        from app.providers.sports.odds_cache_store import load_remote_cache
 
         remote = load_remote_cache()
         if remote and isinstance(remote.get("events"), list) and remote["events"]:
@@ -483,7 +504,10 @@ def _read_cache() -> dict[str, Any] | None:
                 "Odds cache hydrated from Supabase (%s events)",
                 len(remote["events"]),
             )
-            return _maybe_compact_cache(remote)
+            compacted = _maybe_compact_cache(remote, persist=True)
+            near, _ = _near_term_cache_events(list(compacted.get("events") or []))
+            if near:
+                return compacted
     except Exception as exc:
         logger.info("Odds remote cache hydrate skipped: %s", exc)
     return None
@@ -500,6 +524,10 @@ def _write_cache(events: list[dict[str, Any]], stats: dict[str, Any]) -> None:
             json.dump(payload, fh)
     except (OSError, TypeError) as exc:
         logger.info("Odds cache write failed: %s", exc)
+    # Never write-through an empty slate to Supabase — that permanently kills Scan
+    # until the next successful live Fetch after a redeploy.
+    if not events:
+        return
     try:
         from app.providers.sports.odds_cache_store import save_remote_cache
 

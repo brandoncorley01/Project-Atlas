@@ -39,7 +39,7 @@ assert.match(
 );
 assert.match(
   source,
-  /replaceEmpty:\s*created > 0 \|\| Boolean\(kept\)/,
+  /replaceEmpty:\s*created > 0(?!\s*\|\|)/,
   "Scan must not force-clear the board when zero plays were saved",
 );
 
