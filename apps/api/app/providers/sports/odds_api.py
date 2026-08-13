@@ -369,6 +369,37 @@ def _near_term_cache_events(
     return filtered, meta
 
 
+def _event_is_calendar_today(event: dict[str, Any]) -> bool:
+    """True when commence_time is later today (US/Eastern)."""
+    from app.services.sports_ranking import event_local_date, sports_today
+
+    hours = hours_until_event(event.get("commence_time"))
+    if hours is None or hours <= 0:
+        return False
+    if event.get("_is_outright"):
+        return False
+    day = event_local_date(event.get("commence_time"))
+    return day is not None and day == sports_today()
+
+
+def calendar_today_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [e for e in events if _event_is_calendar_today(e)]
+
+
+def cache_missing_today_slate(events: list[dict[str, Any]] | None = None) -> bool:
+    """True when cached odds have no usable Eastern-calendar-today games.
+
+    A warm near-term cache of only tomorrow+ games used to make Repair skip live
+    Fetch — Today stayed empty on full MLB/WNBA nights.
+    """
+    if events is None:
+        cache = _read_cache()
+        events = list(cache.get("events") or []) if cache else []
+    upcoming = filter_upcoming_events(list(events))
+    today = calendar_today_events(upcoming)
+    return len(today) == 0
+
+
 def _essential_keys_for_month() -> frozenset[str]:
     month = datetime.now(UTC).month
     if month in (4, 5, 6, 7, 8, 9):
@@ -526,6 +557,8 @@ def odds_cache_status() -> dict[str, Any]:
     league_catalog = list(cache_stats.get("league_catalog") or [])
     if not league_catalog:
         league_catalog = list(near_meta.get("near_term_leagues") or [])
+    today_events = calendar_today_events(raw_events) if raw_events else []
+    missing_today = not bool(today_events)
     return {
         "has_data": has_data,
         "cache_has_events": bool(raw_events),
@@ -533,7 +566,9 @@ def odds_cache_status() -> dict[str, Any]:
         "cache_rescore_free": rescore_free,
         "age_minutes": round(age, 1) if age is not None else None,
         "fresh": fresh,
-        "cache_needs_live_refresh": needs_live,
+        "cache_needs_live_refresh": needs_live or missing_today,
+        "missing_today_slate": missing_today,
+        "today_event_count": len(today_events),
         "spend_locked": spend_locked,
         "odds_spend_mode": config.settings.odds_spend_mode_normalized(),
         "near_term_event_count": len(near_term),
@@ -1152,6 +1187,12 @@ async def fetch_all_sports_odds(
     cache_usable = bool(near_cached)
     near_keys = frozenset(near_preview.get("near_term_league_keys") or [])
     incomplete_essentials = bool(near_cached) and _cache_needs_live_refresh(near_keys)
+    missing_today = cache_missing_today_slate(raw_cached)
+    # Incomplete essentials OR an empty Today slate must be allowed to live-Fetch —
+    # cooldown must not trap Repair/Fetch on a warm-looking cache with no tonight games.
+    # Only bypass for missing Today — incomplete essentials with tonight games still
+    # respect cooldown (Today board already has something to show).
+    allow_live_despite_cooldown = missing_today
 
     # CREDIT SAFETY (hard rules):
     # - Rescore (cache_only) never spends.
@@ -1171,6 +1212,8 @@ async def fetch_all_sports_odds(
                 "odds_spend_mode": config.settings.odds_spend_mode_normalized(),
                 "credits_used": 0,
                 "cache_needs_live_refresh": True,
+                "missing_today_slate": True,
+                "today_event_count": 0,
                 "error": (
                     "No upcoming games in the odds cache. Tap Fetch live odds ONCE to seed "
                     "FanDuel/DraftKings lines (uses Odds credits). Scan and Rescore stay free after that."
@@ -1185,6 +1228,7 @@ async def fetch_all_sports_odds(
         events, near_meta = _near_term_cache_events(raw_cached)
         near_keys = frozenset(near_meta.get("near_term_league_keys") or [])
         needs_live = _cache_needs_live_refresh(near_keys) if events else bool(raw_cached)
+        today_n = len(calendar_today_events(raw_cached))
         stats = dict((cache or {}).get("stats") or {})
         stats.update(
             {
@@ -1199,17 +1243,23 @@ async def fetch_all_sports_odds(
                 "events_dropped_past": len(raw_cached) - len(events),
                 "events_dropped_far_out": near_meta.get("dropped_far_out", 0),
                 "leagues_with_near_term_games": near_meta.get("near_term_leagues") or [],
-                "cache_needs_live_refresh": needs_live,
+                "cache_needs_live_refresh": needs_live or today_n == 0,
+                "missing_today_slate": today_n == 0,
+                "today_event_count": today_n,
                 "credits_used": 0,
                 "scan_scope": "cache_only" if spend_locked else "rescore",
                 "max_sports_per_scan": config.settings.odds_max_sports_per_scan,
                 "message": (
                     "0 Odds credits — scored from cache. "
                     + (
-                        "Coverage looks narrow; Fetch live odds once if you need more leagues "
-                        "(cooldown protects your credit balance)."
-                        if needs_live or incomplete_essentials
-                        else "Use Rescore anytime for a free re-rank."
+                        "No games for Today (Eastern) in cache — Repair / Fetch live odds once."
+                        if today_n == 0
+                        else (
+                            "Coverage looks narrow; Fetch live odds once if you need more leagues "
+                            "(cooldown protects your credit balance)."
+                            if needs_live or incomplete_essentials
+                            else "Use Rescore anytime for a free re-rank."
+                        )
                     )
                 ),
             }
@@ -1217,9 +1267,10 @@ async def fetch_all_sports_odds(
         return events, stats
 
     # Explicit Fetch cooldown — never burn another ~8 credits seconds after the last pull
-    # when we already have upcoming games to Rescore.
+    # when we already have upcoming games to Rescore. Bypass when Today is empty or
+    # in-season essentials are missing (Repair / Fetch must be able to recover).
     cooldown_min = max(0, int(getattr(config.settings, "odds_live_fetch_cooldown_minutes", 20) or 0))
-    if force_refresh and cache_usable and cooldown_min > 0:
+    if force_refresh and cache_usable and cooldown_min > 0 and not allow_live_despite_cooldown:
         last_live = None
         cache_stats = dict((cache or {}).get("stats") or {})
         last_live_raw = cache_stats.get("last_live_fetch_at") or (cache or {}).get("fetched_at")
@@ -1238,6 +1289,8 @@ async def fetch_all_sports_odds(
                     "events": len(events),
                     "leagues_with_near_term_games": near_meta.get("near_term_leagues") or [],
                     "cache_needs_live_refresh": incomplete_essentials,
+                    "missing_today_slate": missing_today,
+                    "today_event_count": len(calendar_today_events(raw_cached)),
                     "message": (
                         f"Fetch cooldown — last live pull was {last_live:.0f}m ago. "
                         f"Served cache (0 credits). Wait ~{wait_m}m or use Rescore / Scan for free."
@@ -1246,6 +1299,11 @@ async def fetch_all_sports_odds(
             )
             logger.info("Odds Fetch blocked by %sm cooldown (age=%.1fm)", cooldown_min, last_live)
             return events, stats
+    elif force_refresh and allow_live_despite_cooldown:
+        logger.info(
+            "Odds Fetch bypassing cooldown (missing_today=%s)",
+            missing_today,
+        )
 
     # Serve fresh cache without spending any credits (non-spend-locked modes).
     if not force_refresh and cache:

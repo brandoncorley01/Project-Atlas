@@ -1,4 +1,4 @@
-"""Repair sports board: warm = cache-only; cold = one live seed; empty = fail closed."""
+"""Repair sports board: warm = cache-only; cold/missing-Today = one live seed; empty = fail closed."""
 
 from __future__ import annotations
 
@@ -15,7 +15,13 @@ async def test_repair_warm_cache_uses_cache_only():
     with (
         patch(
             "app.providers.sports.odds_api.odds_cache_status",
-            return_value={"has_data": True, "cache_has_events": True},
+            return_value={
+                "has_data": True,
+                "cache_has_events": True,
+                "missing_today_slate": False,
+                "cache_needs_live_refresh": False,
+                "today_event_count": 10,
+            },
         ),
         patch.object(
             svc,
@@ -42,7 +48,20 @@ async def test_repair_cold_cache_live_seeds():
     with (
         patch(
             "app.providers.sports.odds_api.odds_cache_status",
-            return_value={"has_data": False, "cache_has_events": False},
+            side_effect=[
+                {
+                    "has_data": False,
+                    "cache_has_events": False,
+                    "missing_today_slate": True,
+                    "cache_needs_live_refresh": True,
+                    "today_event_count": 0,
+                },
+                {
+                    "has_data": True,
+                    "missing_today_slate": False,
+                    "today_event_count": 6,
+                },
+            ],
         ),
         patch.object(
             svc,
@@ -74,7 +93,12 @@ async def test_repair_fails_closed_when_still_empty():
     with (
         patch(
             "app.providers.sports.odds_api.odds_cache_status",
-            return_value={"has_data": False},
+            return_value={
+                "has_data": False,
+                "missing_today_slate": True,
+                "today_event_count": 0,
+                "cache_needs_live_refresh": True,
+            },
         ),
         patch.object(
             svc,

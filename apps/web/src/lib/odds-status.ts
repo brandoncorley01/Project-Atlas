@@ -23,6 +23,8 @@ export interface OddsApiStatus {
   cache_fetched_at?: string | null;
   cache_fresh?: boolean;
   cache_needs_live_refresh?: boolean;
+  missing_today_slate?: boolean;
+  today_event_count?: number;
   near_term_leagues?: string[];
   league_catalog?: string[];
   near_term_event_count?: number;

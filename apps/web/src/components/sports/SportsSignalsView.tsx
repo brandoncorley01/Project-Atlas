@@ -57,7 +57,7 @@ export function SportsSignalsView({
   const [activeSport, setActiveSport] = useState<string | null>(null);
   const [sort, setSort] = useState<SportsSortKey>("soonest");
   const [filter, setFilter] = useState<SportsFilterKey>("all");
-  const [window, setWindow] = useState<SportsWindowKey>("all");
+  const [window, setWindow] = useState<SportsWindowKey>("today");
   const [loading, setLoading] = useState<
     null | "scan" | "live" | "rescore" | "openai" | "repair"
   >(null);
@@ -414,8 +414,8 @@ export function SportsSignalsView({
               : "No edges met the threshold — try Rescore (0 credits). Fetch only if the cache is empty."),
       );
 
-      // Leave filters wide so Odds Scan results stay visible (US + global).
-      setWindow("all");
+      // Show Tonight's slate after Scan/Fetch — "All dates" hid empty-Today failures.
+      setWindow("today");
       setFilter("all");
       setSort("opportunity");
       setActiveCategory(null);
@@ -442,8 +442,8 @@ export function SportsSignalsView({
       if (liveOddsPulled && created <= 0) {
         setMessage(
           apiMessage
-            ? `${apiMessage} · Board still empty — tap Rescore (0 credits). Fetch only if cache has no games.`
-            : "Live odds pulled but no plays ranked — tap Rescore (0 credits).",
+            ? `${apiMessage} · Board still empty — tap Repair sports board or Rescore (0 credits).`
+            : "Live odds pulled but no plays ranked — tap Repair sports board.",
         );
       }
     } catch (err) {
@@ -470,14 +470,17 @@ export function SportsSignalsView({
     }
 
     const cacheCold = !(oddsStatus?.cache_rescore_free || oddsStatus?.cache_fresh);
+    const missingToday = Boolean(
+      oddsStatus?.missing_today_slate || (oddsStatus?.today_event_count ?? 0) === 0,
+    );
     const estimate = oddsStatus?.estimated_live_scan_credits ?? 8;
     const remaining = oddsStatus?.total_remaining;
     const ok = globalThis.confirm(
-      cacheCold
-        ? `Repair sports board will Fetch live odds once (~${estimate} credits` +
+      cacheCold || missingToday
+        ? `Repair will Fetch live odds once (~${estimate} credits` +
             (remaining != null ? `, ${remaining} left` : "") +
-            ") if the durable cache is empty, then refill the board.\n\n" +
-            "After that, Scan/Rescore stay free even after redeploys.\n\nContinue?"
+            ") to fill Today's slate when the cache is cold or missing tonight's games.\n\n" +
+            "After that, Scan/Rescore stay free.\n\nContinue?"
         : "Repair sports board will rescan from the warm odds cache (0 Odds credits).\n\nContinue?",
     );
     if (!ok) {
@@ -528,7 +531,7 @@ export function SportsSignalsView({
             : "Repair finished — board still empty"),
       );
 
-      setWindow("all");
+      setWindow("today");
       setFilter("all");
       setSort("opportunity");
       setActiveCategory(null);
@@ -680,7 +683,11 @@ export function SportsSignalsView({
   const cacheFresh = oddsStatus?.cache_fresh ?? false;
   const cacheNeedsLive = oddsStatus?.cache_needs_live_refresh ?? false;
   const busy = loading !== null;
-  const showRepair = items.length === 0 || !cacheRescoreFree;
+  const showRepair =
+    items.length === 0 ||
+    !cacheRescoreFree ||
+    Boolean(oddsStatus?.missing_today_slate) ||
+    (oddsStatus != null && (oddsStatus.today_event_count ?? 0) === 0);
 
   return (
     <div className="w-full min-w-0 overflow-x-clip">
@@ -864,7 +871,7 @@ export function SportsSignalsView({
           }
           description={
             window === "today" && !activeCategory && filter === "all" && !activeSport
-              ? "Nothing upcoming later today (US/Eastern) on the board. Tap Rescore (0 credits) first — do not spam Fetch. Use Next 48h if tips already started."
+              ? "Nothing upcoming later today (US/Eastern) on the board. Tap Repair sports board — that live-seeds Today's slate when the cache is missing tonight's games."
               : window === "soon" && !activeCategory && filter === "all" && !activeSport
                 ? "No plays in the next 48 hours. Try This week, Next 30 days, or All dates."
                 : activeCategory || activeSport || filter !== "all"
