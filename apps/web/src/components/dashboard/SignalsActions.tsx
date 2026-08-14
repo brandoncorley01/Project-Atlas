@@ -7,6 +7,19 @@ import { getApiUrl, usesBffProxy, apiRequestHeaders } from "@/lib/api-url";
 
 type ScanMode = "live" | "mock" | "news" | "stocks" | "sports" | "parlays" | "sports-pipeline";
 
+function engineSucceeded(httpOk: boolean, data: Record<string, unknown>): boolean {
+  if (!httpOk) return false;
+  if (data.ok === false) return false;
+  if (data.status === "error") return false;
+  return true;
+}
+
+function engineFailureMessage(data: Record<string, unknown>, fallback: string): string {
+  if (typeof data.message === "string" && data.message.trim()) return data.message.trim();
+  if (typeof data.detail === "string" && data.detail.trim()) return data.detail.trim();
+  return fallback;
+}
+
 export function SignalsActions() {
   const router = useRouter();
   const [loading, setLoading] = useState<ScanMode | null>(null);
@@ -55,13 +68,32 @@ export function SignalsActions() {
       } catch {
         return { ok: false, data: { detail: "Invalid response from API" }, status: response.status };
       }
-      return { ok: response.ok, data, status: response.status };
+      return {
+        ok: engineSucceeded(response.ok, data),
+        data,
+        status: response.status,
+      };
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Request failed";
-      if (msg.includes("fetch") || msg.includes("timeout")) {
+      const timedOut =
+        msg.includes("timeout") ||
+        msg.includes("aborted") ||
+        (err instanceof DOMException && (err.name === "TimeoutError" || err.name === "AbortError"));
+      if (timedOut) {
+        return {
+          ok: false,
+          data: {
+            detail: usesBffProxy()
+              ? "Scan timed out — try again, or run modules one at a time from their pages."
+              : "Request timed out — run .\\scripts\\restart-api.ps1",
+          },
+          status: 0,
+        };
+      }
+      if (msg.includes("fetch")) {
         return { ok: false, data: { detail: "Backend not responding — run .\\scripts\\start-dev.ps1" }, status: 0 };
       }
-      return { ok: false, data: { detail: "Request timed out — run .\\scripts\\restart-api.ps1" }, status: 0 };
+      return { ok: false, data: { detail: msg }, status: 0 };
     }
   }
 
@@ -129,8 +161,7 @@ export function SignalsActions() {
     setLoading(null);
 
     if (!ok) {
-      const detail = data.detail;
-      let text = typeof detail === "string" ? detail : "Request failed";
+      let text = engineFailureMessage(data, "Request failed");
       if (text.includes("getaddrinfo") || text.includes("11004")) {
         text =
           "Network/DNS error on the PC running the API. Check internet, tap Restart, then try again.";
@@ -157,8 +188,7 @@ export function SignalsActions() {
     const sports = await postEngine("/engine/refresh-sports");
     if (!sports.ok) {
       setLoading(null);
-      const detail = sports.data.detail;
-      let text = typeof detail === "string" ? detail : "Sports scan failed";
+      let text = engineFailureMessage(sports.data, "Sports scan failed");
       if (text.includes("getaddrinfo") || text.includes("11004")) {
         text =
           "Network/DNS error on the PC running the API. Check internet, tap Restart, then try again.";
@@ -180,9 +210,8 @@ export function SignalsActions() {
     setLoading(null);
 
     if (!parlays.ok) {
-      const detail = parlays.data.detail;
       setMessage(
-        `${formatResult("sports", sports.data)} · parlays failed: ${typeof detail === "string" ? detail : "error"}`,
+        `${formatResult("sports", sports.data)} · parlays failed: ${engineFailureMessage(parlays.data, "error")}`,
       );
       router.refresh();
       window.dispatchEvent(new Event("atlas:dashboard-refresh"));

@@ -44,8 +44,12 @@ export function StocksSignalsView({ initialItems, initialTicker }: StocksSignals
         signal: AbortSignal.timeout(300000),
       });
       const body = await res.json();
-      if (!res.ok) {
-        setMessage(typeof body.detail === "string" ? body.detail : "Scan failed");
+      if (!res.ok || body.ok === false || body.status === "error") {
+        const detail =
+          (typeof body.message === "string" && body.message) ||
+          (typeof body.detail === "string" && body.detail) ||
+          "Scan failed";
+        setMessage(detail);
         setLoading(false);
         return;
       }

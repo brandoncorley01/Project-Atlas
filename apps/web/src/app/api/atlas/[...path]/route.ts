@@ -8,8 +8,8 @@ const PROXY_TIMEOUT_MS = 60_000;
 const DASHBOARD_PROXY_TIMEOUT_MS = 50_000;
 const AI_PROXY_TIMEOUT_MS = 90_000;
 const INSIGHT_SEARCH_PROXY_TIMEOUT_MS = 150_000;
-/** Atlas Insight + Odds scans need longer than the default 60s BFF budget. */
-const ENGINE_LONG_PROXY_TIMEOUT_MS = 180_000;
+/** Engine scans / Fix all — align with client 300s waits (under Vercel maxDuration). */
+const ENGINE_LONG_PROXY_TIMEOUT_MS = 280_000;
 
 /** Vercel Pro allows up to 300s; Hobby caps at 60s regardless. */
 export const maxDuration = 300;
@@ -154,7 +154,7 @@ async function proxyRequest(request: NextRequest, pathSegments: string[]) {
           ? process.env.NODE_ENV === "development"
             ? `Cannot reach API at ${API_BASE}. Tap Restart in the top-right header (~60 seconds).`
             : message.includes("timeout") || message.includes("aborted")
-              ? "Atlas Insight timed out — try again. If this keeps happening, wait for Render to finish redeploying."
+              ? "Scan timed out — try again. For Sports use Scan (cache) or Fetch live; Fix all may need a second pass after a cold start."
               : "Atlas API is temporarily unavailable. Try again in a moment."
           : message,
       },
