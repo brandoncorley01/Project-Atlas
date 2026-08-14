@@ -32,12 +32,14 @@ async def refresh_stocks(
     limit: int = 15,
 ) -> dict:
     """Scan market for ranked stock swing setups with RSI, MACD, and RVOL."""
+    from app.db.service_client import get_write_db
     from app.services.stock_service import StockRefreshService
 
-    service = StockRefreshService(SupabaseClient(token), user_id)
+    service = StockRefreshService(get_write_db(token), user_id)
     result = await service.refresh_stocks(replace=replace, limit=limit)
     set_last_job("refresh_stocks")
-    return {"status": "ok", "module": "stocks", **result}
+    status = "error" if result.get("ok") is False else "ok"
+    return {"status": status, "module": "stocks", **result}
 
 
 @router.post("/analyze-stock")
@@ -48,9 +50,10 @@ async def analyze_stock(
     persist: bool = False,
 ) -> dict:
     """Full swing analysis for a single ticker — chart, entry, stop, and targets."""
+    from app.db.service_client import get_write_db
     from app.services.stock_service import StockRefreshService
 
-    service = StockRefreshService(SupabaseClient(token), user_id)
+    service = StockRefreshService(get_write_db(token), user_id)
     result = await service.analyze_ticker(ticker, persist=persist)
     if not result.get("ok"):
         return {"status": "error", "module": "stocks", **result}
@@ -233,10 +236,13 @@ async def refresh_live_options(
     limit: int = 15,
 ) -> dict:
     """Discover market movers, deep-scan options chains, rank by profit probability."""
-    service = OptionsRefreshService(SupabaseClient(token), user_id)
+    from app.db.service_client import get_write_db
+
+    service = OptionsRefreshService(get_write_db(token), user_id)
     result = await service.refresh_live_options(replace=replace, limit=limit)
     set_last_job("refresh_options")
-    return {"status": "ok", "module": "options", **result}
+    status = "error" if result.get("ok") is False else "ok"
+    return {"status": status, "module": "options", **result}
 
 
 @router.post("/run-mock")

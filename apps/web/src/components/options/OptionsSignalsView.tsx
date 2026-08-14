@@ -153,8 +153,12 @@ export function OptionsSignalsView({
         signal: AbortSignal.timeout(300_000),
       });
       const body = await res.json();
-      if (!res.ok) {
-        setMessage(typeof body.detail === "string" ? body.detail : "Options scan failed");
+      if (!res.ok || body.ok === false || body.status === "error") {
+        const detail =
+          (typeof body.message === "string" && body.message) ||
+          (typeof body.detail === "string" && body.detail) ||
+          "Options scan failed";
+        setMessage(detail);
         setScanning(false);
         return;
       }

@@ -423,8 +423,43 @@ class OptionsRefreshService:
             {s.planned.scored.candidate.symbol for s in to_save}
         )
 
-        if replace:
-            # Grade ready picks from durable performance rows before wiping the board.
+        rows = [explained_to_options_row(self.user_id, s) for s in to_save]
+
+        # Insert BEFORE delete so a failed save cannot wipe the board.
+        saved: list = []
+        insert_error: str | None = None
+        if rows:
+            try:
+                inserted = await self.db.insert("options_signals", rows)
+                if inserted:
+                    saved = inserted
+            except Exception as exc:
+                detail = getattr(exc, "detail", None) or str(exc)
+                insert_error = str(detail)[:180]
+                logger.warning("Options insert failed (%s rows): %s", len(rows), exc)
+
+        if rows and not saved:
+            return {
+                "signals_created": 0,
+                "signals_kept": True,
+                "ok": False,
+                "standard_signals": len(standard),
+                "budget_signals": len(budget),
+                "filtered_out": max(stats["raw_contracts"] - after_calibration, 0),
+                "symbols_scanned": stats.get("symbols_scanned", 0),
+                "stats": stats,
+                "used_mock_fallback": False,
+                "top_profit_probability": None,
+                "calibration": calibration,
+                "budget_first": budget_first,
+                "message": (
+                    "Options scan scored picks but failed to save them — your board was left unchanged. "
+                    f"{insert_error or 'Database write failed.'}"
+                ),
+            }
+
+        if replace and saved:
+            # Grade ready picks from durable performance rows before wiping old rows.
             try:
                 from app.services.outcome_resolver import OutcomeResolverService
 
@@ -434,13 +469,28 @@ class OptionsRefreshService:
                 )
             except Exception as exc:
                 logger.warning("Pre-replace options auto-grade skipped: %s", exc)
-            await self.db.delete(
-                "options_signals",
-                {"user_id": f"eq.{self.user_id}", "status": "eq.active"},
-            )
 
-        rows = [explained_to_options_row(self.user_id, s) for s in to_save]
-        saved = await self.db.insert("options_signals", rows) if rows else []
+            saved_ids = {str(r.get("id")) for r in saved if r.get("id")}
+            active = await self.db.select(
+                "options_signals",
+                filters={"user_id": f"eq.{self.user_id}", "status": "eq.active"},
+                select="id",
+                limit=400,
+            )
+            delete_ids = [
+                str(row.get("id"))
+                for row in active
+                if row.get("id") and str(row.get("id")) not in saved_ids
+            ]
+            for start in range(0, len(delete_ids), 40):
+                chunk = delete_ids[start : start + 40]
+                try:
+                    await self.db.delete(
+                        "options_signals",
+                        {"id": f"in.({','.join(chunk)})", "user_id": f"eq.{self.user_id}"},
+                    )
+                except Exception as exc:
+                    logger.warning("Failed to clear old options chunk: %s", exc)
 
         if saved:
             from app.services.alert_service import AlertService
@@ -471,6 +521,7 @@ class OptionsRefreshService:
 
         return {
             "signals_created": len(saved),
+            "ok": True,
             "standard_signals": len(standard),
             "budget_signals": len(budget),
             "filtered_out": max(stats["raw_contracts"] - after_calibration, 0),

@@ -186,7 +186,7 @@ async def run_fix_all(
         steps.append(
             await _step(
                 "refresh_options",
-                OptionsRefreshService(db, user_id).refresh_live_options(replace=True, limit=12),
+                OptionsRefreshService(write_db, user_id).refresh_live_options(replace=True, limit=12),
             )
         )
 
@@ -196,7 +196,7 @@ async def run_fix_all(
         steps.append(
             await _step(
                 "refresh_stocks",
-                StockRefreshService(db, user_id).refresh_stocks(replace=True, limit=12),
+                StockRefreshService(write_db, user_id).refresh_stocks(replace=True, limit=12),
             )
         )
 

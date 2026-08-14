@@ -111,14 +111,42 @@ class StockRefreshService:
         persisted = False
 
         if persist:
-            await self.db.delete(
-                "stock_signals",
-                {"user_id": f"eq.{self.user_id}", "ticker": f"eq.{sym}", "status": "eq.active"},
-            )
-            saved = await self.db.insert("stock_signals", [row])
+            # Insert first so a failed write cannot wipe the prior ticker row.
+            try:
+                saved = await self.db.insert("stock_signals", [row])
+            except Exception as exc:
+                logger.warning("Stock analyze insert failed for %s: %s", sym, exc)
+                saved = []
             if saved:
                 row = saved[0]
                 persisted = True
+                new_id = str(row.get("id") or "")
+                try:
+                    active = await self.db.select(
+                        "stock_signals",
+                        filters={
+                            "user_id": f"eq.{self.user_id}",
+                            "ticker": f"eq.{sym}",
+                            "status": "eq.active",
+                        },
+                        select="id",
+                        limit=20,
+                    )
+                    delete_ids = [
+                        str(r.get("id"))
+                        for r in active
+                        if r.get("id") and str(r.get("id")) != new_id
+                    ]
+                    if delete_ids:
+                        await self.db.delete(
+                            "stock_signals",
+                            {
+                                "id": f"in.({','.join(delete_ids)})",
+                                "user_id": f"eq.{self.user_id}",
+                            },
+                        )
+                except Exception as exc:
+                    logger.warning("Stock analyze cleanup failed for %s: %s", sym, exc)
                 from app.services.signal_registry_service import SignalRegistryService
 
                 await SignalRegistryService(self.db, self.user_id).register_batch("stock", saved)
@@ -166,7 +194,46 @@ class StockRefreshService:
         setups.sort(key=lambda r: float(r["opportunity_score"]), reverse=True)
         setups = setups[:limit]
 
-        if replace:
+        if not setups:
+            return {
+                "signals_created": 0,
+                "signals_kept": True,
+                "ok": True,
+                "symbols_scanned": len(symbols),
+                "stats": universe_stats,
+                "top_opportunity": None,
+                "calibration": calibration,
+                "message": "No swing setups met the minimum score threshold — your current picks are unchanged.",
+            }
+
+        # Insert BEFORE delete so a failed save cannot wipe the board.
+        saved: list[dict[str, Any]] = []
+        insert_error: str | None = None
+        try:
+            inserted = await self.db.insert("stock_signals", setups)
+            if inserted:
+                saved = inserted
+        except Exception as exc:
+            detail = getattr(exc, "detail", None) or str(exc)
+            insert_error = str(detail)[:180]
+            logger.warning("Stock insert failed (%s rows): %s", len(setups), exc)
+
+        if not saved:
+            return {
+                "signals_created": 0,
+                "signals_kept": True,
+                "ok": False,
+                "symbols_scanned": len(symbols),
+                "stats": universe_stats,
+                "top_opportunity": float(setups[0]["opportunity_score"]),
+                "calibration": calibration,
+                "message": (
+                    "Stocks scan scored picks but failed to save them — your board was left unchanged. "
+                    f"{insert_error or 'Database write failed.'}"
+                ),
+            }
+
+        if replace and saved:
             try:
                 from app.services.outcome_resolver import OutcomeResolverService
 
@@ -176,12 +243,28 @@ class StockRefreshService:
                 )
             except Exception as exc:
                 logger.warning("Pre-replace stock auto-grade skipped: %s", exc)
-            await self.db.delete(
-                "stock_signals",
-                {"user_id": f"eq.{self.user_id}", "status": "eq.active"},
-            )
 
-        saved = await self.db.insert("stock_signals", setups) if setups else []
+            saved_ids = {str(r.get("id")) for r in saved if r.get("id")}
+            active = await self.db.select(
+                "stock_signals",
+                filters={"user_id": f"eq.{self.user_id}", "status": "eq.active"},
+                select="id",
+                limit=400,
+            )
+            delete_ids = [
+                str(row.get("id"))
+                for row in active
+                if row.get("id") and str(row.get("id")) not in saved_ids
+            ]
+            for start in range(0, len(delete_ids), 40):
+                chunk = delete_ids[start : start + 40]
+                try:
+                    await self.db.delete(
+                        "stock_signals",
+                        {"id": f"in.({','.join(chunk)})", "user_id": f"eq.{self.user_id}"},
+                    )
+                except Exception as exc:
+                    logger.warning("Failed to clear old stock chunk: %s", exc)
 
         if saved:
             from app.services.alert_service import AlertService
@@ -196,9 +279,10 @@ class StockRefreshService:
 
         return {
             "signals_created": len(saved),
+            "ok": True,
             "symbols_scanned": len(symbols),
             "stats": universe_stats,
             "top_opportunity": float(setups[0]["opportunity_score"]) if setups else None,
             "calibration": calibration,
-            "message": None if setups else "No swing setups met the minimum score threshold.",
+            "message": None,
         }
