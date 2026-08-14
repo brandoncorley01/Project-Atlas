@@ -35,9 +35,13 @@ class Settings(BaseSettings):
     # Minutes to reuse cached odds before spending API credits on a fresh scan.
     odds_cache_ttl_minutes: int = 360
 
+    # Persist Odds slate to Supabase so Scan/Rescore survive Render disk wipes.
+    odds_cache_remote: bool = True
+
     # Max sportsbooks leagues fetched per live scan (1 credit each).
-    # Default 6 = useful US-core slate; 0 = no cap (expensive).
-    odds_max_sports_per_scan: int = 6
+    # Default 8 fits seasonal essentials (≤5) plus US/global fillers.
+    # 0 = no cap (expensive).
+    odds_max_sports_per_scan: int = 8
 
     # priority = in-season majors only (credit-safe); full = every active game sport.
     odds_scan_scope: str = "priority"
@@ -49,6 +53,11 @@ class Settings(BaseSettings):
     # Leave a small cushion so free-tier keys (~500/mo) aren't drained overnight.
     # Values >= 500 effectively block all live Fetch — keep this well below that.
     odds_min_credits_reserve: int = 25
+
+    # Minimum minutes between explicit Fetch live odds pulls (protects free-tier keys).
+    # Scan / Rescore / Fix all never bypass this — only force_refresh spends, and only
+    # after the cooldown (unless cache is completely empty).
+    odds_live_fetch_cooldown_minutes: int = 20
 
     # Atlas Insight: max soon games to pull FanDuel player props for (each uses ~3 credits).
     # 0 = never spend Odds credits on Insight (use odds/props cache only).
@@ -165,10 +174,10 @@ class Settings(BaseSettings):
         return bool(self.odds_api_keys)
 
     def odds_intentional_live_allowed(self) -> bool:
-        """User-initiated Search / Insight / cold-cache Scan may hit Odds APIs in cache_only.
+        """Search / Insight may hit Odds APIs in cache_only when explicitly needed.
 
-        Warm-cache Rescore/Scan stay free. Callers must still honor credit
-        reserves so free-tier keys aren't drained overnight.
+        Sports Scan / Rescore must NOT auto-spend — only the Fetch live odds button
+        (force_refresh) may pull. Warm-cache work stays free.
         """
         return bool(self.odds_api_keys)
 

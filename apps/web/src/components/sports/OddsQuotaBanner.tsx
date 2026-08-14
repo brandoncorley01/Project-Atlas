@@ -96,10 +96,10 @@ export function OddsQuotaBanner({ status }: { status: OddsApiStatus | null }) {
             Automatic Odds pulls stay off to protect credits.{" "}
             {fetchAllowed ? (
               <>
-                <strong className="text-amber-300">Fetch live odds</strong> still works when you want
-                a fresh slate (~{estimate} credits). Prefer{" "}
-                <strong className="text-emerald-300">Rescore</strong> /{" "}
-                <strong className="text-sky-300">Atlas Insight</strong> when the cache is warm.
+                Prefer <strong className="text-emerald-300">Scan</strong> /{" "}
+                <strong className="text-emerald-300">Rescore</strong> (0 credits).{" "}
+                <strong className="text-amber-300">Fetch live odds</strong> spends ~{estimate}{" "}
+                credits and has a cooldown — tap only when the cache is empty.
               </>
             ) : (
               <>

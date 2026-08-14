@@ -1,5 +1,7 @@
 /**
- * Regression: Scan sports odds must not send cache_only (blocks cold live-seed).
+ * Credit safety: Scan and Rescore must send cache_only (0 Odds credits).
+ * Only Fetch (force_refresh) may spend.
+ * Repair uses /engine/repair-sports (server decides cache vs one live seed).
  * Run with: npx --yes tsx apps/web/src/lib/sports-scan-flags.test.ts
  */
 import assert from "node:assert/strict";
@@ -12,17 +14,32 @@ const source = readFileSync(join(here, "../components/sports/SportsSignalsView.t
 
 assert.match(
   source,
-  /mode === "rescore"[\s\S]*?params\.set\("cache_only", "true"\)/,
-  "Rescore should still send cache_only",
-);
-assert.doesNotMatch(
-  source,
-  /mode === "scan" && cacheRescoreFree/,
-  "Scan must not gate cache_only on cacheRescoreFree",
+  /mode === "scan" \|\| mode === "rescore"[\s\S]*?params\.set\("cache_only", "true"\)/,
+  "Scan and Rescore must send cache_only",
 );
 assert.match(
   source,
-  /replaceEmpty:\s*created > 0 \|\| Boolean\(kept\)/,
+  /mode === "live"[\s\S]*?params\.set\("force_refresh", "true"\)/,
+  "Fetch must send force_refresh",
+);
+assert.match(
+  source,
+  /globalThis\.confirm\(/,
+  "Fetch/Repair must confirm before spending credits",
+);
+assert.match(
+  source,
+  /\/engine\/repair-sports/,
+  "Repair sports board must call /engine/repair-sports",
+);
+assert.match(
+  source,
+  /Repair sports board/,
+  "Sports UI must expose Repair sports board",
+);
+assert.match(
+  source,
+  /replaceEmpty:\s*created > 0(?!\s*\|\|)/,
   "Scan must not force-clear the board when zero plays were saved",
 );
 

@@ -20,6 +20,7 @@ import {
   filterByWindow,
   filterSports,
   isUserSportsPick,
+  pickWindowWithResults,
   sortSports,
   type SportsFilterKey,
   type SportsSortKey,
@@ -58,7 +59,9 @@ export function SportsSignalsView({
   const [sort, setSort] = useState<SportsSortKey>("soonest");
   const [filter, setFilter] = useState<SportsFilterKey>("all");
   const [window, setWindow] = useState<SportsWindowKey>("all");
-  const [loading, setLoading] = useState<null | "scan" | "live" | "rescore" | "openai">(null);
+  const [loading, setLoading] = useState<
+    null | "scan" | "live" | "rescore" | "openai" | "repair"
+  >(null);
   const [message, setMessage] = useState<string | null>(null);
   const [parlaySelection, setParlaySelection] = useState<Set<string>>(new Set());
   const [intelligenceEnabled, setIntelligenceEnabled] = useState(false);
@@ -69,7 +72,7 @@ export function SportsSignalsView({
     () => readSportsBoardCache()?.lastActionAt ?? null,
   );
   const [lastActionKind, setLastActionKind] = useState<
-    "scan" | "live" | "rescore" | "openai" | null
+    "scan" | "live" | "rescore" | "openai" | "repair" | null
   >(() => readSportsBoardCache()?.lastActionKind ?? null);
   const [oddsFetchedAt, setOddsFetchedAt] = useState<string | null>(
     () => readSportsBoardCache()?.oddsFetchedAt ?? null,
@@ -215,7 +218,7 @@ export function SportsSignalsView({
       category?: string | null,
       sport?: string | null,
       opts?: { replaceEmpty?: boolean },
-    ) => {
+    ): Promise<SportsSignal[]> => {
       const apiUrl = getApiUrl();
       // Always fetch the full upcoming slate — Window/Sort/Bet type filter client-side.
       // Fetching a narrow window then switching to a wider one used to leave the board stuck.
@@ -228,7 +231,7 @@ export function SportsSignalsView({
           cache: "no-store",
           credentials: usesBffProxy() ? "include" : "same-origin",
         });
-        if (!res.ok) return;
+        if (!res.ok) return itemsRef.current;
         const data = (await res.json()) as {
           items?: SportsSignal[];
           meta?: SportsListMeta;
@@ -239,9 +242,14 @@ export function SportsSignalsView({
         const withKalshi = await attachKalshiPulse(base);
         if (withKalshi !== base) {
           applyBoard(withKalshi, data.meta, { replaceEmpty: opts?.replaceEmpty });
+          itemsRef.current = withKalshi;
+          return withKalshi;
         }
+        itemsRef.current = base;
+        return base;
       } catch {
         // Keep existing / cached board on network errors.
+        return itemsRef.current;
       }
     },
     [attachKalshiPulse, applyBoard],
@@ -287,7 +295,7 @@ export function SportsSignalsView({
     writeSportsBoardCache(readSportsBoardCache()?.items ?? [], { oddsFetchedAt: fetched });
   }, [oddsStatus?.cache_fetched_at]);
 
-  function rememberAction(kind: "scan" | "live" | "rescore" | "openai") {
+  function rememberAction(kind: "scan" | "live" | "rescore" | "openai" | "repair") {
     const at = new Date().toISOString();
     setLastActionAt(at);
     setLastActionKind(kind);
@@ -341,15 +349,27 @@ export function SportsSignalsView({
     const apiUrl = getApiUrl();
     const params = new URLSearchParams();
     if (mode === "live") params.set("force_refresh", "true");
-    // Rescore is always cache-only.
-    // Scan must NOT send cache_only — the API already serves a warm cache for free when
-    // available, and live-seeds when the cache is cold. Sending cache_only from a stale
-    // client status blocked that live-seed and made Scan look broken after redeploys.
-    if (mode === "rescore") {
+    // Scan + Rescore are always cache-only (0 Odds credits).
+    // Only Fetch live odds spends credits — never auto-seed from Scan.
+    if (mode === "scan" || mode === "rescore") {
       params.set("cache_only", "true");
     }
     const query = params.toString() ? `?${params}` : "";
     try {
+      if (mode === "live") {
+        const estimate = oddsStatus?.estimated_live_scan_credits ?? 8;
+        const remaining = oddsStatus?.total_remaining;
+        const ok = globalThis.confirm(
+          `Fetch live odds spends ~${estimate} Odds API credits` +
+            (remaining != null ? ` (${remaining} left)` : "") +
+            ".\n\nOnly tap this when the cache is empty or missing leagues. " +
+            "Scan and Rescore are free.\n\nContinue?",
+        );
+        if (!ok) {
+          setLoading(null);
+          return;
+        }
+      }
       const res = await fetch(`${apiUrl}/engine/refresh-sports${query}`, {
         method: "POST",
         headers: apiRequestHeaders(token),
@@ -397,23 +417,20 @@ export function SportsSignalsView({
             ? "No new edges found — kept your current picks on the board"
             : created > 0
               ? `Found ${created} plays · ${cacheUsed ? "0 Odds credits (cached)" : `~${creditsUsed ?? "?"} Odds credits`}`
-              : "No edges met the threshold — try Fetch live odds or Atlas Insight"),
+              : "No edges met the threshold — try Rescore (0 credits). Fetch only if the cache is empty."),
       );
 
-      // Leave filters wide so Odds Scan results stay visible (US + global).
-      setWindow("all");
       setFilter("all");
       setSort("opportunity");
       setActiveCategory(null);
       setActiveSport(null);
 
-      await Promise.all([
-        loadCategories(token),
-        // Only force-clear the board when the scan actually produced (or intentionally kept) picks.
-        // A failed save previously wiped the UI even though Odds rows were deleted server-side.
-        loadItems(token, null, null, { replaceEmpty: created > 0 || Boolean(kept) }),
-        refreshOddsStatus(),
-      ]);
+      const loaded = await loadItems(token, null, null, {
+        replaceEmpty: created > 0,
+      });
+      await Promise.all([loadCategories(token), refreshOddsStatus()]);
+      // Prefer Today when it has picks; otherwise widen so a successful Scan is never hidden.
+      setWindow(pickWindowWithResults(loaded, "today"));
       router.refresh();
       globalThis.dispatchEvent(new Event("atlas:dashboard-refresh"));
 
@@ -428,8 +445,8 @@ export function SportsSignalsView({
       if (liveOddsPulled && created <= 0) {
         setMessage(
           apiMessage
-            ? `${apiMessage} · Board still empty — tap Fetch live odds, then Atlas Insight.`
-            : "Live odds pulled but no plays ranked — tap Fetch live odds, then Atlas Insight.",
+            ? `${apiMessage} · Board still empty — tap Repair sports board or Rescore (0 credits).`
+            : "Live odds pulled but no plays ranked — tap Repair sports board.",
         );
       }
     } catch (err) {
@@ -438,6 +455,117 @@ export function SportsSignalsView({
       setMessage(
         timedOut
           ? "Sports scan timed out — try Rescore (0 credits) or Fetch live odds."
+          : "Backend not responding — run .\\scripts\\start-dev.ps1",
+      );
+    }
+    setLoading(null);
+  }
+
+  async function repairSportsBoard() {
+    setLoading("repair");
+    setMessage(null);
+
+    const token = await getToken();
+    if (!usesBffProxy() && !token) {
+      setMessage("Not signed in");
+      setLoading(null);
+      return;
+    }
+
+    const cacheCold = !(oddsStatus?.cache_rescore_free || oddsStatus?.cache_fresh);
+    const missingToday = Boolean(
+      oddsStatus?.missing_today_slate || (oddsStatus?.today_event_count ?? 0) === 0,
+    );
+    const estimate = oddsStatus?.estimated_live_scan_credits ?? 8;
+    const remaining = oddsStatus?.total_remaining;
+    const ok = globalThis.confirm(
+      cacheCold || missingToday
+        ? `Repair will Fetch live odds once (~${estimate} credits` +
+            (remaining != null ? `, ${remaining} left` : "") +
+            ") to fill Today's slate when the cache is cold or missing tonight's games.\n\n" +
+            "After that, Scan/Rescore stay free.\n\nContinue?"
+        : "Repair sports board will rescan from the warm odds cache (0 Odds credits).\n\nContinue?",
+    );
+    if (!ok) {
+      setLoading(null);
+      return;
+    }
+
+    const apiUrl = getApiUrl();
+    try {
+      const res = await fetch(`${apiUrl}/engine/repair-sports`, {
+        method: "POST",
+        headers: apiRequestHeaders(token),
+        credentials: usesBffProxy() ? "include" : "same-origin",
+        signal: AbortSignal.timeout(180000),
+      });
+      let body: Record<string, unknown> = {};
+      try {
+        body = await res.json();
+      } catch {
+        setMessage(
+          res.status === 503
+            ? "Repair timed out — try again, or tap Fetch live odds once."
+            : `Repair failed (HTTP ${res.status}). Try again in a moment.`,
+        );
+        setLoading(null);
+        return;
+      }
+      if (!res.ok || body.ok === false || body.status === "error") {
+        const detail =
+          (typeof body.message === "string" && body.message) ||
+          (typeof body.error === "string" && body.error) ||
+          (typeof body.detail === "string" && body.detail) ||
+          "Repair failed";
+        setMessage(detail);
+        // Still reload if any picks were saved — ok:false used to abort and leave an empty board.
+        const createdOnError = Number(body.signals_created ?? 0);
+        if (createdOnError > 0) {
+          const loaded = await loadItems(token, null, null, { replaceEmpty: true });
+          await Promise.all([loadCategories(token), refreshOddsStatus()]);
+          setWindow(pickWindowWithResults(loaded, "today"));
+          router.refresh();
+        }
+        setLoading(null);
+        return;
+      }
+
+      const created = Number(body.signals_created ?? 0);
+      const kept = body.signals_kept as boolean | undefined;
+      const apiMessage = body.message as string | undefined;
+      const liveOddsPulled = Boolean(body.live_odds_pulled || body.cache_was_cold);
+      rememberAction("repair");
+      setMessage(
+        apiMessage ??
+          (created > 0
+            ? `Repaired — ${created} plays on the board`
+            : "Repair finished — board still empty"),
+      );
+
+      setFilter("all");
+      setSort("opportunity");
+      setActiveCategory(null);
+      setActiveSport(null);
+
+      const loaded = await loadItems(token, null, null, {
+        replaceEmpty: created > 0,
+      });
+      await Promise.all([loadCategories(token), refreshOddsStatus()]);
+      setWindow(pickWindowWithResults(loaded, "today"));
+      router.refresh();
+      globalThis.dispatchEvent(new Event("atlas:dashboard-refresh"));
+
+      if (liveOddsPulled && created > 0) {
+        setLoading(null);
+        await refreshOpenAiPicks({ quietPrefix: apiMessage });
+        return;
+      }
+    } catch (err) {
+      const timedOut =
+        err instanceof DOMException && (err.name === "TimeoutError" || err.name === "AbortError");
+      setMessage(
+        timedOut
+          ? "Repair timed out — try again, or tap Fetch live odds once."
           : "Backend not responding — run .\\scripts\\start-dev.ps1",
       );
     }
@@ -564,11 +692,13 @@ export function SportsSignalsView({
   const cacheRescoreFree = oddsStatus?.cache_rescore_free ?? false;
   const cacheFresh = oddsStatus?.cache_fresh ?? false;
   const cacheNeedsLive = oddsStatus?.cache_needs_live_refresh ?? false;
-  // Auto-spend lock still allows intentional Fetch; only hard-stop when quota is gone.
-  const autoSpendLocked = Boolean(
-    oddsStatus?.spend_locked || oddsStatus?.auto_spend_allowed === false,
-  );
   const busy = loading !== null;
+  const showRepair =
+    items.length === 0 ||
+    Boolean(oddsStatus?.missing_today_slate) ||
+    (oddsStatus != null &&
+      oddsStatus.cache_has_data === false &&
+      (oddsStatus.today_event_count ?? 0) === 0);
 
   return (
     <div className="w-full min-w-0 overflow-x-clip">
@@ -625,29 +755,38 @@ export function SportsSignalsView({
             type="button"
             onClick={() => refreshSports("scan")}
             disabled={busy}
-            title={
-              cacheRescoreFree
-                ? "Scan sports odds — uses warm cache when available (0 credits). Use Fetch for a brand-new live slate."
-                : "Scan sports odds — seeds live FanDuel/DraftKings lines if cache is empty, then ranks plays."
-            }
+            title="Scan sports odds from cache only — 0 Odds credits. Never spends. Use Fetch only when the cache is empty."
             className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-md shadow-violet-600/25 disabled:opacity-50"
           >
             {loading === "scan" ? "Scanning…" : "Scan sports odds"}
           </button>
+          {showRepair && (
+            <button
+              type="button"
+              onClick={() => void repairSportsBoard()}
+              disabled={busy || fetchBlocked}
+              title={
+                fetchBlocked
+                  ? "Odds credits exhausted — add a new free Odds API key, then Repair again."
+                  : "Recover missing picks: warm durable cache rescans free; cold cache does one live Fetch."
+              }
+              className="rounded-lg border border-amber-500/50 bg-amber-500/15 px-4 py-2 text-sm font-semibold text-amber-100 hover:bg-amber-500/25 disabled:opacity-50"
+            >
+              {loading === "repair" ? "Repairing…" : "Repair sports board"}
+            </button>
+          )}
           <button
             type="button"
             onClick={() => refreshSports("live")}
             disabled={busy || fetchBlocked}
             title={
               fetchBlocked
-                ? "Odds credits exhausted — add a new free Odds API key, then Fetch again."
-                : autoSpendLocked
-                  ? "Fetch live FanDuel/DraftKings lines (~6 leagues / credits), then Atlas Insight auto-ranks. Scan/Rescore stay free from cache."
-                  : "Fetch live FanDuel/DraftKings lines (~6 leagues / credits), then Atlas Insight auto-ranks from the fresh board."
+                ? "Odds credits exhausted — add a new free Odds API key, then Fetch again later."
+                : "WARNING: spends ~8 Odds credits. Confirm before running. Prefer Scan/Rescore (free). 20m cooldown after each Fetch."
             }
-            className="rounded-lg border border-violet-500/40 bg-violet-500/10 px-4 py-2 text-sm font-medium text-violet-200 hover:bg-violet-500/20 disabled:opacity-50"
+            className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm font-medium text-rose-100 hover:bg-rose-500/20 disabled:opacity-50"
           >
-            {loading === "live" ? "Fetching…" : "Fetch live odds"}
+            {loading === "live" ? "Fetching…" : "Fetch live odds (uses credits)"}
           </button>
           <button
             type="button"
@@ -743,15 +882,23 @@ export function SportsSignalsView({
           }
           description={
             window === "today" && !activeCategory && filter === "all" && !activeSport
-              ? "Nothing kicks off today (US/Eastern). Try Next 48h, This week, or All dates."
+              ? "Nothing upcoming later today (US/Eastern) on the board. Tap Repair sports board — that live-seeds Today's slate when the cache is missing tonight's games."
               : window === "soon" && !activeCategory && filter === "all" && !activeSport
                 ? "No plays in the next 48 hours. Try This week, Next 30 days, or All dates."
                 : activeCategory || activeSport || filter !== "all"
                   ? "Try All leagues, All bet types, or widen the Window (Next 48h / Next 30 days / All dates)."
-                  : "Use Fetch live odds for FanDuel/DraftKings lines, Rescore for free re-ranks, or Atlas Insight for analyst consensus."
+                  : "Use Repair sports board if picks vanished after a redeploy. Fetch live odds seeds FanDuel/DraftKings lines; Rescore re-ranks free; Atlas Insight adds analyst consensus."
           }
           action={
             <div className="flex flex-wrap justify-center gap-2">
+              <button
+                type="button"
+                onClick={() => void repairSportsBoard()}
+                disabled={busy || fetchBlocked}
+                className="rounded-lg border border-amber-500/50 bg-amber-500/15 px-4 py-2 text-sm font-semibold text-amber-100 disabled:opacity-50"
+              >
+                {loading === "repair" ? "Repairing…" : "Repair sports board"}
+              </button>
               <button
                 type="button"
                 onClick={() => refreshSports("scan")}

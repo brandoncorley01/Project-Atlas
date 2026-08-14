@@ -17,6 +17,7 @@ function engineSucceeded(httpOk: boolean, data: Record<string, unknown>): boolea
 function engineFailureMessage(data: Record<string, unknown>, fallback: string): string {
   if (typeof data.message === "string" && data.message.trim()) return data.message.trim();
   if (typeof data.detail === "string" && data.detail.trim()) return data.detail.trim();
+  if (typeof data.error === "string" && data.error.trim()) return data.error.trim();
   return fallback;
 }
 
@@ -185,7 +186,7 @@ export function SignalsActions() {
     setMessage(null);
     setMenuOpen(false);
 
-    const sports = await postEngine("/engine/refresh-sports");
+    const sports = await postEngine("/engine/refresh-sports?cache_only=true");
     if (!sports.ok) {
       setLoading(null);
       let text = engineFailureMessage(sports.data, "Sports scan failed");
@@ -289,7 +290,7 @@ export function SignalsActions() {
               <button
                 type="button"
                 className="block w-full px-3 py-2 text-left text-xs text-muted hover:bg-surface-hover hover:text-foreground"
-                onClick={() => runScan("/engine/refresh-sports", "sports")}
+                onClick={() => runScan("/engine/refresh-sports?cache_only=true", "sports")}
               >
                 Sports only (no parlays)
               </button>

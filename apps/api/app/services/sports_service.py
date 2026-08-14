@@ -17,6 +17,7 @@ from app.services.freshness import filter_upcoming_events, hours_until_event, is
 from app.services.sports_ranking import (
     composite_score,
     dedupe_one_side_per_market,
+    is_calendar_today,
     is_near_term,
     is_user_entry_row,
     is_within_horizon,
@@ -94,6 +95,22 @@ def _select_diverse_setups(setups: list[dict[str, Any]], *, limit: int) -> list[
             _take(row)
 
     # Round 1b: keep near-term plays on the board so Today / 48h / Week windows aren't empty.
+    # Prefer Eastern calendar-today first — a dense weekend slate used to starve Tonight's
+    # MLB/WNBA when higher-scoring Thu/Fri games filled the near-term floor.
+    today_pool = sorted(
+        (r for r in pool if is_calendar_today(r)),
+        key=composite_score,
+        reverse=True,
+    )
+    if today_pool and limit >= 8:
+        today_floor = min(len(today_pool), max(6, int(round(limit * 0.25))))
+        today_have = sum(1 for r in selected if is_calendar_today(r))
+        for row in today_pool:
+            if today_have >= today_floor or len(selected) >= limit:
+                break
+            if _take(row):
+                today_have += 1
+
     near_pool = sorted(
         (r for r in pool if is_near_term(r)),
         key=composite_score,
@@ -426,6 +443,39 @@ class SportsRefreshService:
                 fetch_stats["slate_mode"] = True
                 fetch_stats["board_fill_target"] = target
 
+        # Guarantee Today's Eastern slate fills when odds cache has tonight's games.
+        # Dense weekend/tomorrow edges used to crowd out zero-edge FD/DK market lines.
+        from app.providers.sports.odds_api import calendar_today_events
+
+        today_odds = calendar_today_events(events)
+        today_setups = [r for r in setups if is_calendar_today(r)]
+        today_floor = min(len(today_odds), max(6, int(round(limit * 0.25)))) if today_odds else 0
+        if today_odds and len(today_setups) < today_floor:
+            today_cal = dict(calibration)
+            today_cal["slate_mode"] = True
+            today_cal["sports_min_edge_pct"] = 0.0
+            today_cal["sports_min_opportunity"] = 18.0
+            today_scored: list[dict[str, Any]] = []
+            for event in today_odds:
+                try:
+                    match_stats = lookup_match_stats(event, stats_index) if stats_index else None
+                    for setup in analyze_event(event, match_stats=match_stats, calibration=today_cal):
+                        if setup.opportunity_score >= 18.0:
+                            today_scored.append(setup_to_row(self.user_id, setup))
+                except Exception as exc:
+                    logger.info("Sports today-slate analyze skip: %s", exc)
+            if today_scored:
+                by_key = {}
+                for row in setups + today_scored:
+                    key = market_family_key(row)
+                    prev = by_key.get(key)
+                    if prev is None or composite_score(row) > composite_score(prev):
+                        by_key[key] = row
+                setups = list(by_key.values())
+                fetch_stats["today_slate_fill"] = True
+                fetch_stats["today_events"] = len(today_odds)
+                fetch_stats["today_setups"] = sum(1 for r in setups if is_calendar_today(r))
+
         setups.sort(key=composite_score, reverse=True)
 
         # OpenAI slate ranking is optional polish — never block a dense cache scan.
@@ -453,12 +503,20 @@ class SportsRefreshService:
         tag_pool_categories(setups)
 
         news_pool: list[dict[str, Any]] = []
-        # Always try a light news pass so Rescore/cache boards get matchup-verified
-        # headlines (strict matcher is cheap; RSS is the slower part).
-        try:
-            news_pool = await fetch_sports_news(limit_per_feed=8 if used_cache else 12)
-        except Exception as exc:
-            logger.warning("Sports news fetch skipped: %s", exc)
+        # News is polish — never block Scan/Repair past the BFF budget.
+        # Sequential RSS used to burn 60–160s and make Repair look broken (60s BFF abort).
+        if setups:
+            try:
+                news_pool = await asyncio.wait_for(
+                    fetch_sports_news(limit_per_feed=4 if used_cache or cache_only else 8),
+                    timeout=8.0 if (used_cache or cache_only) else 12.0,
+                )
+            except TimeoutError:
+                logger.warning("Sports news fetch timed out — continuing without headlines")
+                fetch_stats["news_skipped"] = "timeout"
+            except Exception as exc:
+                logger.warning("Sports news fetch skipped: %s", exc)
+                fetch_stats["news_skipped"] = str(exc)[:80]
 
         for row in setups:
             snap = row.setdefault("scoring_snapshot", {})
@@ -495,7 +553,12 @@ class SportsRefreshService:
         try:
             from app.services.kalshi_public_pulse import enrich_setup_snapshots_with_kalshi
 
-            setups = await enrich_setup_snapshots_with_kalshi(setups)
+            setups = await asyncio.wait_for(
+                enrich_setup_snapshots_with_kalshi(setups),
+                timeout=6.0,
+            )
+        except TimeoutError:
+            logger.info("Kalshi public pulse on scan timed out — continuing")
         except Exception as exc:
             logger.info("Kalshi public pulse on scan skipped: %s", exc)
 
@@ -519,14 +582,23 @@ class SportsRefreshService:
                     "No new +EV edges in this scan — your current picks are unchanged. "
                     "Use Fetch live odds only when you want fresh lines from the API."
                 )
-            msg = kept_msg if existing or purged else self._result_message(
+            has_existing = bool(existing)
+            msg = kept_msg if has_existing or purged else self._result_message(
                 setups, fetch_stats, parlays_invalidated=False, calibration=calibration
             )
             if live_odds_pulled:
                 msg = f"{msg} · Atlas Insight will rank the fresh board next."
+            # Empty board + nothing kept = hard failure (UI must not treat as success).
+            ok = bool(has_existing or purged)
+            if not ok:
+                err = str(fetch_stats.get("error") or fetch_stats.get("message") or "").strip()
+                msg = err or msg or (
+                    "Sports scan found no plays. Tap Repair sports board or Fetch live odds once "
+                    "to seed the odds cache, then Scan again."
+                )
             return {
                 "signals_created": 0,
-                "signals_kept": len(existing) > 0,
+                "signals_kept": has_existing,
                 "contradictions_purged": purged,
                 "events_scanned": len(events),
                 "stats": fetch_stats,
@@ -535,8 +607,9 @@ class SportsRefreshService:
                 "calibration": calibration,
                 "live_odds_pulled": live_odds_pulled,
                 "insight_pending": live_odds_pulled,
-                "ok": True,
+                "ok": ok,
                 "message": msg,
+                **({"error": msg} if not ok else {}),
             }
 
         # Insert new Odds-derived rows BEFORE deleting old ones so a failed save
@@ -734,6 +807,91 @@ class SportsRefreshService:
             )
         return result
 
+    async def repair_sports_board(
+        self,
+        *,
+        replace: bool = True,
+        limit: int = MAX_SIGNALS,
+    ) -> dict[str, Any]:
+        """Recover an empty sports board / Today slate from Atlas.
+
+        Live-seeds when cache is cold, essentials are incomplete, or there are
+        no Eastern-calendar-today games (the common failure after a partial Fetch).
+        Otherwise free cache-only rescan. Never treats an empty board as success.
+        """
+        from app.providers.sports.odds_api import odds_cache_status
+
+        status = odds_cache_status()
+        today_events = int(status.get("today_event_count") or 0)
+        # Live-seed only when there is nothing usable OR Tonight is missing.
+        # Do NOT live-seed for "incomplete essentials" alone — that burned credits on
+        # every Repair and left Scan broken when the quota was drained.
+        need_live = not bool(status.get("has_data")) or today_events == 0 or bool(
+            status.get("missing_today_slate")
+        )
+        if need_live:
+            result = await self.refresh_sports(
+                replace=replace,
+                limit=limit,
+                force_refresh=True,
+                cache_only=False,
+            )
+            result["repair_mode"] = "live_seed"
+            result["cache_was_cold"] = not bool(status.get("has_data"))
+            result["missing_today_before"] = today_events == 0
+        else:
+            result = await self.refresh_sports(
+                replace=replace,
+                limit=limit,
+                force_refresh=False,
+                cache_only=True,
+            )
+            result["repair_mode"] = "cache_rescan"
+            result["cache_was_cold"] = False
+            result["missing_today_before"] = False
+
+        created = int(result.get("signals_created") or 0)
+        kept = bool(result.get("signals_kept"))
+        today_saved = 0
+        if created > 0 or kept:
+            post = odds_cache_status()
+            today_saved = int(post.get("today_event_count") or 0)
+        result["today_event_count"] = today_saved
+        result["today_picks_expected"] = today_saved > 0
+        result["today_still_empty"] = today_saved == 0
+
+        if created == 0 and not kept:
+            result["ok"] = False
+            err = str(result.get("message") or result.get("error") or "").strip()
+            if need_live:
+                result["error"] = err or (
+                    "Repair could not seed the odds cache. Check ODDS_API_KEY credits, "
+                    "then tap Repair sports board again."
+                )
+            else:
+                result["error"] = err or (
+                    "Odds cache is warm but no plays ranked. Widen filters or try Fetch live odds."
+                )
+            if not result.get("message"):
+                result["message"] = result["error"]
+        elif created > 0:
+            # Never mark ok=False when picks were saved — the Sports UI aborts reload on ok=false
+            # and the board looks permanently empty (Scan/Repair "not working at all").
+            result["ok"] = True
+            base = str(result.get("message") or "").strip()
+            if need_live:
+                today_note = (
+                    f" · {today_saved} games on Today's odds slate"
+                    if today_saved
+                    else " · picks saved — switch Window to Next 48h / All dates if Today is empty"
+                )
+                durable = " · Durable odds cache seeded — Scan/Rescore stay free after redeploys."
+                result["message"] = (
+                    f"{base}{today_note}{durable}" if base else f"Repaired{today_note}{durable}"
+                )
+            result.pop("error", None)
+        return result
+
     @staticmethod
     def _result_message(
         setups: list[dict[str, Any]],
@@ -757,7 +915,11 @@ class SportsRefreshService:
         persisted = len(setups) if saved_count is None else saved_count
 
         scan_note = ""
-        if stats.get("credit_guard") or stats.get("credits_blocked"):
+        if stats.get("fetch_cooldown"):
+            scan_note = str(stats.get("message") or (
+                "Fetch cooldown — served cache (0 Odds credits). Use Rescore / Scan."
+            ))
+        elif stats.get("credit_guard") or stats.get("credits_blocked"):
             scan_note = (
                 stats.get("message")
                 or "Odds credits low — rescored from cache (0 Odds credits). Atlas Insight still ranks FanDuel/DraftKings picks."
@@ -766,8 +928,8 @@ class SportsRefreshService:
             scan_note = f"Rescored from cache · {len(near_leagues)} leagues with games this week ({near_label})"
             if stats.get("cache_needs_live_refresh"):
                 scan_note += (
-                    " · cache is missing in-season leagues (e.g. MLB/WNBA) — "
-                    "use Fetch live odds (~4 credits), not Rescore"
+                    " · coverage looks narrow — Fetch live odds ONCE if needed "
+                    "(~8 credits, then 20m cooldown). Prefer Rescore."
                 )
             if stats.get("openai_slate"):
                 scan_note += f" · OpenAI ranked {stats.get('openai_ranked', '?')} picks"

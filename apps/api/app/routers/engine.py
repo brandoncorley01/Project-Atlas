@@ -72,10 +72,9 @@ async def refresh_sports(
 ) -> dict:
     """Fetch odds from The Odds API and rank +EV moneyline, spread, total, and futures plays.
 
-    - Default / Scan: use warm cache when available; live-seed when cache is empty/stale
-      (even under ODDS_SPEND_MODE=cache_only). Do not pass cache_only for Scan.
+    - Scan with cache_only=true: never spend Odds credits; uses disk or durable Supabase cache.
     - force_refresh=true (Fetch live odds): spend Odds credits for US-core books, then Atlas Insight.
-    - cache_only=true (Rescore): never spend Odds credits; requires existing cache.
+    - Prefer POST /engine/repair-sports when the board is empty after a redeploy.
     """
     from app.services.sports_service import SportsRefreshService
 
@@ -92,6 +91,28 @@ async def refresh_sports(
         cache_only=cache_only,
     )
     set_last_job("refresh_sports")
+    status = "error" if result.get("ok") is False else "ok"
+    return {"status": status, "module": "sports", **result}
+
+
+@router.post("/repair-sports")
+async def repair_sports(
+    user_id: str = Depends(get_current_user_id),
+    token: str = Depends(get_access_token),
+    replace: bool = True,
+    limit: int = 120,
+) -> dict:
+    """In-Atlas recovery when Sports picks are missing.
+
+    Warm durable/disk cache → free rescan. Cold cache → one live Fetch that also
+    write-throughs Supabase so Scan survives the next Render redeploy.
+    """
+    from app.db.service_client import get_write_db
+    from app.services.sports_service import SportsRefreshService
+
+    service = SportsRefreshService(get_write_db(token), user_id)
+    result = await service.repair_sports_board(replace=replace, limit=limit)
+    set_last_job("repair_sports")
     status = "error" if result.get("ok") is False else "ok"
     return {"status": status, "module": "sports", **result}
 
