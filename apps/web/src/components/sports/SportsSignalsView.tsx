@@ -20,7 +20,6 @@ import {
   filterByWindow,
   filterSports,
   isUserSportsPick,
-  pickWindowWithResults,
   sortSports,
   type SportsFilterKey,
   type SportsSortKey,
@@ -58,7 +57,9 @@ export function SportsSignalsView({
   const [activeSport, setActiveSport] = useState<string | null>(null);
   const [sort, setSort] = useState<SportsSortKey>("soonest");
   const [filter, setFilter] = useState<SportsFilterKey>("all");
-  const [window, setWindow] = useState<SportsWindowKey>("all");
+  const [window, setWindow] = useState<SportsWindowKey>(
+    () => readSportsBoardCache()?.window ?? "today",
+  );
   const [loading, setLoading] = useState<
     null | "scan" | "live" | "rescore" | "openai" | "repair"
   >(null);
@@ -258,6 +259,7 @@ export function SportsSignalsView({
   async function handleWindowChange(next: SportsWindowKey) {
     // Client-side only — items already hold the full slate from window=all fetches.
     setWindow(next);
+    writeSportsBoardCache(itemsRef.current, { window: next });
   }
 
   async function getToken() {
@@ -425,12 +427,13 @@ export function SportsSignalsView({
       setActiveCategory(null);
       setActiveSport(null);
 
-      const loaded = await loadItems(token, null, null, {
+      await loadItems(token, null, null, {
         replaceEmpty: created > 0,
       });
       await Promise.all([loadCategories(token), refreshOddsStatus()]);
-      // Prefer Today when it has picks; otherwise widen so a successful Scan is never hidden.
-      setWindow(pickWindowWithResults(loaded, "today"));
+      // Stay on Today — auto-widening to Next 48h hid tonight's empty slate after Scan/Fetch.
+      setWindow("today");
+      writeSportsBoardCache(itemsRef.current, { window: "today" });
       router.refresh();
       globalThis.dispatchEvent(new Event("atlas:dashboard-refresh"));
 
@@ -439,7 +442,7 @@ export function SportsSignalsView({
       // to rank and quietPrefix would block the Fetch-live fallback.
       if (liveOddsPulled && created > 0) {
         setLoading(null);
-        await refreshOpenAiPicks({ quietPrefix: apiMessage });
+        await refreshOpenAiPicks({ quietPrefix: apiMessage, preferWindow: "today" });
         return;
       }
       if (liveOddsPulled && created <= 0) {
@@ -525,6 +528,7 @@ export function SportsSignalsView({
           await Promise.all([loadCategories(token), refreshOddsStatus()]);
           // Repair is for Today's slate — never bounce the window out to Next 48h.
           setWindow("today");
+          writeSportsBoardCache(itemsRef.current, { window: "today" });
           router.refresh();
         }
         setLoading(null);
@@ -532,9 +536,7 @@ export function SportsSignalsView({
       }
 
       const created = Number(body.signals_created ?? 0);
-      const kept = body.signals_kept as boolean | undefined;
       const apiMessage = body.message as string | undefined;
-      const liveOddsPulled = Boolean(body.live_odds_pulled || body.cache_was_cold);
       rememberAction("repair");
       setMessage(
         apiMessage ??
@@ -555,14 +557,11 @@ export function SportsSignalsView({
       // Repair must stay on Today even when the slate is still empty. Auto-widening
       // to Next 48h hid a failed Today fill and looked like Repair "didn't pull today's odds."
       setWindow("today");
+      writeSportsBoardCache(itemsRef.current, { window: "today" });
       router.refresh();
       globalThis.dispatchEvent(new Event("atlas:dashboard-refresh"));
 
-      if (liveOddsPulled && created > 0) {
-        setLoading(null);
-        await refreshOpenAiPicks({ quietPrefix: apiMessage, preferWindow: "today" });
-        return;
-      }
+      // Don't chain Insight here — it used to flip the Window off Today. Repair is odds-only.
     } catch (err) {
       const timedOut =
         err instanceof DOMException && (err.name === "TimeoutError" || err.name === "AbortError");
@@ -671,7 +670,7 @@ export function SportsSignalsView({
       rememberAction("openai");
       // Keep the full board visible, but float Insight picks to the top so the run is obvious.
       // Repair callers pin Today — don't yank the window out to All dates / 48h after Insight.
-      setWindow(opts?.preferWindow ?? "all");
+      setWindow(opts?.preferWindow ?? "today");
       setFilter("all");
       setSort("openai");
       setActiveSport(null);

@@ -273,7 +273,7 @@ class SignalService:
         status: str = "active",
         sport: str | None = None,
         category: str | None = None,
-        window: str = "soon",
+        window: str = "today",
         skip_expire: bool = False,
     ) -> list[dict]:
         # Drop concluded/in-progress games from the live board, then grade finished picks.
@@ -431,7 +431,7 @@ class SignalService:
         limit: int = 8,
         *,
         skip_expire: bool = False,
-        window: str = "soon",
+        window: str = "today",
     ) -> list[dict]:
         sports = await self.list_sports(limit=limit, skip_expire=skip_expire, window=window)
         return [self._format_summary(row, "sports") for row in sports]

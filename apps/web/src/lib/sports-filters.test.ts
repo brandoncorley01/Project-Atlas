@@ -9,6 +9,7 @@ import {
   filterSports,
   hoursUntilStart,
   isSportsCalendarToday,
+  kickoffWindowLabel,
   sortSports,
   type SportsSignal,
 } from "./sports-filters.ts";
@@ -134,6 +135,25 @@ if (isSportsCalendarToday(todayRow)) {
 }
 assert(today.some((r) => r.id === "undated-insight"), "today keeps undated insight");
 assert(!today.some((r) => r.id === "week"), "today excludes week games");
+
+if (isSportsCalendarToday(todayRow)) {
+  assert(
+    kickoffWindowLabel(todayRow)?.label !== "Next 48h",
+    "tonight chip must not be Next 48h",
+  );
+}
+const staleTonight = row({
+  id: "stale-tonight",
+  event_start: todayKick.iso,
+  hours_until_start: 30,
+});
+if (isSportsCalendarToday(staleTonight)) {
+  assert(
+    kickoffWindowLabel(staleTonight)?.label !== "Next 48h",
+    "stale hours_until_start=30 must not label tonight as Next 48h",
+  );
+}
+assert(kickoffWindowLabel(fixtures[1])?.label === "Next 48h", "tomorrow chip is Next 48h");
 
 const soon = filterByWindow(fixtures, "soon");
 assert(soon.some((r) => r.id === "today") && soon.some((r) => r.id === "soon"), "soon has 48h");

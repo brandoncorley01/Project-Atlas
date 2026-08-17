@@ -129,6 +129,28 @@ export function isSportsCalendarToday(row: SportsSignal): boolean {
   }
 }
 
+/** Card timing chip — must match the Window filter (Eastern Today), not a stale hours_until_start. */
+export function kickoffWindowLabel(row: SportsSignal): { label: string; className: string } | null {
+  const hours = hoursUntilStart(row);
+  if (hours == null || hours <= 0) return null;
+  if (hours <= 6) {
+    return { label: "Starting very soon", className: "bg-rose-500/20 text-rose-300" };
+  }
+  if (isSportsCalendarToday(row)) {
+    return { label: "Today", className: "bg-amber-500/20 text-amber-300" };
+  }
+  if (hours <= NEAR_TERM_HOURS) {
+    return { label: "Next 48h", className: "bg-emerald-500/20 text-emerald-300" };
+  }
+  if (hours <= WEEK_HOURS) {
+    return { label: "This week", className: "bg-sky-500/20 text-sky-300" };
+  }
+  if (hours <= MONTH_HOURS) {
+    return { label: "This month", className: "bg-violet-500/20 text-violet-300" };
+  }
+  return { label: "Futures window", className: "bg-violet-500/15 text-violet-200" };
+}
+
 function compositeRank(row: SportsSignal): number {
   const opp = row.opportunity_score ?? 0;
   const edge = getEdge(row);
