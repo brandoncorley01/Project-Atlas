@@ -1,4 +1,4 @@
-"""Repair sports board: warm = cache-only; cold/missing-Today = one live seed; empty = fail closed."""
+"""Repair sports board: always one live seed so Tonight isn't skipped for a warm 48h cache."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from app.services.sports_service import SportsRefreshService
 
 
 @pytest.mark.asyncio
-async def test_repair_warm_cache_uses_cache_only():
+async def test_repair_always_live_seeds_even_when_cache_warm():
     svc = SportsRefreshService(MagicMock(), "user-1")
     with (
         patch(
@@ -34,10 +34,9 @@ async def test_repair_warm_cache_uses_cache_only():
         result = await svc.repair_sports_board(limit=40)
 
     refresh.assert_awaited_once_with(
-        replace=True, limit=40, force_refresh=False, cache_only=True
+        replace=True, limit=40, force_refresh=True, cache_only=False, bypass_cooldown=True
     )
-    assert result["repair_mode"] == "cache_rescan"
-    assert result["cache_was_cold"] is False
+    assert result["repair_mode"] == "live_seed"
     assert result["ok"] is True
     assert result["signals_created"] == 3
 
@@ -79,7 +78,7 @@ async def test_repair_cold_cache_live_seeds():
         result = await svc.repair_sports_board(limit=40)
 
     refresh.assert_awaited_once_with(
-        replace=True, limit=40, force_refresh=True, cache_only=False
+        replace=True, limit=40, force_refresh=True, cache_only=False, bypass_cooldown=True
     )
     assert result["repair_mode"] == "live_seed"
     assert result["cache_was_cold"] is True

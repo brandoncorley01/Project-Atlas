@@ -135,6 +135,14 @@ if (isSportsCalendarToday(todayRow)) {
 }
 assert(today.some((r) => r.id === "undated-insight"), "today keeps undated insight");
 assert(!today.some((r) => r.id === "week"), "today excludes week games");
+assert(!today.some((r) => r.id === "soon"), "today excludes 30h games");
+assert(
+  filterByWindow(
+    [row({ id: "20h", event_start: hoursFromNow(20), hours_until_start: 20 })],
+    "today",
+  ).some((r) => r.id === "20h"),
+  "today includes the next 24 hours",
+);
 
 if (isSportsCalendarToday(todayRow)) {
   assert(

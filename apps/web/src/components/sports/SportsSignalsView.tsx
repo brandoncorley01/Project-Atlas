@@ -475,19 +475,13 @@ export function SportsSignalsView({
       return;
     }
 
-    const cacheCold = !(oddsStatus?.cache_rescore_free || oddsStatus?.cache_fresh);
-    const missingToday = Boolean(
-      oddsStatus?.missing_today_slate || (oddsStatus?.today_event_count ?? 0) === 0,
-    );
     const estimate = oddsStatus?.estimated_live_scan_credits ?? 8;
     const remaining = oddsStatus?.total_remaining;
     const ok = globalThis.confirm(
-      cacheCold || missingToday
-        ? `Repair will Fetch live odds once (~${estimate} credits` +
-            (remaining != null ? `, ${remaining} left` : "") +
-            ") to fill Today's slate when the cache is cold or missing tonight's games.\n\n" +
-            "After that, Scan/Rescore stay free.\n\nContinue?"
-        : "Repair sports board will rescan from the warm odds cache (0 Odds credits).\n\nContinue?",
+      `Repair will Fetch live odds once (~${estimate} credits` +
+        (remaining != null ? `, ${remaining} left` : "") +
+        ") for Today's slate (next 24 hours).\n\n" +
+        "Scan and Rescore stay free after that.\n\nContinue?",
     );
     if (!ok) {
       setLoading(null);
@@ -887,7 +881,7 @@ export function SportsSignalsView({
           }
           description={
             window === "today" && !activeCategory && filter === "all" && !activeSport
-              ? "Nothing upcoming later today (US/Eastern) on the board. Tap Repair sports board — that live-seeds Today's slate when the cache is missing tonight's games."
+              ? "Nothing in the next 24 hours on the board. Tap Repair sports board to Fetch live odds for Today's slate."
               : window === "soon" && !activeCategory && filter === "all" && !activeSport
                 ? "No plays in the next 48 hours. Try This week, Next 30 days, or All dates."
                 : activeCategory || activeSport || filter !== "all"

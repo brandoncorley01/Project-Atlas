@@ -386,8 +386,22 @@ def calendar_today_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [e for e in events if _event_is_calendar_today(e)]
 
 
+def _event_is_today_slate(event: dict[str, Any]) -> bool:
+    """Next 24 hours of games — the Sports Today window (not midnight-ET only)."""
+    hours = hours_until_event(event.get("commence_time"))
+    if hours is None or hours <= 0:
+        return False
+    if event.get("_is_outright"):
+        return False
+    return hours <= 24 or _event_is_calendar_today(event)
+
+
+def today_slate_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [e for e in events if _event_is_today_slate(e)]
+
+
 def cache_missing_today_slate(events: list[dict[str, Any]] | None = None) -> bool:
-    """True when cached odds have no usable Eastern-calendar-today games.
+    """True when cached odds have no usable next-24h / Eastern-today games.
 
     A warm near-term cache of only tomorrow+ games used to make Repair skip live
     Fetch — Today stayed empty on full MLB/WNBA nights.
@@ -396,7 +410,7 @@ def cache_missing_today_slate(events: list[dict[str, Any]] | None = None) -> boo
         cache = _read_cache()
         events = list(cache.get("events") or []) if cache else []
     upcoming = filter_upcoming_events(list(events))
-    today = calendar_today_events(upcoming)
+    today = today_slate_events(upcoming)
     return len(today) == 0
 
 
@@ -585,7 +599,7 @@ def odds_cache_status() -> dict[str, Any]:
     league_catalog = list(cache_stats.get("league_catalog") or [])
     if not league_catalog:
         league_catalog = list(near_meta.get("near_term_leagues") or [])
-    today_events = calendar_today_events(raw_events) if raw_events else []
+    today_events = today_slate_events(raw_events) if raw_events else []
     missing_today = not bool(today_events)
     return {
         "has_data": has_data,
@@ -1199,6 +1213,7 @@ async def fetch_all_sports_odds(
     *,
     force_refresh: bool = False,
     cache_only: bool = False,
+    bypass_cooldown: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Fetch odds for all active game sports. Returns (events, stats).
 
@@ -1220,7 +1235,7 @@ async def fetch_all_sports_odds(
     # cooldown must not trap Repair/Fetch on a warm-looking cache with no tonight games.
     # Only bypass for missing Today — incomplete essentials with tonight games still
     # respect cooldown (Today board already has something to show).
-    allow_live_despite_cooldown = missing_today
+    allow_live_despite_cooldown = missing_today or bypass_cooldown
 
     # CREDIT SAFETY (hard rules):
     # - Rescore (cache_only) never spends.
@@ -1256,7 +1271,7 @@ async def fetch_all_sports_odds(
         events, near_meta = _near_term_cache_events(raw_cached)
         near_keys = frozenset(near_meta.get("near_term_league_keys") or [])
         needs_live = _cache_needs_live_refresh(near_keys) if events else bool(raw_cached)
-        today_n = len(calendar_today_events(raw_cached))
+        today_n = len(today_slate_events(raw_cached))
         stats = dict((cache or {}).get("stats") or {})
         stats.update(
             {
@@ -1318,7 +1333,7 @@ async def fetch_all_sports_odds(
                     "leagues_with_near_term_games": near_meta.get("near_term_leagues") or [],
                     "cache_needs_live_refresh": incomplete_essentials,
                     "missing_today_slate": missing_today,
-                    "today_event_count": len(calendar_today_events(raw_cached)),
+                    "today_event_count": len(today_slate_events(raw_cached)),
                     "message": (
                         f"Fetch cooldown — last live pull was {last_live:.0f}m ago. "
                         f"Served cache (0 credits). Wait ~{wait_m}m or use Rescore / Scan for free."

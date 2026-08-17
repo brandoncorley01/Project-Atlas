@@ -17,8 +17,8 @@ from app.services.freshness import filter_upcoming_events, hours_until_event, is
 from app.services.sports_ranking import (
     composite_score,
     dedupe_one_side_per_market,
-    is_calendar_today,
     is_near_term,
+    is_today_slate,
     is_user_entry_row,
     is_within_horizon,
     market_family_key,
@@ -84,13 +84,13 @@ def _select_diverse_setups(setups: list[dict[str, Any]], *, limit: int) -> list[
     # Round 1: lock Eastern calendar-today first so Repair / Today isn't starved by
     # higher-scoring tomorrow (Next 48h) edges — the board used to look like a 48h slate.
     today_pool = sorted(
-        (r for r in pool if is_calendar_today(r)),
+        (r for r in pool if is_today_slate(r)),
         key=composite_score,
         reverse=True,
     )
     if today_pool and limit >= 8:
         today_floor = min(len(today_pool), max(8, int(round(limit * 0.35))))
-        today_have = sum(1 for r in selected if is_calendar_today(r))
+        today_have = sum(1 for r in selected if is_today_slate(r))
         for row in today_pool:
             if today_have >= today_floor or len(selected) >= limit:
                 break
@@ -254,6 +254,7 @@ class SportsRefreshService:
         limit: int = MAX_SIGNALS,
         force_refresh: bool = False,
         cache_only: bool = False,
+        bypass_cooldown: bool = False,
     ) -> dict[str, Any]:
         from app.config import reload_settings
 
@@ -262,6 +263,7 @@ class SportsRefreshService:
             events, fetch_stats = await fetch_all_sports_odds(
                 force_refresh=force_refresh,
                 cache_only=cache_only,
+                bypass_cooldown=bypass_cooldown,
             )
             raw_count = len(events)
             events = filter_upcoming_events(events)
@@ -444,10 +446,10 @@ class SportsRefreshService:
 
         # Guarantee Today's Eastern slate fills when odds cache has tonight's games.
         # Dense weekend/tomorrow edges used to crowd out zero-edge FD/DK market lines.
-        from app.providers.sports.odds_api import calendar_today_events
+        from app.providers.sports.odds_api import today_slate_events
 
-        today_odds = calendar_today_events(events)
-        today_setups = [r for r in setups if is_calendar_today(r)]
+        today_odds = today_slate_events(events)
+        today_setups = [r for r in setups if is_today_slate(r)]
         today_floor = min(len(today_odds), max(6, int(round(limit * 0.25)))) if today_odds else 0
         if today_odds and len(today_setups) < today_floor:
             today_cal = dict(calibration)
@@ -473,7 +475,7 @@ class SportsRefreshService:
                 setups = list(by_key.values())
                 fetch_stats["today_slate_fill"] = True
                 fetch_stats["today_events"] = len(today_odds)
-                fetch_stats["today_setups"] = sum(1 for r in setups if is_calendar_today(r))
+                fetch_stats["today_setups"] = sum(1 for r in setups if is_today_slate(r))
 
         setups.sort(key=composite_score, reverse=True)
 
@@ -791,7 +793,7 @@ class SportsRefreshService:
             "graded_resolved": graded_resolved,
             "calibration": calibration,
             "ok": True,
-            "today_picks_saved": sum(1 for r in setups if is_calendar_today(r)) if setups else 0,
+            "today_picks_saved": sum(1 for r in setups if is_today_slate(r)) if setups else 0,
             "message": self._result_message(
                 setups,
                 fetch_stats,
@@ -813,42 +815,27 @@ class SportsRefreshService:
         replace: bool = True,
         limit: int = MAX_SIGNALS,
     ) -> dict[str, Any]:
-        """Recover an empty sports board / Today slate from Atlas.
+        """Recover Today's sports board with a live odds pull.
 
-        Live-seeds when cache is cold, essentials are incomplete, or there are
-        no Eastern-calendar-today games (the common failure after a partial Fetch).
-        Otherwise free cache-only rescan. Never treats an empty board as success.
+        Always live-seeds (user tapped Repair to pull tonight's lines). A warm
+        48h cache used to skip Fetch whenever any single today event existed,
+        so MLB/WNBA never updated and the Today window stayed empty.
         """
         from app.providers.sports.odds_api import odds_cache_status
 
         status = odds_cache_status()
         today_events = int(status.get("today_event_count") or 0)
-        # Live-seed only when there is nothing usable OR Tonight is missing.
-        # Do NOT live-seed for "incomplete essentials" alone — that burned credits on
-        # every Repair and left Scan broken when the quota was drained.
-        need_live = not bool(status.get("has_data")) or today_events == 0 or bool(
-            status.get("missing_today_slate")
+        need_live = True
+        result = await self.refresh_sports(
+            replace=replace,
+            limit=limit,
+            force_refresh=True,
+            cache_only=False,
+            bypass_cooldown=True,
         )
-        if need_live:
-            result = await self.refresh_sports(
-                replace=replace,
-                limit=limit,
-                force_refresh=True,
-                cache_only=False,
-            )
-            result["repair_mode"] = "live_seed"
-            result["cache_was_cold"] = not bool(status.get("has_data"))
-            result["missing_today_before"] = today_events == 0
-        else:
-            result = await self.refresh_sports(
-                replace=replace,
-                limit=limit,
-                force_refresh=False,
-                cache_only=True,
-            )
-            result["repair_mode"] = "cache_rescan"
-            result["cache_was_cold"] = False
-            result["missing_today_before"] = False
+        result["repair_mode"] = "live_seed"
+        result["cache_was_cold"] = not bool(status.get("has_data"))
+        result["missing_today_before"] = today_events == 0
 
         created = int(result.get("signals_created") or 0)
         kept = bool(result.get("signals_kept"))
