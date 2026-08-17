@@ -91,7 +91,7 @@ def test_analyze_event_keeps_zero_edge_wnba_in_slate_mode():
 
 
 def test_select_diverse_reserves_calendar_today():
-    from app.services.sports_ranking import is_calendar_today
+    from app.services.sports_ranking import is_today_slate
 
     rows = []
     # 20 strong tomorrow plays
@@ -137,5 +137,5 @@ def test_select_diverse_reserves_calendar_today():
         )
 
     picked = _select_diverse_setups(rows, limit=40)
-    today_n = sum(1 for r in picked if is_calendar_today(r))
+    today_n = sum(1 for r in picked if is_today_slate(r))
     assert today_n >= 8, f"expected all 8 calendar-today MLB picks reserved first, got {today_n} in {len(picked)} picks"

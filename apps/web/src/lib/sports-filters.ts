@@ -129,14 +129,14 @@ export function isSportsCalendarToday(row: SportsSignal): boolean {
   }
 }
 
-/** Card timing chip — must match the Window filter (Eastern Today), not a stale hours_until_start. */
+/** Card timing chip — must match the Window filter (next 24h Today), not a stale hours_until_start. */
 export function kickoffWindowLabel(row: SportsSignal): { label: string; className: string } | null {
   const hours = hoursUntilStart(row);
   if (hours == null || hours <= 0) return null;
   if (hours <= 6) {
     return { label: "Starting very soon", className: "bg-rose-500/20 text-rose-300" };
   }
-  if (isSportsCalendarToday(row)) {
+  if (hours <= 24 || isSportsCalendarToday(row)) {
     return { label: "Today", className: "bg-amber-500/20 text-amber-300" };
   }
   if (hours <= NEAR_TERM_HOURS) {
@@ -178,7 +178,12 @@ export function filterByWindow(items: SportsSignal[], window: SportsWindowKey): 
     return live;
   }
   if (window === "today") {
-    return live.filter((i) => isSportsCalendarToday(i) || undatedInsightOrUser(i));
+    return live.filter((i) => {
+      if (undatedInsightOrUser(i)) return true;
+      if (isFutures(i)) return false;
+      const h = hoursUntilStart(i);
+      return h != null && h > 0 && (h <= 24 || isSportsCalendarToday(i));
+    });
   }
   if (window === "futures") {
     return live.filter((i) => {

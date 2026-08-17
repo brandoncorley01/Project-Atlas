@@ -113,7 +113,7 @@ async def test_repair_live_seeds_when_today_missing_even_if_near_term_warm():
         result = await svc.repair_sports_board(limit=40)
 
     refresh.assert_awaited_once_with(
-        replace=True, limit=40, force_refresh=True, cache_only=False
+        replace=True, limit=40, force_refresh=True, cache_only=False, bypass_cooldown=True
     )
     assert result["repair_mode"] == "live_seed"
     assert result["missing_today_before"] is True

@@ -26,7 +26,6 @@ from app.services.sports_ranking import (
     WEEK_HOURS,
     dedupe_one_side_per_market,
     filter_near_term,
-    is_calendar_today,
     is_futures_row,
     sort_for_display,
 )
@@ -67,7 +66,7 @@ def _sports_window_match(row: dict, window: str) -> bool:
     if hours <= 0:
         return False
     if window == "today":
-        return is_calendar_today(row)
+        return hours <= 24 and not is_futures_row(row)
     if window == "soon":
         return hours <= NEAR_TERM_HOURS and not is_futures_row(row)
     if window == "week":

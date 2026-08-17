@@ -49,7 +49,7 @@ const WINDOW_OPTIONS: { value: SportsWindowKey; label: string }[] = [
 function windowHint(window: SportsWindowKey): string {
   switch (window) {
     case "today":
-      return "today (Eastern)";
+      return "next 24 hours";
     case "soon":
       return "next 48 hours";
     case "week":

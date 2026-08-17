@@ -10,6 +10,7 @@ from app.services.freshness import hours_until_event, parse_iso
 
 NEAR_TERM_HOURS = 48
 SOON_HOURS = 24
+TODAY_HOURS = 24
 WEEK_HOURS = 168
 MONTH_HOURS = 720  # 30 days — longer-dated game lines
 # Keep season-long futures and early lines (≈90 days). Championship outrights
@@ -45,6 +46,16 @@ def is_calendar_today(row: dict[str, Any], *, tz: ZoneInfo = ATLAS_SPORTS_TZ) ->
         return False
     event_day = event_local_date(row.get("event_start"), tz=tz)
     return event_day is not None and event_day == sports_today(tz=tz)
+
+
+def is_today_slate(row: dict[str, Any], *, tz: ZoneInfo = ATLAS_SPORTS_TZ) -> bool:
+    """Today's odds window: next 24 hours (tonight + early tomorrow), not only Eastern midnight."""
+    hours = hours_to_start(row)
+    if hours is None or hours <= 0:
+        return False
+    if is_futures_row(row):
+        return False
+    return hours <= TODAY_HOURS or is_calendar_today(row, tz=tz)
 
 
 def is_near_term(row: dict[str, Any], *, max_hours: float = NEAR_TERM_HOURS) -> bool:
