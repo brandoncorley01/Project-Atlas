@@ -521,9 +521,10 @@ export function SportsSignalsView({
         // Still reload if any picks were saved — ok:false used to abort and leave an empty board.
         const createdOnError = Number(body.signals_created ?? 0);
         if (createdOnError > 0) {
-          const loaded = await loadItems(token, null, null, { replaceEmpty: true });
+          await loadItems(token, null, null, { replaceEmpty: true });
           await Promise.all([loadCategories(token), refreshOddsStatus()]);
-          setWindow(pickWindowWithResults(loaded, "today"));
+          // Repair is for Today's slate — never bounce the window out to Next 48h.
+          setWindow("today");
           router.refresh();
         }
         setLoading(null);
@@ -547,17 +548,19 @@ export function SportsSignalsView({
       setActiveCategory(null);
       setActiveSport(null);
 
-      const loaded = await loadItems(token, null, null, {
+      await loadItems(token, null, null, {
         replaceEmpty: created > 0,
       });
       await Promise.all([loadCategories(token), refreshOddsStatus()]);
-      setWindow(pickWindowWithResults(loaded, "today"));
+      // Repair must stay on Today even when the slate is still empty. Auto-widening
+      // to Next 48h hid a failed Today fill and looked like Repair "didn't pull today's odds."
+      setWindow("today");
       router.refresh();
       globalThis.dispatchEvent(new Event("atlas:dashboard-refresh"));
 
       if (liveOddsPulled && created > 0) {
         setLoading(null);
-        await refreshOpenAiPicks({ quietPrefix: apiMessage });
+        await refreshOpenAiPicks({ quietPrefix: apiMessage, preferWindow: "today" });
         return;
       }
     } catch (err) {
@@ -576,6 +579,8 @@ export function SportsSignalsView({
     quietPrefix?: string | null;
     /** When true, skip auto-Fetch fallback (prevents Fetch→Insight→Fetch loops). */
     skipFetchFallback?: boolean;
+    /** Keep this window after Insight (Repair stays on Today instead of flipping away). */
+    preferWindow?: SportsWindowKey;
   }) {
     setLoading("openai");
     if (!opts?.quietPrefix) setMessage(null);
@@ -665,7 +670,8 @@ export function SportsSignalsView({
       insightFetchFallbackUsed.current = false;
       rememberAction("openai");
       // Keep the full board visible, but float Insight picks to the top so the run is obvious.
-      setWindow("all");
+      // Repair callers pin Today — don't yank the window out to All dates / 48h after Insight.
+      setWindow(opts?.preferWindow ?? "all");
       setFilter("all");
       setSort("openai");
       setActiveSport(null);

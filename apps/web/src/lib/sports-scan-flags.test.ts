@@ -39,6 +39,16 @@ assert.match(
 );
 assert.match(
   source,
+  /setWindow\("today"\)/,
+  "Repair must pin the Window to Today, not auto-widen to Next 48h",
+);
+assert.doesNotMatch(
+  source,
+  /repairSportsBoard[\s\S]*setWindow\(pickWindowWithResults/,
+  "Repair must not call pickWindowWithResults (that bounced Today → 48h)",
+);
+assert.match(
+  source,
   /replaceEmpty:\s*created > 0(?!\s*\|\|)/,
   "Scan must not force-clear the board when zero plays were saved",
 );

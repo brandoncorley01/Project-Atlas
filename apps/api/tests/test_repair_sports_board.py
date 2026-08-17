@@ -126,6 +126,8 @@ async def test_repair_keeps_ok_when_picks_saved_even_if_today_empty():
     assert result["signals_created"] == 9
     assert result.get("today_still_empty") is True
     assert "error" not in result or result.get("error") in (None, "")
+    assert "stayed on Today" in (result.get("message") or "")
+    assert "switch Window to Next 48h" not in (result.get("message") or "")
 
 
 @pytest.mark.asyncio

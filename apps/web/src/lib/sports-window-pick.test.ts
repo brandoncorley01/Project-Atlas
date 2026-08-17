@@ -1,5 +1,6 @@
 /**
  * pickWindowWithResults must not hide a successful Scan behind empty Today.
+ * Repair must NOT use this helper — it pins Today so a missing Tonight slate stays visible.
  * Run with: npx --yes tsx apps/web/src/lib/sports-window-pick.test.ts
  */
 import assert from "node:assert/strict";

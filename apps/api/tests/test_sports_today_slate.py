@@ -138,4 +138,4 @@ def test_select_diverse_reserves_calendar_today():
 
     picked = _select_diverse_setups(rows, limit=40)
     today_n = sum(1 for r in picked if is_calendar_today(r))
-    assert today_n >= 6, f"expected calendar-today reserve, got {today_n} in {len(picked)} picks"
+    assert today_n >= 8, f"expected all 8 calendar-today MLB picks reserved first, got {today_n} in {len(picked)} picks"
