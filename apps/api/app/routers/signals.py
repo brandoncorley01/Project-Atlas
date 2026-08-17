@@ -162,7 +162,7 @@ async def list_sports_signals(
     token: str = Depends(get_access_token),
     sport: str | None = None,
     category: str | None = None,
-    window: str = "soon",
+    window: str = "today",
     limit: int = 20,
     offset: int = 0,
     status: str = "active",

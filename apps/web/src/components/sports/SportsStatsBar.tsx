@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { SportsSignal } from "@/components/sports/SportsSignalCard";
 import { buildSportCounts, FEATURED_LEAGUES } from "@/lib/sport-meta";
+import { hoursUntilStart } from "@/lib/sports-filters";
 import { formatClockLabel, formatRelativeAgo } from "@/lib/sports-board-cache";
 
 interface SportsStatsBarProps {
@@ -44,8 +45,11 @@ export function SportsStatsBar({
 }: SportsStatsBarProps) {
   const leagues = buildSportCounts(items);
   const nextEvent = items
-    .filter((i) => i.hours_until_start != null && i.hours_until_start > 0)
-    .sort((a, b) => (a.hours_until_start ?? 999) - (b.hours_until_start ?? 999))[0];
+    .filter((i) => {
+      const h = hoursUntilStart(i);
+      return h != null && h > 0;
+    })
+    .sort((a, b) => (hoursUntilStart(a) ?? 999) - (hoursUntilStart(b) ?? 999))[0];
 
   const oddsAgo = formatRelativeAgo(oddsFetchedAt);
   const oddsClock = formatClockLabel(oddsFetchedAt);

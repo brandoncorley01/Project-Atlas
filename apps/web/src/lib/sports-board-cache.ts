@@ -4,7 +4,7 @@
  */
 
 import type { SportsSignal } from "@/components/sports/SportsSignalCard";
-import { dedupeOneSidePerMarket } from "@/lib/sports-filters";
+import { dedupeOneSidePerMarket, type SportsWindowKey } from "@/lib/sports-filters";
 
 const STORAGE_KEY = "atlas.sports.board.v1";
 
@@ -14,6 +14,8 @@ export interface SportsBoardCache {
   /** Last successful Scan / Fetch / Rescore / Atlas Insight from this browser. */
   lastActionAt?: string | null;
   lastActionKind?: "scan" | "live" | "rescore" | "openai" | "repair" | null;
+  /** Last Window dropdown value — Repair/Scan must not reset this to Next 48h. */
+  window?: SportsWindowKey | null;
   /** Max pick data_as_of from the board when saved. */
   boardAsOf?: string | null;
   oddsFetchedAt?: string | null;
@@ -66,6 +68,7 @@ export function writeSportsBoardCache(
     savedAt: new Date().toISOString(),
     lastActionAt: extras?.lastActionAt ?? prev?.lastActionAt ?? null,
     lastActionKind: extras?.lastActionKind ?? prev?.lastActionKind ?? null,
+    window: extras?.window ?? prev?.window ?? null,
     boardAsOf: extras?.boardAsOf ?? boardAsOfFromItems(items) ?? prev?.boardAsOf ?? null,
     oddsFetchedAt: extras?.oddsFetchedAt ?? prev?.oddsFetchedAt ?? null,
   };

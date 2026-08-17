@@ -81,7 +81,23 @@ def _select_diverse_setups(setups: list[dict[str, Any]], *, limit: int) -> list[
         seen.add(k)
         return True
 
-    # Round 1: lock a real combination first so the board never flips US-only or global-only.
+    # Round 1: lock Eastern calendar-today first so Repair / Today isn't starved by
+    # higher-scoring tomorrow (Next 48h) edges — the board used to look like a 48h slate.
+    today_pool = sorted(
+        (r for r in pool if is_calendar_today(r)),
+        key=composite_score,
+        reverse=True,
+    )
+    if today_pool and limit >= 8:
+        today_floor = min(len(today_pool), max(8, int(round(limit * 0.35))))
+        today_have = sum(1 for r in selected if is_calendar_today(r))
+        for row in today_pool:
+            if today_have >= today_floor or len(selected) >= limit:
+                break
+            if _take(row):
+                today_have += 1
+
+    # Round 1b: lock a real combination so the board never flips US-only or global-only.
     if us_pool and global_pool and limit >= 8:
         us_floor = min(len(us_pool), max(1, int(round(limit * MIN_US_BOARD_SHARE))))
         global_floor = min(len(global_pool), max(1, int(round(limit * MIN_GLOBAL_BOARD_SHARE))))
@@ -93,23 +109,6 @@ def _select_diverse_setups(setups: list[dict[str, Any]], *, limit: int) -> list[
             if sum(1 for r in selected if not is_us_market_sport_key(_setup_sport_key(r))) >= global_floor:
                 break
             _take(row)
-
-    # Round 1b: keep near-term plays on the board so Today / 48h / Week windows aren't empty.
-    # Prefer Eastern calendar-today first — a dense weekend slate used to starve Tonight's
-    # MLB/WNBA when higher-scoring Thu/Fri games filled the near-term floor.
-    today_pool = sorted(
-        (r for r in pool if is_calendar_today(r)),
-        key=composite_score,
-        reverse=True,
-    )
-    if today_pool and limit >= 8:
-        today_floor = min(len(today_pool), max(6, int(round(limit * 0.25))))
-        today_have = sum(1 for r in selected if is_calendar_today(r))
-        for row in today_pool:
-            if today_have >= today_floor or len(selected) >= limit:
-                break
-            if _take(row):
-                today_have += 1
 
     near_pool = sorted(
         (r for r in pool if is_near_term(r)),
@@ -792,6 +791,7 @@ class SportsRefreshService:
             "graded_resolved": graded_resolved,
             "calibration": calibration,
             "ok": True,
+            "today_picks_saved": sum(1 for r in setups if is_calendar_today(r)) if setups else 0,
             "message": self._result_message(
                 setups,
                 fetch_stats,
@@ -856,9 +856,11 @@ class SportsRefreshService:
         if created > 0 or kept:
             post = odds_cache_status()
             today_saved = int(post.get("today_event_count") or 0)
+        today_picks = int(result.get("today_picks_saved") or 0)
         result["today_event_count"] = today_saved
-        result["today_picks_expected"] = today_saved > 0
-        result["today_still_empty"] = today_saved == 0
+        result["today_picks_expected"] = today_saved > 0 or today_picks > 0
+        # Board Today is what the UI shows — cache can have tonight's games and still save 0 today picks.
+        result["today_still_empty"] = today_picks == 0 if "today_picks_saved" in result else today_saved == 0
 
         if created == 0 and not kept:
             result["ok"] = False
@@ -870,7 +872,8 @@ class SportsRefreshService:
                 )
             else:
                 result["error"] = err or (
-                    "Odds cache is warm but no plays ranked. Widen filters or try Fetch live odds."
+                    "Odds cache is warm but no plays ranked. Stay on Today and tap Repair again, "
+                    "or Fetch live odds once."
                 )
             if not result.get("message"):
                 result["message"] = result["error"]
@@ -879,16 +882,23 @@ class SportsRefreshService:
             # and the board looks permanently empty (Scan/Repair "not working at all").
             result["ok"] = True
             base = str(result.get("message") or "").strip()
-            if need_live:
+            if today_picks > 0:
+                today_note = f" · {today_picks} Today's plays on the board"
+            elif today_saved > 0:
+                today_note = f" · {today_saved} games on Today's odds slate"
+            else:
                 today_note = (
-                    f" · {today_saved} games on Today's odds slate"
-                    if today_saved
-                    else " · picks saved — switch Window to Next 48h / All dates if Today is empty"
+                    " · Today's Eastern slate still empty — stayed on Today. "
+                    "Tap Repair again or Fetch live odds once."
                 )
-                durable = " · Durable odds cache seeded — Scan/Rescore stay free after redeploys."
-                result["message"] = (
-                    f"{base}{today_note}{durable}" if base else f"Repaired{today_note}{durable}"
-                )
+            durable = (
+                " · Durable odds cache seeded — Scan/Rescore stay free after redeploys."
+                if need_live
+                else ""
+            )
+            result["message"] = (
+                f"{base}{today_note}{durable}" if base else f"Repaired{today_note}{durable}"
+            )
             result.pop("error", None)
         return result
 

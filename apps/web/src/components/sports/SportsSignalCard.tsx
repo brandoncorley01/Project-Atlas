@@ -18,6 +18,7 @@ import {
 import { sportBetMetadata } from "@/lib/watchlist-api";
 import { CATEGORY_SLUG_LABELS } from "@/lib/sports-categories";
 import { getSportMeta } from "@/lib/sport-meta";
+import { hoursUntilStart, kickoffWindowLabel } from "@/lib/sports-filters";
 
 export interface SportsSignal {
   id: string;
@@ -105,16 +106,6 @@ function betTypeLabel(betType: string) {
   return betType;
 }
 
-function kickoffBadge(hours?: number | null) {
-  if (hours == null || hours <= 0) return null;
-  if (hours <= 6) return { label: "Starting very soon", className: "bg-rose-500/20 text-rose-300" };
-  if (hours <= 24) return { label: "Today", className: "bg-amber-500/20 text-amber-300" };
-  if (hours <= 48) return { label: "Next 48h", className: "bg-emerald-500/20 text-emerald-300" };
-  if (hours <= 168) return { label: "This week", className: "bg-sky-500/20 text-sky-300" };
-  if (hours <= 720) return { label: "This month", className: "bg-violet-500/20 text-violet-300" };
-  return { label: "Futures window", className: "bg-violet-500/15 text-violet-200" };
-}
-
 function formatEventStart(iso?: string | null) {
   if (!iso) return "TBD";
   try {
@@ -157,7 +148,8 @@ export function SportsSignalCard({
   const categories = row.categories ?? [];
   const sportMeta = getSportMeta(row.sport);
   const isTopPick = rank === 1;
-  const soonBadge = kickoffBadge(row.hours_until_start);
+  const soonBadge = kickoffWindowLabel(row);
+  const hoursToStart = hoursUntilStart(row);
   const showNews = Boolean(row.news_verified && (row.related_news?.length ?? 0) > 0);
   const isOpenAiPick = Boolean(
     row.openai_web
@@ -274,11 +266,11 @@ export function SportsSignalCard({
         <p className="mt-1 text-xs leading-relaxed text-muted">
           Starts {formatEventStart(row.event_start)}
         </p>
-        {row.hours_until_start != null && row.hours_until_start > 0 && (
+        {hoursToStart != null && hoursToStart > 0 && (
           <p className="mt-0.5 text-xs text-emerald-400">
-            {row.hours_until_start < 24
-              ? `Starts in ${row.hours_until_start.toFixed(1)}h`
-              : `Starts in ${(row.hours_until_start / 24).toFixed(1)} days`}
+            {hoursToStart < 24
+              ? `Starts in ${hoursToStart.toFixed(1)}h`
+              : `Starts in ${(hoursToStart / 24).toFixed(1)} days`}
           </p>
         )}
         {row.data_as_of_label && (

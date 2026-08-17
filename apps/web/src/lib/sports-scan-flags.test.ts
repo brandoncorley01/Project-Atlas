@@ -39,6 +39,32 @@ assert.match(
 );
 assert.match(
   source,
+  /readSportsBoardCache\(\)\?\.window \?\? "today"/,
+  "Sports board must default Window to Today",
+);
+assert.match(
+  source,
+  /setWindow\("today"\)/,
+  "Scan/Repair must pin the Window to Today, not auto-widen to Next 48h",
+);
+assert.doesNotMatch(
+  source,
+  /pickWindowWithResults/,
+  "Sports view must not auto-widen Today to Next 48h",
+);
+{
+  const repairStart = source.indexOf("async function repairSportsBoard");
+  const insightStart = source.indexOf("async function refreshOpenAiPicks");
+  assert.ok(repairStart >= 0 && insightStart > repairStart, "repair and insight functions exist");
+  const repairFn = source.slice(repairStart, insightStart);
+  assert.doesNotMatch(
+    repairFn,
+    /refreshOpenAiPicks\(/,
+    "Repair must not chain Atlas Insight (that flipped the Window off Today)",
+  );
+}
+assert.match(
+  source,
   /replaceEmpty:\s*created > 0(?!\s*\|\|)/,
   "Scan must not force-clear the board when zero plays were saved",
 );
