@@ -1,4 +1,4 @@
-"""Repair sports board: always one live seed so Tonight isn't skipped for a warm 48h cache."""
+"""Repair sports board: warm-cache rescore first; live seed only when needed."""
 
 from __future__ import annotations
 
@@ -10,19 +10,21 @@ from app.services.sports_service import SportsRefreshService
 
 
 @pytest.mark.asyncio
-async def test_repair_always_live_seeds_even_when_cache_warm():
+async def test_repair_cache_rescores_first_when_today_warm():
+    """Warm Today cache must fill the board without spending Odds credits."""
     svc = SportsRefreshService(MagicMock(), "user-1")
+    warm = {
+        "has_data": True,
+        "cache_has_events": True,
+        "missing_today_slate": False,
+        "cache_needs_live_refresh": False,
+        "today_event_count": 10,
+        "near_term_event_count": 50,
+    }
     with (
         patch(
             "app.providers.sports.odds_api.odds_cache_status",
-            return_value={
-                "has_data": True,
-                "cache_has_events": True,
-                "missing_today_slate": False,
-                "cache_needs_live_refresh": False,
-                "today_event_count": 10,
-                "near_term_event_count": 50,
-            },
+            return_value=warm,
         ),
         patch.object(
             svc,
@@ -30,9 +32,9 @@ async def test_repair_always_live_seeds_even_when_cache_warm():
             new=AsyncMock(
                 return_value={
                     "ok": True,
-                    "signals_created": 3,
-                    "today_picks_saved": 3,
-                    "message": "rescored",
+                    "signals_created": 12,
+                    "today_picks_saved": 8,
+                    "message": "cached rescore",
                 }
             ),
         ) as refresh,
@@ -40,19 +42,30 @@ async def test_repair_always_live_seeds_even_when_cache_warm():
         result = await svc.repair_sports_board(limit=40)
 
     refresh.assert_awaited_once_with(
-        replace=True, limit=40, force_refresh=True, cache_only=False, bypass_cooldown=True
+        replace=True,
+        limit=40,
+        force_refresh=False,
+        cache_only=True,
+        bypass_cooldown=True,
     )
-    assert result["repair_mode"] == "live_seed"
+    assert result["repair_mode"] == "cache_rescore"
     assert result["ok"] is True
-    assert result["signals_created"] == 3
+    assert result["signals_created"] == 12
 
 
 @pytest.mark.asyncio
-async def test_repair_cache_rescores_when_live_seed_saves_nothing():
-    """Warm cache after live Fetch but 0 board rows → free cache rescore must fill plays."""
+async def test_repair_live_seeds_when_cache_rescore_saves_nothing():
+    """Warm cache + empty board after free rescore → live Fetch, then rescore again."""
     svc = SportsRefreshService(MagicMock(), "user-1")
+    warm = {
+        "has_data": True,
+        "missing_today_slate": False,
+        "today_event_count": 10,
+        "near_term_event_count": 200,
+    }
     live = AsyncMock(
         side_effect=[
+            {"ok": False, "signals_created": 0, "signals_kept": False, "message": "no setups"},
             {"ok": False, "signals_created": 0, "signals_kept": False, "message": "save failed"},
             {
                 "ok": True,
@@ -65,50 +78,19 @@ async def test_repair_cache_rescores_when_live_seed_saves_nothing():
     with (
         patch(
             "app.providers.sports.odds_api.odds_cache_status",
-            side_effect=[
-                {
-                    "has_data": True,
-                    "missing_today_slate": False,
-                    "today_event_count": 10,
-                    "near_term_event_count": 200,
-                },
-                {
-                    "has_data": True,
-                    "missing_today_slate": False,
-                    "today_event_count": 10,
-                    "near_term_event_count": 200,
-                },
-                {
-                    "has_data": True,
-                    "missing_today_slate": False,
-                    "today_event_count": 10,
-                    "near_term_event_count": 200,
-                },
-            ],
+            return_value=warm,
         ),
         patch.object(svc, "refresh_sports", new=live),
     ):
         result = await svc.repair_sports_board(limit=40)
 
-    assert live.await_count == 2
-    assert live.await_args_list[0].kwargs == {
-        "replace": True,
-        "limit": 40,
-        "force_refresh": True,
-        "cache_only": False,
-        "bypass_cooldown": True,
-    }
-    assert live.await_args_list[1].kwargs == {
-        "replace": True,
-        "limit": 40,
-        "force_refresh": False,
-        "cache_only": True,
-        "bypass_cooldown": True,
-    }
+    assert live.await_count == 3
+    assert live.await_args_list[0].kwargs["cache_only"] is True
+    assert live.await_args_list[1].kwargs["force_refresh"] is True
+    assert live.await_args_list[2].kwargs["cache_only"] is True
     assert result["repair_mode"] == "cache_rescore_after_live"
     assert result["ok"] is True
     assert result["signals_created"] == 11
-    assert "error" not in result or result.get("error") in (None, "")
 
 
 @pytest.mark.asyncio
@@ -130,6 +112,7 @@ async def test_repair_cold_cache_live_seeds():
                     "missing_today_slate": True,
                     "cache_needs_live_refresh": True,
                     "today_event_count": 0,
+                    "near_term_event_count": 0,
                 },
                 warm,
                 warm,
@@ -178,6 +161,7 @@ async def test_repair_keeps_ok_when_picks_saved_even_if_today_empty():
                     "has_data": False,
                     "missing_today_slate": True,
                     "today_event_count": 0,
+                    "near_term_event_count": 0,
                 },
                 empty_today,
                 empty_today,
@@ -217,6 +201,7 @@ async def test_repair_fails_closed_when_still_empty():
                 "has_data": False,
                 "missing_today_slate": True,
                 "today_event_count": 0,
+                "near_term_event_count": 0,
             },
         ),
         patch.object(
