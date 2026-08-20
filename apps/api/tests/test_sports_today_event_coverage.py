@@ -238,3 +238,35 @@ async def test_thin_today_scan_preserves_prior_tonight_picks():
         if raw.startswith("in.("):
             deleted_ids.update(raw[4:-1].split(","))
     assert len(deleted_ids) < len(prior)
+
+
+def test_reinject_today_events_restores_dropped_tonight_cards():
+    from app.services.sports_service import _reinject_today_events
+
+    tonight = [
+        _row(eid=f"mlb-{i}", hours=2 + i * 0.1, opp=40 - i) for i in range(12)
+    ]
+    # Diversity "selected" only 2 Tonight + many tomorrow
+    selected = tonight[:2] + [
+        {
+            "id": f"tmr-{i}",
+            "sport": "Soccer",
+            "event_name": f"A{i} @ B{i}",
+            "event_start": (datetime.now(UTC) + timedelta(hours=30 + i)).isoformat().replace("+00:00", "Z"),
+            "bet_type": "moneyline",
+            "selection": f"A{i}",
+            "opportunity_score": 90 - i,
+            "confidence_score": 60,
+            "risk_score": 40,
+            "scoring_snapshot": {"sport_key": "soccer_epl", "event_id": f"e-tmr-{i}", "edge_pct": 3},
+            "line_movement": {"edge_pct": 3, "event_id": f"e-tmr-{i}"},
+        }
+        for i in range(20)
+    ]
+    out = _reinject_today_events(selected, tonight, limit=40)
+    today_eids = {
+        str((r.get("scoring_snapshot") or {}).get("event_id") or "")
+        for r in out
+        if str((r.get("scoring_snapshot") or {}).get("sport_key") or "") == "baseball_mlb"
+    }
+    assert len(today_eids) >= 12, f"expected all Tonight MLB events reinjected, got {len(today_eids)}"

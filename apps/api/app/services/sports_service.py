@@ -126,6 +126,51 @@ def _ensure_today_event_coverage(
     return list(by_key.values())
 
 
+def _reinject_today_events(
+    selected: list[dict[str, Any]],
+    pool: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Put dropped Today event cards back on the board after diversity truncation."""
+    if not pool or limit <= 0:
+        return selected
+
+    covered = {
+        _setup_event_id(r)
+        for r in selected
+        if is_today_slate(r) and _setup_event_id(r)
+    }
+    missing_by_event: dict[str, dict[str, Any]] = {}
+    for row in sorted(pool, key=composite_score, reverse=True):
+        if not is_today_slate(row):
+            continue
+        eid = _setup_event_id(row)
+        if not eid or eid in covered or eid in missing_by_event:
+            continue
+        missing_by_event[eid] = row
+
+    if not missing_by_event:
+        return selected
+
+    out = list(selected)
+    seen = {market_family_key(r) for r in out}
+    # Prefer keeping Today coverage — drop lowest-scoring non-Today rows if over limit.
+    for row in missing_by_event.values():
+        key = market_family_key(row)
+        if key in seen:
+            continue
+        out.append(row)
+        seen.add(key)
+
+    today_rows = [r for r in out if is_today_slate(r)]
+    other_rows = [r for r in out if not is_today_slate(r)]
+    other_rows.sort(key=composite_score, reverse=True)
+    room = max(0, limit - len(today_rows))
+    merged = today_rows + other_rows[:room]
+    return sort_for_display(dedupe_one_side_per_market(merged))[:limit]
+
+
 def _select_diverse_setups(setups: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
     """Fill a large US+global board from cache-scored edges — no extra Odds credits."""
     if not setups:
@@ -617,7 +662,16 @@ class SportsRefreshService:
             except Exception as exc:
                 logger.warning("OpenAI slate ranking skipped: %s", exc)
 
+        pre_diversity_setups = list(setups)
         setups = _select_diverse_setups(setups, limit=limit)
+
+        # Diversity / US-global floors can still drop Tonight under a tight limit — re-attach
+        # one card per Today event_id from the pre-diversity pool before save.
+        if today_odds:
+            try:
+                setups = _reinject_today_events(setups, pre_diversity_setups, limit=limit)
+            except Exception as exc:
+                logger.warning("Sports today reinject skipped: %s", exc)
 
         tag_pool_categories(setups)
 
@@ -939,6 +993,9 @@ class SportsRefreshService:
             "calibration": calibration,
             "ok": True,
             "today_picks_saved": sum(1 for r in setups if is_today_slate(r)) if setups else 0,
+            "today_still_empty": (
+                sum(1 for r in setups if is_today_slate(r)) == 0 if setups is not None else True
+            ),
             "message": self._result_message(
                 setups,
                 fetch_stats,
