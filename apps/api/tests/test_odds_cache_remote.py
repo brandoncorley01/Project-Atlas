@@ -151,7 +151,7 @@ def test_write_cache_write_through_to_remote(tmp_path: Path):
     assert "cached" not in payload.get("stats", {})
 
 
-def test_invalidate_cache_clears_remote(tmp_path: Path):
+def test_invalidate_cache_disk_only_by_default(tmp_path: Path):
     cache_path = tmp_path / ".odds_cache.json"
     cache_path.write_text("{}", encoding="utf-8")
     with (
@@ -159,6 +159,19 @@ def test_invalidate_cache_clears_remote(tmp_path: Path):
         patch("app.providers.sports.odds_cache_store.clear_remote_cache") as clear,
     ):
         odds_api._invalidate_cache()
+
+    assert not cache_path.exists()
+    clear.assert_not_called()
+
+
+def test_invalidate_cache_can_clear_remote(tmp_path: Path):
+    cache_path = tmp_path / ".odds_cache.json"
+    cache_path.write_text("{}", encoding="utf-8")
+    with (
+        patch.object(odds_api, "_CACHE_PATH", cache_path),
+        patch("app.providers.sports.odds_cache_store.clear_remote_cache") as clear,
+    ):
+        odds_api._invalidate_cache(clear_remote=True)
 
     assert not cache_path.exists()
     clear.assert_called_once()

@@ -520,15 +520,14 @@ def _read_cache() -> dict[str, Any] | None:
     disk_compacted: dict[str, Any] | None = None
     disk_near: list[dict[str, Any]] = []
     if disk_payload is not None:
-        disk_compacted = _maybe_compact_cache(disk_payload, persist=True)
+        # persist=False — never write-through a thin/tomorrow disk before we compare remote.
+        disk_compacted = _maybe_compact_cache(disk_payload, persist=False)
         disk_near, _ = _near_term_cache_events(list(disk_compacted.get("events") or []))
         if not disk_near:
-            # Disk is all past / empty after compact — fall through to durable remote.
             logger.info("Odds disk cache has no upcoming events — trying Supabase hydrate")
             disk_compacted = None
 
     # Disk miss, all-past, OR thin Today slate — hydrate remote and keep the richer Tonight.
-    # A warm tomorrow-only disk used to block hydrate and permanently hide Today's games.
     try:
         from app.providers.sports.odds_cache_store import load_remote_cache
 
@@ -556,9 +555,21 @@ def _read_cache() -> dict[str, Any] | None:
                         len(remote_compacted.get("events") or []),
                         _today_event_count(list(remote_compacted.get("events") or [])),
                     )
-                    # Persist compact only when we actually adopt remote (avoid wiping richer remote
-                    # via an empty/thin disk compact write-through).
-                    return _maybe_compact_cache(remote_compacted, persist=True)
+                    # Disk-only persist of the adopted remote — do not re-upsert remote.
+                    try:
+                        with _CACHE_PATH.open("w", encoding="utf-8") as fh:
+                            json.dump(remote_compacted, fh)
+                    except (OSError, TypeError):
+                        pass
+                    return remote_compacted
+                # Remote has upcoming games but not richer Today — still use it if disk is dead.
+                if disk_compacted is None and remote_near:
+                    try:
+                        with _CACHE_PATH.open("w", encoding="utf-8") as fh:
+                            json.dump(remote_compacted, fh)
+                    except (OSError, TypeError) as exc:
+                        logger.info("Odds disk hydrate write failed: %s", exc)
+                    return remote_compacted
     except Exception as exc:
         logger.info("Odds remote cache hydrate skipped: %s", exc)
 
@@ -605,11 +616,18 @@ def _write_cache(events: list[dict[str, Any]], stats: dict[str, Any]) -> None:
         logger.info("Odds remote cache write skipped: %s", exc)
 
 
-def _invalidate_cache() -> None:
+def _invalidate_cache(*, clear_remote: bool = False) -> None:
+    """Drop the local odds file.
+
+    Never clear the durable Supabase slate by default — an all-past disk (afternoon
+    games finished) used to wipe remote Tonight too and left Scan permanently cold.
+    """
     try:
         _CACHE_PATH.unlink(missing_ok=True)
     except OSError as exc:
         logger.info("Odds cache delete failed: %s", exc)
+    if not clear_remote:
+        return
     try:
         from app.providers.sports.odds_cache_store import clear_remote_cache
 
@@ -1301,6 +1319,38 @@ async def fetch_all_sports_odds(
     serve_cache_only = bool(cache_only) or (spend_locked and not force_refresh)
     if serve_cache_only:
         if not cache_usable:
+            # Last-chance durable hydrate — afternoon all-past disk used to wipe remote and
+            # leave Scan dead; if remote still has games, adopt them before failing closed.
+            try:
+                from app.providers.sports.odds_cache_store import load_remote_cache
+
+                remote = load_remote_cache()
+                if remote and isinstance(remote.get("events"), list) and remote["events"]:
+                    remote_near, _ = _near_term_cache_events(list(remote["events"]))
+                    if remote_near:
+                        try:
+                            with _CACHE_PATH.open("w", encoding="utf-8") as fh:
+                                json.dump(remote, fh)
+                        except (OSError, TypeError):
+                            pass
+                        cache = remote
+                        raw_cached = list(remote.get("events") or [])
+                        near_cached = remote_near
+                        cache_usable = True
+                        near_keys = frozenset(
+                            str(e.get("_sport_key") or e.get("sport_key") or "")
+                            for e in remote_near
+                            if e.get("_sport_key") or e.get("sport_key")
+                        )
+                        incomplete_essentials = _cache_needs_live_refresh(near_keys)
+                        missing_today = cache_missing_today_slate(raw_cached)
+                        logger.info(
+                            "Odds Scan recovered %s upcoming events from durable cache",
+                            len(remote_near),
+                        )
+            except Exception as exc:
+                logger.info("Odds Scan durable recovery skipped: %s", exc)
+        if not cache_usable:
             return [], {
                 "configured": True,
                 "cached": False,
@@ -1312,12 +1362,14 @@ async def fetch_all_sports_odds(
                 "missing_today_slate": True,
                 "today_event_count": 0,
                 "error": (
-                    "No upcoming games in the odds cache. Tap Fetch live odds ONCE to seed "
-                    "FanDuel/DraftKings lines (uses Odds credits). Scan and Rescore stay free after that."
+                    "No upcoming games in the odds cache. Tap Repair sports board or Fetch live "
+                    "odds ONCE to seed FanDuel/DraftKings lines (uses Odds credits). "
+                    "Scan and Rescore stay free after that."
                     if cache and raw_cached
                     else (
-                        "No odds cache yet. Tap Fetch live odds ONCE to seed FanDuel/DraftKings lines "
-                        "(uses Odds credits). Then use Scan / Rescore for free — do not keep tapping Fetch."
+                        "No odds cache yet. Tap Repair sports board or Fetch live odds ONCE to seed "
+                        "FanDuel/DraftKings lines (uses Odds credits). Then use Scan / Rescore for "
+                        "free — do not keep tapping Fetch."
                     )
                 ),
             }
@@ -1414,10 +1466,11 @@ async def fetch_all_sports_odds(
             # Never auto live-fill from Scan — incomplete cache is a Fetch hint only.
             if not events and raw_events:
                 logger.info(
-                    "Odds cache has %d events but none upcoming — invalidating cache",
+                    "Odds cache has %d events but none upcoming — clearing local disk only",
                     len(raw_events),
                 )
-                _invalidate_cache()
+                # Disk-only: remote may still hold Tonight games the ephemeral disk lost.
+                _invalidate_cache(clear_remote=False)
             stats = dict(cache.get("stats") or {})
             stats.update(
                 {
@@ -1476,14 +1529,19 @@ async def fetch_all_sports_odds(
     # Free keys are ~500/mo. A reserve of 500 blocks every live call. Cap auto-reserve,
     # and for intentional Fetch / cold Scan seed keep a tiny cushion so the button works.
     if force_refresh:
-        reserve = min(reserve, 2)
+        # Repair / Fetch must be able to re-seed a cold board — reserve 0 when Today is
+        # missing so a nearly-empty key can still pull MLB/WNBA tonight.
+        reserve = 0 if (missing_today or bypass_cooldown or not cache_usable) else min(reserve, 2)
     else:
         reserve = min(reserve, 100)
     # Shrink the live slate to fit remaining credits instead of hard-failing cold Scan.
     if remaining is not None and force_refresh and remaining < estimated + reserve:
         affordable = max(0, int(remaining) - reserve)
         if affordable > 0:
-            keys = keys[:affordable]
+            # Always keep seasonal essentials first when shrinking.
+            pinned = _essential_keys_available(set(keys))
+            rest = tuple(k for k in keys if k not in pinned)
+            keys = tuple(dict.fromkeys(list(pinned) + list(rest)))[:affordable]
             futures_keys = ()
             estimated = len(keys)
             logger.info(

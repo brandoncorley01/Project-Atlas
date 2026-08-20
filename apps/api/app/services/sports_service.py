@@ -576,21 +576,24 @@ class SportsRefreshService:
         # One pick per Today game — a thin Scan used to save 5 MLB cards then delete the
         # rest of Tonight's slate (event data loss). Cover every cached Today event first.
         if today_odds:
-            setups = _ensure_today_event_coverage(
-                setups,
-                today_odds,
-                user_id=self.user_id,
-                stats_index=stats_index,
-                calibration=calibration,
-            )
-            fetch_stats["today_events"] = len(today_odds)
-            fetch_stats["today_event_ids_covered"] = len(
-                {
-                    str((r.get("scoring_snapshot") or {}).get("event_id") or "")
-                    for r in setups
-                    if is_today_slate(r) and (r.get("scoring_snapshot") or {}).get("event_id")
-                }
-            )
+            try:
+                setups = _ensure_today_event_coverage(
+                    setups,
+                    today_odds,
+                    user_id=self.user_id,
+                    stats_index=stats_index,
+                    calibration=calibration,
+                )
+                fetch_stats["today_events"] = len(today_odds)
+                fetch_stats["today_event_ids_covered"] = len(
+                    {
+                        str((r.get("scoring_snapshot") or {}).get("event_id") or "")
+                        for r in setups
+                        if is_today_slate(r) and (r.get("scoring_snapshot") or {}).get("event_id")
+                    }
+                )
+            except Exception as exc:
+                logger.warning("Sports today event coverage skipped (non-fatal): %s", exc)
 
         setups.sort(key=composite_score, reverse=True)
 
