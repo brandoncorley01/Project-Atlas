@@ -530,16 +530,28 @@ export function SportsSignalsView({
           (typeof body.detail === "string" && body.detail) ||
           "Repair failed";
         setMessage(detail);
-        // Still reload if any picks were saved — ok:false used to abort and leave an empty board.
+        // Always reload after Repair — ok:false used to skip loadItems and leave a blank
+        // board even when rows were written (empty PostgREST representation) or when a
+        // warm-cache fallback saved picks under a soft error.
         const createdOnError = Number(body.signals_created ?? 0);
-        if (createdOnError > 0) {
-          await loadItems(token, null, null, { replaceEmpty: true });
-          await Promise.all([loadCategories(token), refreshOddsStatus()]);
-          // Repair is for Today's slate — never bounce the window out to Next 48h.
-          setWindow("today");
-          writeSportsBoardCache(itemsRef.current, { window: "today" });
-          router.refresh();
+        setFilter("all");
+        setSort("opportunity");
+        setActiveCategory(null);
+        setActiveSport(null);
+        await loadItems(token, null, null, { replaceEmpty: createdOnError > 0 });
+        await Promise.all([loadCategories(token), refreshOddsStatus()]);
+        setWindow("today");
+        writeSportsBoardCache(itemsRef.current, { window: "today" });
+        const todayN = filterByWindow(itemsRef.current, "today").length;
+        const soonN = filterByWindow(itemsRef.current, "soon").length;
+        if (todayN === 0 && soonN > 0) {
+          setMessage(
+            `${detail} · ${soonN} play${soonN === 1 ? "" : "s"} in Next 48h — tap Show Next 48h.`,
+          );
         }
+        rememberAction("repair");
+        router.refresh();
+        globalThis.dispatchEvent(new Event("atlas:dashboard-refresh"));
         setLoading(null);
         return;
       }

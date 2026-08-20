@@ -21,13 +21,19 @@ async def test_repair_always_live_seeds_even_when_cache_warm():
                 "missing_today_slate": False,
                 "cache_needs_live_refresh": False,
                 "today_event_count": 10,
+                "near_term_event_count": 50,
             },
         ),
         patch.object(
             svc,
             "refresh_sports",
             new=AsyncMock(
-                return_value={"ok": True, "signals_created": 3, "message": "rescored"}
+                return_value={
+                    "ok": True,
+                    "signals_created": 3,
+                    "today_picks_saved": 3,
+                    "message": "rescored",
+                }
             ),
         ) as refresh,
     ):
@@ -42,8 +48,78 @@ async def test_repair_always_live_seeds_even_when_cache_warm():
 
 
 @pytest.mark.asyncio
+async def test_repair_cache_rescores_when_live_seed_saves_nothing():
+    """Warm cache after live Fetch but 0 board rows → free cache rescore must fill plays."""
+    svc = SportsRefreshService(MagicMock(), "user-1")
+    live = AsyncMock(
+        side_effect=[
+            {"ok": False, "signals_created": 0, "signals_kept": False, "message": "save failed"},
+            {
+                "ok": True,
+                "signals_created": 11,
+                "today_picks_saved": 8,
+                "message": "cached rescore",
+            },
+        ]
+    )
+    with (
+        patch(
+            "app.providers.sports.odds_api.odds_cache_status",
+            side_effect=[
+                {
+                    "has_data": True,
+                    "missing_today_slate": False,
+                    "today_event_count": 10,
+                    "near_term_event_count": 200,
+                },
+                {
+                    "has_data": True,
+                    "missing_today_slate": False,
+                    "today_event_count": 10,
+                    "near_term_event_count": 200,
+                },
+                {
+                    "has_data": True,
+                    "missing_today_slate": False,
+                    "today_event_count": 10,
+                    "near_term_event_count": 200,
+                },
+            ],
+        ),
+        patch.object(svc, "refresh_sports", new=live),
+    ):
+        result = await svc.repair_sports_board(limit=40)
+
+    assert live.await_count == 2
+    assert live.await_args_list[0].kwargs == {
+        "replace": True,
+        "limit": 40,
+        "force_refresh": True,
+        "cache_only": False,
+        "bypass_cooldown": True,
+    }
+    assert live.await_args_list[1].kwargs == {
+        "replace": True,
+        "limit": 40,
+        "force_refresh": False,
+        "cache_only": True,
+        "bypass_cooldown": True,
+    }
+    assert result["repair_mode"] == "cache_rescore_after_live"
+    assert result["ok"] is True
+    assert result["signals_created"] == 11
+    assert "error" not in result or result.get("error") in (None, "")
+
+
+@pytest.mark.asyncio
 async def test_repair_cold_cache_live_seeds():
     svc = SportsRefreshService(MagicMock(), "user-1")
+    warm = {
+        "has_data": True,
+        "missing_today_slate": False,
+        "today_event_count": 6,
+        "near_term_event_count": 20,
+    }
     with (
         patch(
             "app.providers.sports.odds_api.odds_cache_status",
@@ -55,11 +131,8 @@ async def test_repair_cold_cache_live_seeds():
                     "cache_needs_live_refresh": True,
                     "today_event_count": 0,
                 },
-                {
-                    "has_data": True,
-                    "missing_today_slate": False,
-                    "today_event_count": 6,
-                },
+                warm,
+                warm,
             ],
         ),
         patch.object(
@@ -70,6 +143,7 @@ async def test_repair_cold_cache_live_seeds():
                     "ok": True,
                     "signals_created": 5,
                     "live_odds_pulled": True,
+                    "today_picks_saved": 5,
                     "message": "live scan",
                 }
             ),
@@ -90,6 +164,12 @@ async def test_repair_cold_cache_live_seeds():
 async def test_repair_keeps_ok_when_picks_saved_even_if_today_empty():
     """Regression: ok=false after saving picks made the Sports UI skip board reload."""
     svc = SportsRefreshService(MagicMock(), "user-1")
+    empty_today = {
+        "has_data": True,
+        "missing_today_slate": True,
+        "today_event_count": 0,
+        "near_term_event_count": 40,
+    }
     with (
         patch(
             "app.providers.sports.odds_api.odds_cache_status",
@@ -99,11 +179,8 @@ async def test_repair_keeps_ok_when_picks_saved_even_if_today_empty():
                     "missing_today_slate": True,
                     "today_event_count": 0,
                 },
-                {
-                    "has_data": True,
-                    "missing_today_slate": True,
-                    "today_event_count": 0,
-                },
+                empty_today,
+                empty_today,
             ],
         ),
         patch.object(
@@ -114,6 +191,7 @@ async def test_repair_keeps_ok_when_picks_saved_even_if_today_empty():
                     "ok": True,
                     "signals_created": 9,
                     "live_odds_pulled": True,
+                    "today_picks_saved": 0,
                     "message": "saved picks",
                 }
             ),

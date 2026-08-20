@@ -62,6 +62,49 @@ def _patch_scan(events, fetch_stats, setup_row):
 
 
 @pytest.mark.asyncio
+async def test_refresh_sports_recovers_when_insert_returns_empty_representation():
+    """PostgREST [] after write must not leave Repair/Scan on an empty board."""
+    db = MagicMock()
+    recovered = {
+        **_setup_row(0),
+        "id": "db-1",
+        "selection": "Yankees",
+        "bet_type": "moneyline",
+        "scoring_snapshot": {"source": "odds_api", "event_id": "e1"},
+        "line_movement": {},
+    }
+    setup_row = {
+        **_setup_row(0),
+        "selection": "Yankees",
+        "bet_type": "moneyline",
+        "scoring_snapshot": {"source": "odds_api", "event_id": "e1"},
+        "line_movement": {},
+    }
+    db.select = AsyncMock(return_value=[recovered])
+    db.insert = AsyncMock(return_value=[])
+    db.delete = AsyncMock()
+    db.update = AsyncMock(return_value=[])
+
+    svc = SportsRefreshService(db, "user-1")
+    events = [{"id": "e1", "commence_time": "2099-01-01T00:00:00Z", "sport_title": "MLB"}]
+    fetch_stats = {"configured": True, "cached": True, "credits_used": 0, "events": 1}
+
+    from contextlib import ExitStack
+
+    with ExitStack() as stack:
+        for p in _patch_scan(events, fetch_stats, setup_row):
+            stack.enter_context(p)
+        result = await svc.refresh_sports(replace=True, cache_only=True)
+
+    assert result.get("ok") is True
+    assert result["signals_created"] == 1
+    assert result["stats"].get("insert_empty_representation") is True
+    db.insert.assert_awaited()
+    # Only the recovered row is active — nothing older to delete.
+    assert result.get("ok") is True
+
+
+@pytest.mark.asyncio
 async def test_refresh_sports_keeps_board_when_insert_fails():
     db = MagicMock()
     db.select = AsyncMock(return_value=[])

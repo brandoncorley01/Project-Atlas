@@ -67,6 +67,51 @@ def _is_odds_derived_row(row: dict[str, Any]) -> bool:
     return True
 
 
+async def _recover_saved_after_empty_insert(
+    db: SupabaseClient,
+    user_id: str,
+    setups: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Re-select rows when PostgREST returns [] after a successful insert.
+
+    Opaque service-role keys sometimes omit representation bodies. Treating that as
+    a hard save failure left Repair/Scan on an empty board even though rows landed.
+    We must recover real IDs before the replace-delete loop — ID-less fakes would
+    delete the just-written odds picks.
+    """
+    if not setups:
+        return []
+    try:
+        recent = await db.select(
+            "sports_signals",
+            filters={"user_id": f"eq.{user_id}", "status": "eq.active"},
+            order="data_as_of.desc",
+            limit=min(max(len(setups) * 2, 100), 400),
+        )
+    except Exception as exc:
+        logger.warning("Sports empty-insert verify select failed: %s", exc)
+        return []
+
+    wanted = {market_family_key(r) for r in setups}
+    matched: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in recent:
+        if not _is_odds_derived_row(row):
+            continue
+        key = market_family_key(row)
+        if key not in wanted:
+            continue
+        rid = str(row.get("id") or "")
+        if rid and rid in seen:
+            continue
+        if rid:
+            seen.add(rid)
+        matched.append(row)
+        if len(matched) >= len(setups):
+            break
+    return matched
+
+
 def _ensure_today_event_coverage(
     setups: list[dict[str, Any]],
     today_odds: list[dict[str, Any]],
@@ -802,6 +847,19 @@ class SportsRefreshService:
                     insert_errors.append(str(detail)[:180])
                     logger.warning("Sports insert chunk failed (%s rows): %s", len(chunk), exc)
 
+        # PostgREST may return [] after a successful write (same issue Atlas Insight already
+        # works around). Without recovery, Repair seeds odds cache then reports 0 plays.
+        if setups and not saved and not insert_errors:
+            recovered = await _recover_saved_after_empty_insert(self.db, self.user_id, setups)
+            if recovered:
+                logger.warning(
+                    "Sports insert returned empty representation — recovered %s/%s rows via select",
+                    len(recovered),
+                    len(setups),
+                )
+                saved = recovered
+                fetch_stats["insert_empty_representation"] = True
+
         if setups and not saved:
             msg = (
                 "Sports scan scored picks but failed to save them — your board was left unchanged. "
@@ -1019,15 +1077,17 @@ class SportsRefreshService:
     ) -> dict[str, Any]:
         """Recover Today's sports board with a live odds pull.
 
-        Always live-seeds (user tapped Repair to pull tonight's lines). A warm
-        48h cache used to skip Fetch whenever any single today event existed,
-        so MLB/WNBA never updated and the Today window stayed empty.
+        Always live-seeds first (user tapped Repair to pull tonight's lines). When
+        the live path still leaves the board empty but the odds cache is warm,
+        fall back to a free cache-only rescore — that recovers the common case
+        where Fetch wrote Tonight's lines but scoring/save reported 0 plays.
         """
         from app.providers.sports.odds_api import odds_cache_status
 
         status = odds_cache_status()
         today_events = int(status.get("today_event_count") or 0)
-        need_live = True
+        cache_was_cold = not bool(status.get("has_data"))
+        missing_today_before = today_events == 0 or bool(status.get("missing_today_slate"))
         result = await self.refresh_sports(
             replace=replace,
             limit=limit,
@@ -1036,15 +1096,37 @@ class SportsRefreshService:
             bypass_cooldown=True,
         )
         result["repair_mode"] = "live_seed"
-        result["cache_was_cold"] = not bool(status.get("has_data"))
-        result["missing_today_before"] = today_events == 0
+        result["cache_was_cold"] = cache_was_cold
+        result["missing_today_before"] = missing_today_before
 
         created = int(result.get("signals_created") or 0)
         kept = bool(result.get("signals_kept"))
-        today_saved = 0
-        if created > 0 or kept:
-            post = odds_cache_status()
-            today_saved = int(post.get("today_event_count") or 0)
+
+        # Live seed wrote/kept a warm cache but saved nothing — free rescore fills the board.
+        post = odds_cache_status()
+        post_today = int(post.get("today_event_count") or 0)
+        post_near = int(post.get("near_term_event_count") or 0)
+        cache_warm_now = bool(post.get("has_data")) and (post_today > 0 or post_near > 0)
+        if created == 0 and not kept and cache_warm_now:
+            fallback = await self.refresh_sports(
+                replace=replace,
+                limit=limit,
+                force_refresh=False,
+                cache_only=True,
+                bypass_cooldown=True,
+            )
+            fb_created = int(fallback.get("signals_created") or 0)
+            if fb_created > 0 or bool(fallback.get("ok")):
+                result = fallback
+                result["repair_mode"] = "cache_rescore_after_live"
+                result["live_seed_attempted"] = True
+                result["cache_was_cold"] = cache_was_cold
+                result["missing_today_before"] = missing_today_before
+                created = fb_created
+                kept = bool(fallback.get("signals_kept"))
+
+        post = odds_cache_status()
+        today_saved = int(post.get("today_event_count") or 0)
         today_picks = int(result.get("today_picks_saved") or 0)
         result["today_event_count"] = today_saved
         result["today_picks_expected"] = today_saved > 0 or today_picks > 0
@@ -1054,15 +1136,15 @@ class SportsRefreshService:
         if created == 0 and not kept:
             result["ok"] = False
             err = str(result.get("message") or result.get("error") or "").strip()
-            if need_live:
+            if cache_warm_now or today_saved > 0:
                 result["error"] = err or (
-                    "Repair could not seed the odds cache. Check ODDS_API_KEY credits, "
-                    "then tap Repair sports board again."
+                    "Odds cache is warm but no plays ranked onto the board. "
+                    "Stay on Today and tap Repair again, or Fetch live odds once."
                 )
             else:
                 result["error"] = err or (
-                    "Odds cache is warm but no plays ranked. Stay on Today and tap Repair again, "
-                    "or Fetch live odds once."
+                    "Repair could not seed the odds cache. Check ODDS_API_KEY credits, "
+                    "then tap Repair sports board again."
                 )
             if not result.get("message"):
                 result["message"] = result["error"]
@@ -1082,7 +1164,7 @@ class SportsRefreshService:
                 )
             durable = (
                 " · Durable odds cache seeded — Scan/Rescore stay free after redeploys."
-                if need_live
+                if cache_was_cold or missing_today_before
                 else ""
             )
             result["message"] = (
