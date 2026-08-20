@@ -55,6 +55,8 @@ def _is_user_entry_row(row: dict) -> bool:
 
 def _sports_window_match(row: dict, window: str) -> bool:
     """Match board windows — concluded / started games are already excluded by is_sports_listable."""
+    from app.services.sports_ranking import is_today_slate
+
     hours = hours_until_event(row.get("event_start"))
     insight_or_user = _is_openai_web_row(row) or _is_user_entry_row(row)
     if hours is None:
@@ -66,7 +68,7 @@ def _sports_window_match(row: dict, window: str) -> bool:
     if hours <= 0:
         return False
     if window == "today":
-        return hours <= 24 and not is_futures_row(row)
+        return is_today_slate(row)
     if window == "soon":
         return hours <= NEAR_TERM_HOURS and not is_futures_row(row)
     if window == "week":

@@ -434,6 +434,21 @@ export function SportsSignalsView({
       // Stay on Today — auto-widening to Next 48h hid tonight's empty slate after Scan/Fetch.
       setWindow("today");
       writeSportsBoardCache(itemsRef.current, { window: "today" });
+      const todayN = filterByWindow(itemsRef.current, "today").length;
+      const soonN = filterByWindow(itemsRef.current, "soon").length;
+      const todayStillEmpty = Boolean(body.today_still_empty) || todayN === 0;
+      if (todayStillEmpty && soonN > 0) {
+        setMessage(
+          (apiMessage ? `${apiMessage} · ` : "") +
+            `Today (next 24h) is empty — ${soonN} play${soonN === 1 ? "" : "s"} in Next 48h. ` +
+            "Tap Show Next 48h below, or Repair sports board for tonight's live odds.",
+        );
+      } else if (todayStillEmpty && created > 0) {
+        setMessage(
+          (apiMessage ? `${apiMessage} · ` : "") +
+            "Today (next 24h) is still empty — tap Repair sports board to Fetch tonight's odds.",
+        );
+      }
       router.refresh();
       globalThis.dispatchEvent(new Event("atlas:dashboard-refresh"));
 
@@ -552,6 +567,21 @@ export function SportsSignalsView({
       // to Next 48h hid a failed Today fill and looked like Repair "didn't pull today's odds."
       setWindow("today");
       writeSportsBoardCache(itemsRef.current, { window: "today" });
+      const todayN = filterByWindow(itemsRef.current, "today").length;
+      const soonN = filterByWindow(itemsRef.current, "soon").length;
+      const todayStillEmpty = Boolean(body.today_still_empty) || todayN === 0;
+      if (todayStillEmpty && soonN > 0) {
+        setMessage(
+          (apiMessage ? `${apiMessage} · ` : "") +
+            `Today is still empty — ${soonN} play${soonN === 1 ? "" : "s"} in Next 48h. ` +
+            "Tap Show Next 48h, or Repair again for tonight.",
+        );
+      } else if (todayStillEmpty) {
+        setMessage(
+          apiMessage ??
+            "Repair finished but Today is still empty — check Odds credits, then Repair again.",
+        );
+      }
       router.refresh();
       globalThis.dispatchEvent(new Event("atlas:dashboard-refresh"));
 
@@ -881,7 +911,9 @@ export function SportsSignalsView({
           }
           description={
             window === "today" && !activeCategory && filter === "all" && !activeSport
-              ? "Nothing in the next 24 hours on the board. Tap Repair sports board to Fetch live odds for Today's slate."
+              ? filterByWindow(items, "soon").length > 0
+                ? `Nothing in the next 24 hours. ${filterByWindow(items, "soon").length} play(s) are in Next 48h — open that window, or Repair for tonight's live odds.`
+                : "Nothing in the next 24 hours on the board. Tap Repair sports board to Fetch live odds for Today's slate."
               : window === "soon" && !activeCategory && filter === "all" && !activeSport
                 ? "No plays in the next 48 hours. Try This week, Next 30 days, or All dates."
                 : activeCategory || activeSport || filter !== "all"
@@ -890,6 +922,15 @@ export function SportsSignalsView({
           }
           action={
             <div className="flex flex-wrap justify-center gap-2">
+              {window === "today" && filterByWindow(items, "soon").length > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => void handleWindowChange("soon")}
+                  className="rounded-lg border border-emerald-500/40 bg-emerald-500/15 px-4 py-2 text-sm font-semibold text-emerald-100"
+                >
+                  Show Next 48h
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={() => void repairSportsBoard()}

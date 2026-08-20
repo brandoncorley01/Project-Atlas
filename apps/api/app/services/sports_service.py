@@ -46,6 +46,131 @@ def _setup_sport_key(row: dict[str, Any]) -> str:
     return str(snap.get("sport_key") or lm.get("sport_key") or "")
 
 
+def _setup_event_id(row: dict[str, Any]) -> str:
+    snap = row.get("scoring_snapshot") or {}
+    lm = row.get("line_movement") or {}
+    return str(snap.get("event_id") or lm.get("event_id") or "")
+
+
+def _is_odds_derived_row(row: dict[str, Any]) -> bool:
+    if is_user_entry_row(row):
+        return False
+    snap = row.get("scoring_snapshot") or {}
+    lm = row.get("line_movement") or {}
+    source = str(snap.get("source") or lm.get("source") or "")
+    if source in {"openai_web", "user_entry"}:
+        return False
+    if bool(snap.get("openai_web")) or bool(lm.get("openai_web")) or bool(snap.get("user_entry")):
+        return False
+    if str(snap.get("pick_origin") or "") == "user":
+        return False
+    return True
+
+
+def _ensure_today_event_coverage(
+    setups: list[dict[str, Any]],
+    today_odds: list[dict[str, Any]],
+    *,
+    user_id: str,
+    stats_index: dict[str, Any],
+    calibration: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Ensure at least one Odds pick exists for every Today game in the cache."""
+    if not today_odds:
+        return setups
+
+    covered = {
+        _setup_event_id(r)
+        for r in setups
+        if is_today_slate(r) and _setup_event_id(r)
+    }
+    missing = [
+        e
+        for e in today_odds
+        if str(e.get("id") or "") and str(e.get("id") or "") not in covered
+    ]
+    if not missing:
+        return setups
+
+    soft_cal = dict(calibration)
+    soft_cal["slate_mode"] = True
+    soft_cal["sports_min_edge_pct"] = 0.0
+    soft_cal["sports_min_opportunity"] = 16.0
+    added: list[dict[str, Any]] = []
+    for event in missing:
+        try:
+            match_stats = lookup_match_stats(event, stats_index) if stats_index else None
+            scored = analyze_event(event, match_stats=match_stats, calibration=soft_cal)
+            if not scored:
+                continue
+            # Prefer moneyline, then highest opportunity — one card per game.
+            scored.sort(
+                key=lambda s: (
+                    0 if str(s.bet_type or "") == "moneyline" else 1,
+                    -float(s.opportunity_score or 0),
+                )
+            )
+            added.append(setup_to_row(user_id, scored[0]))
+        except Exception as exc:
+            logger.info("Sports today event coverage skip: %s", exc)
+
+    if not added:
+        return setups
+
+    by_key: dict[str, dict[str, Any]] = {}
+    for row in setups + added:
+        key = market_family_key(row)
+        prev = by_key.get(key)
+        if prev is None or composite_score(row) > composite_score(prev):
+            by_key[key] = row
+    return list(by_key.values())
+
+
+def _reinject_today_events(
+    selected: list[dict[str, Any]],
+    pool: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Put dropped Today event cards back on the board after diversity truncation."""
+    if not pool or limit <= 0:
+        return selected
+
+    covered = {
+        _setup_event_id(r)
+        for r in selected
+        if is_today_slate(r) and _setup_event_id(r)
+    }
+    missing_by_event: dict[str, dict[str, Any]] = {}
+    for row in sorted(pool, key=composite_score, reverse=True):
+        if not is_today_slate(row):
+            continue
+        eid = _setup_event_id(row)
+        if not eid or eid in covered or eid in missing_by_event:
+            continue
+        missing_by_event[eid] = row
+
+    if not missing_by_event:
+        return selected
+
+    out = list(selected)
+    seen = {market_family_key(r) for r in out}
+    # Prefer keeping Today coverage — drop lowest-scoring non-Today rows if over limit.
+    for row in missing_by_event.values():
+        key = market_family_key(row)
+        if key in seen:
+            continue
+        out.append(row)
+        seen.add(key)
+
+    today_rows = [r for r in out if is_today_slate(r)]
+    other_rows = [r for r in out if not is_today_slate(r)]
+    other_rows.sort(key=composite_score, reverse=True)
+    room = max(0, limit - len(today_rows))
+    merged = today_rows + other_rows[:room]
+    return sort_for_display(dedupe_one_side_per_market(merged))[:limit]
+
+
 def _select_diverse_setups(setups: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
     """Fill a large US+global board from cache-scored edges — no extra Odds credits."""
     if not setups:
@@ -81,15 +206,31 @@ def _select_diverse_setups(setups: list[dict[str, Any]], *, limit: int) -> list[
         seen.add(k)
         return True
 
-    # Round 1: lock Eastern calendar-today first so Repair / Today isn't starved by
-    # higher-scoring tomorrow (Next 48h) edges — the board used to look like a 48h slate.
+    # Round 1: lock Today's games first (one card per event before duplicates).
+    # A 35% floor alone still dropped most of a 15-game MLB night under per-sport caps.
     today_pool = sorted(
         (r for r in pool if is_today_slate(r)),
         key=composite_score,
         reverse=True,
     )
     if today_pool and limit >= 8:
-        today_floor = min(len(today_pool), max(8, int(round(limit * 0.35))))
+        today_events = {_setup_event_id(r) for r in today_pool if _setup_event_id(r)}
+        today_floor = min(
+            len(today_pool),
+            max(len(today_events), max(8, int(round(limit * 0.45)))),
+        )
+        # First pass: one pick per Today event_id.
+        seen_today_events: set[str] = set()
+        for row in today_pool:
+            if len(selected) >= limit or len(seen_today_events) >= today_floor:
+                break
+            eid = _setup_event_id(row)
+            if eid and eid in seen_today_events:
+                continue
+            if _take(row):
+                if eid:
+                    seen_today_events.add(eid)
+        # Second pass: fill remaining Today floor with extra markets.
         today_have = sum(1 for r in selected if is_today_slate(r))
         for row in today_pool:
             if today_have >= today_floor or len(selected) >= limit:
@@ -477,6 +618,28 @@ class SportsRefreshService:
                 fetch_stats["today_events"] = len(today_odds)
                 fetch_stats["today_setups"] = sum(1 for r in setups if is_today_slate(r))
 
+        # One pick per Today game — a thin Scan used to save 5 MLB cards then delete the
+        # rest of Tonight's slate (event data loss). Cover every cached Today event first.
+        if today_odds:
+            try:
+                setups = _ensure_today_event_coverage(
+                    setups,
+                    today_odds,
+                    user_id=self.user_id,
+                    stats_index=stats_index,
+                    calibration=calibration,
+                )
+                fetch_stats["today_events"] = len(today_odds)
+                fetch_stats["today_event_ids_covered"] = len(
+                    {
+                        str((r.get("scoring_snapshot") or {}).get("event_id") or "")
+                        for r in setups
+                        if is_today_slate(r) and (r.get("scoring_snapshot") or {}).get("event_id")
+                    }
+                )
+            except Exception as exc:
+                logger.warning("Sports today event coverage skipped (non-fatal): %s", exc)
+
         setups.sort(key=composite_score, reverse=True)
 
         # OpenAI slate ranking is optional polish — never block a dense cache scan.
@@ -499,7 +662,16 @@ class SportsRefreshService:
             except Exception as exc:
                 logger.warning("OpenAI slate ranking skipped: %s", exc)
 
+        pre_diversity_setups = list(setups)
         setups = _select_diverse_setups(setups, limit=limit)
+
+        # Diversity / US-global floors can still drop Tonight under a tight limit — re-attach
+        # one card per Today event_id from the pre-diversity pool before save.
+        if today_odds:
+            try:
+                setups = _reinject_today_events(setups, pre_diversity_setups, limit=limit)
+            except Exception as exc:
+                logger.warning("Sports today reinject skipped: %s", exc)
 
         tag_pool_categories(setups)
 
@@ -667,30 +839,57 @@ class SportsRefreshService:
                 logger.warning("Pre-replace sports auto-grade skipped: %s", exc)
 
             saved_ids = {str(r.get("id")) for r in saved if r.get("id")}
+            new_today_event_ids = {
+                _setup_event_id(r)
+                for r in setups
+                if is_today_slate(r) and _setup_event_id(r)
+            }
+            cache_today_n = int(fetch_stats.get("today_events") or fetch_stats.get("today_event_count") or 0)
             # Keep OpenAI web-desk picks + user Search bets — Odds scans only replace Odds rows.
+            # Also keep still-upcoming Today Odds picks when this scan covered far fewer Tonight
+            # games than the prior board (thin cache / partial live pull = event data loss).
             active = await self.db.select(
                 "sports_signals",
                 filters={"user_id": f"eq.{self.user_id}", "status": "eq.active"},
-                select="id,scoring_snapshot,line_movement",
+                select="id,event_start,bet_type,scoring_snapshot,line_movement",
                 limit=400,
             )
+            prior_today_event_ids = {
+                _setup_event_id(row)
+                for row in active
+                if _is_odds_derived_row(row)
+                and is_today_slate(row)
+                and _setup_event_id(row)
+                and str(row.get("id") or "") not in saved_ids
+            }
+            preserve_thin_today = len(prior_today_event_ids) >= 6 and len(
+                new_today_event_ids
+            ) < max(4, int(round(len(prior_today_event_ids) * 0.55)))
             delete_ids: list[str] = []
+            preserved_today = 0
             for row in active:
                 sid = str(row.get("id") or "")
                 if not sid or sid in saved_ids:
                     continue
-                snap = row.get("scoring_snapshot") or {}
-                lm = row.get("line_movement") or {}
-                source = str(snap.get("source") or lm.get("source") or "")
-                if (
-                    source in {"openai_web", "user_entry"}
-                    or bool(snap.get("openai_web"))
-                    or bool(lm.get("openai_web"))
-                    or bool(snap.get("user_entry"))
-                    or str(snap.get("pick_origin") or "") == "user"
-                ):
+                if not _is_odds_derived_row(row):
                     continue
+                if preserve_thin_today and is_today_slate(row):
+                    eid = _setup_event_id(row)
+                    if eid and eid not in new_today_event_ids:
+                        preserved_today += 1
+                        continue
                 delete_ids.append(sid)
+            if preserved_today:
+                fetch_stats["today_picks_preserved"] = preserved_today
+                fetch_stats["thin_today_guard"] = True
+                logger.warning(
+                    "Sports scan thin Today guard: kept %s prior Tonight picks "
+                    "(new events=%s prior=%s cache_today=%s)",
+                    preserved_today,
+                    len(new_today_event_ids),
+                    len(prior_today_event_ids),
+                    cache_today_n,
+                )
             # Batch deletes — one-by-one was taking minutes and timing out the UI.
             for start in range(0, len(delete_ids), 40):
                 chunk = delete_ids[start : start + 40]
@@ -794,6 +993,9 @@ class SportsRefreshService:
             "calibration": calibration,
             "ok": True,
             "today_picks_saved": sum(1 for r in setups if is_today_slate(r)) if setups else 0,
+            "today_still_empty": (
+                sum(1 for r in setups if is_today_slate(r)) == 0 if setups is not None else True
+            ),
             "message": self._result_message(
                 setups,
                 fetch_stats,

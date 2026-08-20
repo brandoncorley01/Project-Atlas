@@ -484,6 +484,28 @@ def _maybe_compact_cache(cache: dict[str, Any], *, persist: bool = True) -> dict
     }
 
 
+def _today_event_count(events: list[dict[str, Any]] | None) -> int:
+    if not events:
+        return 0
+    return len(today_slate_events(filter_upcoming_events(list(events))))
+
+
+def _cache_today_richer(candidate: dict[str, Any] | None, baseline: dict[str, Any] | None) -> bool:
+    """True when candidate has a meaningfully fuller Today slate than baseline."""
+    if not candidate or not isinstance(candidate.get("events"), list):
+        return False
+    cand_today = _today_event_count(list(candidate.get("events") or []))
+    base_today = _today_event_count(list((baseline or {}).get("events") or []))
+    if cand_today > base_today:
+        return True
+    if cand_today == 0 and base_today == 0:
+        # Fall back to near-term breadth when neither has Tonight yet.
+        cand_near, _ = _near_term_cache_events(list(candidate.get("events") or []))
+        base_near, _ = _near_term_cache_events(list((baseline or {}).get("events") or []))
+        return len(cand_near) > len(base_near)
+    return False
+
+
 def _read_cache() -> dict[str, Any] | None:
     disk_payload: dict[str, Any] | None = None
     try:
@@ -495,35 +517,64 @@ def _read_cache() -> dict[str, Any] | None:
     except (OSError, ValueError) as exc:
         logger.info("Odds cache read failed: %s", exc)
 
+    disk_compacted: dict[str, Any] | None = None
+    disk_near: list[dict[str, Any]] = []
     if disk_payload is not None:
-        compacted = _maybe_compact_cache(disk_payload, persist=True)
-        near, _ = _near_term_cache_events(list(compacted.get("events") or []))
-        if near:
-            return compacted
-        # Disk is all past / empty after compact — fall through to durable remote.
-        logger.info("Odds disk cache has no upcoming events — trying Supabase hydrate")
+        # persist=False — never write-through a thin/tomorrow disk before we compare remote.
+        disk_compacted = _maybe_compact_cache(disk_payload, persist=False)
+        disk_near, _ = _near_term_cache_events(list(disk_compacted.get("events") or []))
+        if not disk_near:
+            logger.info("Odds disk cache has no upcoming events — trying Supabase hydrate")
+            disk_compacted = None
 
-    # Disk miss or all-past (common after Render redeploy / overnight) — hydrate remote.
+    # Disk miss, all-past, OR thin Today slate — hydrate remote and keep the richer Tonight.
     try:
         from app.providers.sports.odds_cache_store import load_remote_cache
 
-        remote = load_remote_cache()
-        if remote and isinstance(remote.get("events"), list) and remote["events"]:
-            try:
-                with _CACHE_PATH.open("w", encoding="utf-8") as fh:
-                    json.dump(remote, fh)
-            except (OSError, TypeError) as exc:
-                logger.info("Odds disk hydrate write failed: %s", exc)
-            logger.info(
-                "Odds cache hydrated from Supabase (%s events)",
-                len(remote["events"]),
-            )
-            compacted = _maybe_compact_cache(remote, persist=True)
-            near, _ = _near_term_cache_events(list(compacted.get("events") or []))
-            if near:
-                return compacted
+        need_remote = disk_compacted is None or cache_missing_today_slate(
+            list(disk_compacted.get("events") or [])
+        )
+        if need_remote:
+            remote = load_remote_cache()
+            if remote and isinstance(remote.get("events"), list) and remote["events"]:
+                remote_compacted = _maybe_compact_cache(remote, persist=False)
+                remote_near, _ = _near_term_cache_events(
+                    list(remote_compacted.get("events") or [])
+                )
+                prefer_remote = disk_compacted is None or (
+                    bool(remote_near) and _cache_today_richer(remote_compacted, disk_compacted)
+                )
+                if prefer_remote and remote_near:
+                    try:
+                        with _CACHE_PATH.open("w", encoding="utf-8") as fh:
+                            json.dump(remote_compacted, fh)
+                    except (OSError, TypeError) as exc:
+                        logger.info("Odds disk hydrate write failed: %s", exc)
+                    logger.info(
+                        "Odds cache hydrated from Supabase (%s events, today=%s)",
+                        len(remote_compacted.get("events") or []),
+                        _today_event_count(list(remote_compacted.get("events") or [])),
+                    )
+                    # Disk-only persist of the adopted remote — do not re-upsert remote.
+                    try:
+                        with _CACHE_PATH.open("w", encoding="utf-8") as fh:
+                            json.dump(remote_compacted, fh)
+                    except (OSError, TypeError):
+                        pass
+                    return remote_compacted
+                # Remote has upcoming games but not richer Today — still use it if disk is dead.
+                if disk_compacted is None and remote_near:
+                    try:
+                        with _CACHE_PATH.open("w", encoding="utf-8") as fh:
+                            json.dump(remote_compacted, fh)
+                    except (OSError, TypeError) as exc:
+                        logger.info("Odds disk hydrate write failed: %s", exc)
+                    return remote_compacted
     except Exception as exc:
         logger.info("Odds remote cache hydrate skipped: %s", exc)
+
+    if disk_compacted is not None and disk_near:
+        return disk_compacted
     return None
 
 
@@ -543,19 +594,40 @@ def _write_cache(events: list[dict[str, Any]], stats: dict[str, Any]) -> None:
     if not events:
         return
     try:
-        from app.providers.sports.odds_cache_store import save_remote_cache
+        from app.providers.sports.odds_cache_store import load_remote_cache, save_remote_cache
 
         near, _ = _near_term_cache_events(events)
-        save_remote_cache(payload, near_term_count=len(near))
+        new_today = _today_event_count(events)
+        # Refuse to clobber a durable Tonight slate with a thinner live/partial write.
+        # Scan then rescored the thin disk and wiped the board ("event data loss").
+        if new_today > 0 or not near:
+            save_remote_cache(payload, near_term_count=len(near))
+        else:
+            remote = load_remote_cache()
+            remote_today = _today_event_count(list((remote or {}).get("events") or []))
+            if remote_today > 0 and new_today == 0:
+                logger.info(
+                    "Odds remote write skipped — local slate has 0 Today games but remote has %s",
+                    remote_today,
+                )
+            else:
+                save_remote_cache(payload, near_term_count=len(near))
     except Exception as exc:
         logger.info("Odds remote cache write skipped: %s", exc)
 
 
-def _invalidate_cache() -> None:
+def _invalidate_cache(*, clear_remote: bool = False) -> None:
+    """Drop the local odds file.
+
+    Never clear the durable Supabase slate by default — an all-past disk (afternoon
+    games finished) used to wipe remote Tonight too and left Scan permanently cold.
+    """
     try:
         _CACHE_PATH.unlink(missing_ok=True)
     except OSError as exc:
         logger.info("Odds cache delete failed: %s", exc)
+    if not clear_remote:
+        return
     try:
         from app.providers.sports.odds_cache_store import clear_remote_cache
 
@@ -1247,6 +1319,38 @@ async def fetch_all_sports_odds(
     serve_cache_only = bool(cache_only) or (spend_locked and not force_refresh)
     if serve_cache_only:
         if not cache_usable:
+            # Last-chance durable hydrate — afternoon all-past disk used to wipe remote and
+            # leave Scan dead; if remote still has games, adopt them before failing closed.
+            try:
+                from app.providers.sports.odds_cache_store import load_remote_cache
+
+                remote = load_remote_cache()
+                if remote and isinstance(remote.get("events"), list) and remote["events"]:
+                    remote_near, _ = _near_term_cache_events(list(remote["events"]))
+                    if remote_near:
+                        try:
+                            with _CACHE_PATH.open("w", encoding="utf-8") as fh:
+                                json.dump(remote, fh)
+                        except (OSError, TypeError):
+                            pass
+                        cache = remote
+                        raw_cached = list(remote.get("events") or [])
+                        near_cached = remote_near
+                        cache_usable = True
+                        near_keys = frozenset(
+                            str(e.get("_sport_key") or e.get("sport_key") or "")
+                            for e in remote_near
+                            if e.get("_sport_key") or e.get("sport_key")
+                        )
+                        incomplete_essentials = _cache_needs_live_refresh(near_keys)
+                        missing_today = cache_missing_today_slate(raw_cached)
+                        logger.info(
+                            "Odds Scan recovered %s upcoming events from durable cache",
+                            len(remote_near),
+                        )
+            except Exception as exc:
+                logger.info("Odds Scan durable recovery skipped: %s", exc)
+        if not cache_usable:
             return [], {
                 "configured": True,
                 "cached": False,
@@ -1258,12 +1362,14 @@ async def fetch_all_sports_odds(
                 "missing_today_slate": True,
                 "today_event_count": 0,
                 "error": (
-                    "No upcoming games in the odds cache. Tap Fetch live odds ONCE to seed "
-                    "FanDuel/DraftKings lines (uses Odds credits). Scan and Rescore stay free after that."
+                    "No upcoming games in the odds cache. Tap Repair sports board or Fetch live "
+                    "odds ONCE to seed FanDuel/DraftKings lines (uses Odds credits). "
+                    "Scan and Rescore stay free after that."
                     if cache and raw_cached
                     else (
-                        "No odds cache yet. Tap Fetch live odds ONCE to seed FanDuel/DraftKings lines "
-                        "(uses Odds credits). Then use Scan / Rescore for free — do not keep tapping Fetch."
+                        "No odds cache yet. Tap Repair sports board or Fetch live odds ONCE to seed "
+                        "FanDuel/DraftKings lines (uses Odds credits). Then use Scan / Rescore for "
+                        "free — do not keep tapping Fetch."
                     )
                 ),
             }
@@ -1360,10 +1466,11 @@ async def fetch_all_sports_odds(
             # Never auto live-fill from Scan — incomplete cache is a Fetch hint only.
             if not events and raw_events:
                 logger.info(
-                    "Odds cache has %d events but none upcoming — invalidating cache",
+                    "Odds cache has %d events but none upcoming — clearing local disk only",
                     len(raw_events),
                 )
-                _invalidate_cache()
+                # Disk-only: remote may still hold Tonight games the ephemeral disk lost.
+                _invalidate_cache(clear_remote=False)
             stats = dict(cache.get("stats") or {})
             stats.update(
                 {
@@ -1422,14 +1529,19 @@ async def fetch_all_sports_odds(
     # Free keys are ~500/mo. A reserve of 500 blocks every live call. Cap auto-reserve,
     # and for intentional Fetch / cold Scan seed keep a tiny cushion so the button works.
     if force_refresh:
-        reserve = min(reserve, 2)
+        # Repair / Fetch must be able to re-seed a cold board — reserve 0 when Today is
+        # missing so a nearly-empty key can still pull MLB/WNBA tonight.
+        reserve = 0 if (missing_today or bypass_cooldown or not cache_usable) else min(reserve, 2)
     else:
         reserve = min(reserve, 100)
     # Shrink the live slate to fit remaining credits instead of hard-failing cold Scan.
     if remaining is not None and force_refresh and remaining < estimated + reserve:
         affordable = max(0, int(remaining) - reserve)
         if affordable > 0:
-            keys = keys[:affordable]
+            # Always keep seasonal essentials first when shrinking.
+            pinned = _essential_keys_available(set(keys))
+            rest = tuple(k for k in keys if k not in pinned)
+            keys = tuple(dict.fromkeys(list(pinned) + list(rest)))[:affordable]
             futures_keys = ()
             estimated = len(keys)
             logger.info(
@@ -1521,12 +1633,68 @@ async def fetch_all_sports_odds(
 
     leagues_attempted = 0
     leagues_with_rows = 0
+    empty_live_keys: list[str] = []
     for key, rows in results:
         leagues_attempted += 1
         events.extend(rows)
         stats["sports"][key] = len(rows)
         if rows:
             leagues_with_rows += 1
+        elif key in keys:
+            empty_live_keys.append(key)
+
+    # Empty in-season cards (ended NFL preseason / MMA off-week) used to burn the
+    # whole 8-league cap and leave Tonight missing soccer/tennis. Backfill with the
+    # next priority keys up to the number of empty slots (same credit budget intent).
+    if force_refresh and empty_live_keys and sport_keys is None:
+        attempted = set(keys) | set(futures_keys)
+        # Rebuild uncapped seasonal order from the active catalog, then take fillers.
+        title_by_key = title_by_key or {}
+        active_game = [s for s in all_sports if _is_game_sport(s)]
+        priority_index = {k: i for i, k in enumerate(PRIORITY_SPORT_KEYS)}
+        active_game.sort(
+            key=lambda s: (priority_index.get(s["key"], 999), str(s.get("title") or s["key"])),
+        )
+        catalog_keys = tuple(s["key"] for s in active_game) or DEFAULT_SPORT_KEYS
+        # Prefer US+global mix without re-pinning the empties we just tried.
+        fillers = [
+            k
+            for k in _limit_sport_keys(catalog_keys, force_refresh=True)
+            if k not in attempted
+        ]
+        # If mix still empty (all essentials failed), walk full seasonal order.
+        if not fillers:
+            fillers = [k for k in _seasonal_key_order(catalog_keys) if k not in attempted]
+        backfill_n = min(len(empty_live_keys), len(fillers))
+        backfill_keys = tuple(fillers[:backfill_n])
+        if backfill_keys:
+            logger.info(
+                "Odds live backfill %s leagues after %s empty (%s)",
+                len(backfill_keys),
+                len(empty_live_keys),
+                ",".join(backfill_keys),
+            )
+            backfill_results = await asyncio.gather(
+                *[
+                    _fetch_sport_odds(client, key, title_by_key.get(key), sem, outright=False)
+                    for key in backfill_keys
+                ]
+            )
+            for key, rows in backfill_results:
+                leagues_attempted += 1
+                events.extend(rows)
+                stats["sports"][key] = len(rows)
+                if rows:
+                    leagues_with_rows += 1
+            keys = tuple(dict.fromkeys(list(keys) + list(backfill_keys)))
+            stats["sport_keys"] = list(keys) + list(futures_keys)
+            stats["sports_scanned"] = len(keys) + len(futures_keys)
+            stats["live_backfill_keys"] = list(backfill_keys)
+            stats["league_catalog"] = [
+                _sport_label(k, title_by_key.get(k)) for k in keys
+            ] + [
+                _sport_label(k, title_by_key.get(k)) for k in futures_keys
+            ]
 
     # Count only leagues that returned data as credits spent — empty skips still cost a
     # request, but aspirational credits_used previously marked failed pulls as "live".
@@ -1560,16 +1728,20 @@ async def fetch_all_sports_odds(
     )
     stats["skipped_off_season"] = []
     stats["deprioritized_off_season"] = stats_deprioritized
+    stats["today_event_count"] = len(today_slate_events(events))
+    stats["missing_today_slate"] = stats["today_event_count"] == 0
 
-    # Merge into existing cache so priority live Fetch doesn't wipe other leagues.
+    # Merge into existing cache so any live pull doesn't wipe other leagues.
     existing = list(cache.get("events") or []) if cache else []
-    if force_refresh and existing:
+    if existing and (force_refresh or events):
         events = _merge_cached_events(existing, events)
         stats["cache_merged"] = True
         stats["events"] = len(events)
         stats["leagues_with_near_term_games"] = sorted(
             {str(e.get("_sport_label") or e.get("sport_title") or "Sports") for e in events}
         )
+        stats["today_event_count"] = len(today_slate_events(events))
+        stats["missing_today_slate"] = stats["today_event_count"] == 0
 
     if events:
         if int(stats.get("credits_used") or 0) > 0 or (force_refresh and not stats.get("cached")):
