@@ -79,6 +79,12 @@ async def test_fetch_cooldown_bypassed_when_today_missing():
 @pytest.mark.asyncio
 async def test_repair_live_seeds_when_today_missing_even_if_near_term_warm():
     svc = SportsRefreshService(MagicMock(), "user-1")
+    warm_today = {
+        "has_data": True,
+        "missing_today_slate": False,
+        "today_event_count": 8,
+        "near_term_event_count": 40,
+    }
     with (
         patch(
             "app.providers.sports.odds_api.odds_cache_status",
@@ -90,11 +96,8 @@ async def test_repair_live_seeds_when_today_missing_even_if_near_term_warm():
                     "cache_needs_live_refresh": True,
                     "today_event_count": 0,
                 },
-                {
-                    "has_data": True,
-                    "missing_today_slate": False,
-                    "today_event_count": 8,
-                },
+                warm_today,
+                warm_today,
             ],
         ),
         patch.object(
@@ -105,6 +108,7 @@ async def test_repair_live_seeds_when_today_missing_even_if_near_term_warm():
                     "ok": True,
                     "signals_created": 12,
                     "live_odds_pulled": True,
+                    "today_picks_saved": 8,
                     "message": "live scan",
                 }
             ),

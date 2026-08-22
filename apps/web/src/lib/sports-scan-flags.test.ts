@@ -68,5 +68,10 @@ assert.match(
   /replaceEmpty:\s*created > 0(?!\s*\|\|)/,
   "Scan must not force-clear the board when zero plays were saved",
 );
+assert.match(
+  source,
+  /Always reload after Repair/,
+  "Repair must reload the board even when ok=false",
+);
 
 console.log("sports-scan-flags.test.ts: ok");
