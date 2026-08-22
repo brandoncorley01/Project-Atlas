@@ -338,6 +338,20 @@ export function SportsSignalsView({
   }
 
   async function refreshSports(mode: "scan" | "live" | "rescore") {
+    // Cold odds cache: Scan/Rescore are cache-only and will always fail. Route to Repair
+    // (one live seed) so Today can fill — matches the empty-state CTA.
+    const cacheCold =
+      oddsStatus != null &&
+      oddsStatus.cache_has_data === false &&
+      (oddsStatus.near_term_event_count ?? 0) === 0;
+    if ((mode === "scan" || mode === "rescore") && cacheCold) {
+      setMessage(
+        "Odds cache is empty — Scan needs a one-time Repair to Fetch tonight's lines.",
+      );
+      await repairSportsBoard();
+      return;
+    }
+
     setLoading(mode);
     setMessage(null);
 
@@ -733,9 +747,14 @@ export function SportsSignalsView({
   const cacheRescoreFree = oddsStatus?.cache_rescore_free ?? false;
   const cacheFresh = oddsStatus?.cache_fresh ?? false;
   const cacheNeedsLive = oddsStatus?.cache_needs_live_refresh ?? false;
+  const cacheCold =
+    oddsStatus != null &&
+    oddsStatus.cache_has_data === false &&
+    (oddsStatus.near_term_event_count ?? 0) === 0;
   const busy = loading !== null;
   const showRepair =
     items.length === 0 ||
+    cacheCold ||
     Boolean(oddsStatus?.missing_today_slate) ||
     (oddsStatus != null &&
       oddsStatus.cache_has_data === false &&
@@ -760,6 +779,28 @@ export function SportsSignalsView({
       />
 
       <OddsQuotaBanner status={oddsStatus} />
+
+      {cacheCold && (
+        <div className="mb-4 rounded-xl border border-amber-500/50 bg-amber-500/15 px-4 py-3 text-sm text-amber-50">
+          <p className="font-semibold text-amber-100">Odds cache is empty</p>
+          <p className="mt-1 text-xs leading-relaxed text-amber-100/85">
+            Scan and Rescore need a seeded cache. Tap{" "}
+            <strong className="text-amber-50">Repair sports board</strong> once
+            {oddsStatus?.total_remaining != null
+              ? ` (~${oddsStatus.estimated_live_scan_credits ?? 8} credits, ${oddsStatus.total_remaining} left)`
+              : " (~8 Odds credits)"}{" "}
+            to Fetch tonight&apos;s FanDuel/DraftKings lines. After that, Scan stays free.
+          </p>
+          <button
+            type="button"
+            onClick={() => void repairSportsBoard()}
+            disabled={busy || fetchBlocked}
+            className="mt-3 rounded-lg border border-amber-400/60 bg-amber-500/25 px-4 py-2 text-sm font-semibold text-amber-50 disabled:opacity-50"
+          >
+            {loading === "repair" ? "Repairing…" : "Repair sports board now"}
+          </button>
+        </div>
+      )}
 
       <SportsEventSearch
         onBetLogged={async (item) => {
@@ -792,16 +833,7 @@ export function SportsSignalsView({
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => refreshSports("scan")}
-            disabled={busy}
-            title="Scan sports odds from cache only — 0 Odds credits. Never spends. Use Fetch only when the cache is empty."
-            className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-md shadow-violet-600/25 disabled:opacity-50"
-          >
-            {loading === "scan" ? "Scanning…" : "Scan sports odds"}
-          </button>
-          {showRepair && (
+          {(cacheCold || showRepair) && (
             <button
               type="button"
               onClick={() => void repairSportsBoard()}
@@ -816,6 +848,19 @@ export function SportsSignalsView({
               {loading === "repair" ? "Repairing…" : "Repair sports board"}
             </button>
           )}
+          <button
+            type="button"
+            onClick={() => refreshSports("scan")}
+            disabled={busy}
+            title={
+              cacheCold
+                ? "Odds cache empty — Scan will open Repair to seed tonight's lines once."
+                : "Scan sports odds from cache only — 0 Odds credits. Never spends. Use Fetch only when the cache is empty."
+            }
+            className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-md shadow-violet-600/25 disabled:opacity-50"
+          >
+            {loading === "scan" ? "Scanning…" : "Scan sports odds"}
+          </button>
           <button
             type="button"
             onClick={() => refreshSports("live")}
@@ -917,12 +962,20 @@ export function SportsSignalsView({
       ) : (
         <EmptyState
           title={
-            activeCategory || activeSport || filter !== "all" || window !== "all"
-              ? "No plays match these filters"
-              : "No upcoming sports plays"
+            cacheCold
+              ? "Odds cache is empty"
+              : activeCategory || activeSport || filter !== "all" || window !== "all"
+                ? "No plays match these filters"
+                : "No upcoming sports plays"
           }
           description={
-            window === "today" && !activeCategory && filter === "all" && !activeSport
+            cacheCold
+              ? `Tap Repair sports board once to Fetch tonight's FanDuel/DraftKings lines${
+                  oddsStatus?.total_remaining != null
+                    ? ` (~${oddsStatus.estimated_live_scan_credits ?? 8} credits, ${oddsStatus.total_remaining} left)`
+                    : ""
+                }. Scan stays free after that.`
+              : window === "today" && !activeCategory && filter === "all" && !activeSport
               ? filterByWindow(items, "soon").length > 0
                 ? `Nothing in the next 24 hours. ${filterByWindow(items, "soon").length} play(s) are in Next 48h — open that window, or Repair for tonight's live odds.`
                 : "Nothing in the next 24 hours on the board. Tap Repair sports board to Fetch live odds for Today's slate."

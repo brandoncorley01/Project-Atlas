@@ -65,8 +65,13 @@ assert.doesNotMatch(
 }
 assert.match(
   source,
-  /replaceEmpty:\s*created > 0(?!\s*\|\|)/,
-  "Scan must not force-clear the board when zero plays were saved",
+  /cacheCold[\s\S]*?repairSportsBoard\(\)/,
+  "Cold odds cache must route Scan/Rescore into Repair (live seed)",
+);
+assert.match(
+  source,
+  /Odds cache is empty/,
+  "Sports UI must surface an empty odds-cache banner/empty state",
 );
 assert.match(
   source,
