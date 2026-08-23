@@ -73,5 +73,15 @@ assert.match(
   /Always reload after Repair/,
   "Repair must reload the board even when ok=false",
 );
+assert.match(
+  source,
+  /Odds cache is empty — Scan needs a one-time Repair/,
+  "Cold cache Scan must route into Repair",
+);
+assert.match(
+  source,
+  /Odds cache is empty/,
+  "Sports UI must surface empty odds cache banner",
+);
 
 console.log("sports-scan-flags.test.ts: ok");

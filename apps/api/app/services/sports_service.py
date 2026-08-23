@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from app import config
@@ -92,23 +93,71 @@ async def _recover_saved_after_empty_insert(
         logger.warning("Sports empty-insert verify select failed: %s", exc)
         return []
 
-    wanted = {market_family_key(r) for r in setups}
+    wanted_keys = {market_family_key(r) for r in setups}
+    wanted_tuples = {
+        (
+            str(r.get("event_name") or "").strip().lower(),
+            str(r.get("bet_type") or "").strip().lower(),
+            str(r.get("selection") or "").strip().lower(),
+        )
+        for r in setups
+    }
     matched: list[dict[str, Any]] = []
     seen: set[str] = set()
+    matched_setup_keys: set[str] = set()
+
+    def _try_add(row: dict[str, Any], setup_key: str) -> bool:
+        rid = str(row.get("id") or "")
+        if rid and rid in seen:
+            return False
+        if rid:
+            seen.add(rid)
+        matched.append(row)
+        matched_setup_keys.add(setup_key)
+        return True
+
     for row in recent:
         if not _is_odds_derived_row(row):
             continue
         key = market_family_key(row)
-        if key not in wanted:
-            continue
-        rid = str(row.get("id") or "")
-        if rid and rid in seen:
-            continue
-        if rid:
-            seen.add(rid)
-        matched.append(row)
-        if len(matched) >= len(setups):
-            break
+        if key in wanted_keys and _try_add(row, key):
+            if len(matched) >= len(setups):
+                return matched
+        tuple_key = (
+            str(row.get("event_name") or "").strip().lower(),
+            str(row.get("bet_type") or "").strip().lower(),
+            str(row.get("selection") or "").strip().lower(),
+        )
+        if tuple_key in wanted_tuples and key not in matched_setup_keys:
+            if _try_add(row, key) and len(matched) >= len(setups):
+                return matched
+
+    # Last resort: rows written in the last few seconds with no representation body.
+    if len(matched) < len(setups):
+        cutoff = (datetime.now(UTC) - timedelta(minutes=2)).isoformat()
+        try:
+            fresh = await db.select(
+                "sports_signals",
+                filters={
+                    "user_id": f"eq.{user_id}",
+                    "status": "eq.active",
+                    "data_as_of": f"gte.{cutoff}",
+                },
+                order="data_as_of.desc",
+                limit=min(max(len(setups) * 2, 40), 200),
+            )
+        except Exception as exc:
+            logger.warning("Sports empty-insert fresh select failed: %s", exc)
+            fresh = []
+        for row in fresh:
+            if not _is_odds_derived_row(row):
+                continue
+            key = market_family_key(row)
+            if key in matched_setup_keys:
+                continue
+            if _try_add(row, key) and len(matched) >= len(setups):
+                break
+
     return matched
 
 
@@ -861,13 +910,25 @@ class SportsRefreshService:
                 fetch_stats["insert_empty_representation"] = True
 
         if setups and not saved:
+            existing_rows = await self.db.select(
+                "sports_signals",
+                filters={"user_id": f"eq.{self.user_id}", "status": "eq.active"},
+                limit=1,
+            )
+            has_existing = bool(existing_rows)
             msg = (
                 "Sports scan scored picks but failed to save them — your board was left unchanged. "
                 f"{insert_errors[0] if insert_errors else 'Database write failed.'}"
             )
+            if not has_existing:
+                msg = (
+                    "Sports scan scored picks but could not save them to your board. "
+                    f"{insert_errors[0] if insert_errors else 'Database write failed.'} "
+                    "Tap Repair sports board once, then Scan again."
+                )
             return {
                 "signals_created": 0,
-                "signals_kept": True,
+                "signals_kept": has_existing,
                 "events_scanned": len(events),
                 "stats": fetch_stats,
                 "top_opportunity": float(setups[0]["opportunity_score"]) if setups else None,
@@ -875,8 +936,9 @@ class SportsRefreshService:
                 "cache_used": bool(fetch_stats.get("cached")),
                 "live_odds_pulled": live_odds_pulled,
                 "insight_pending": False,
-                "ok": False,
+                "ok": has_existing,
                 "message": msg,
+                **({"error": msg} if not has_existing else {}),
             }
 
         if replace and saved:

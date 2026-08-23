@@ -338,6 +338,20 @@ export function SportsSignalsView({
   }
 
   async function refreshSports(mode: "scan" | "live" | "rescore") {
+    // Cold odds cache: Scan/Rescore are cache-only and will always fail. Route to Repair
+    // (one live seed) so Today can fill — matches the empty-state CTA.
+    const cacheCold =
+      oddsStatus != null &&
+      oddsStatus.cache_has_data === false &&
+      (oddsStatus.near_term_event_count ?? 0) === 0;
+    if ((mode === "scan" || mode === "rescore") && cacheCold) {
+      setMessage(
+        "Odds cache is empty — Scan needs a one-time Repair to Fetch tonight's lines.",
+      );
+      await repairSportsBoard();
+      return;
+    }
+
     setLoading(mode);
     setMessage(null);
 
@@ -393,6 +407,7 @@ export function SportsSignalsView({
       if (!res.ok || body.ok === false || body.status === "error") {
         const detail =
           (typeof body.message === "string" && body.message) ||
+          (typeof body.error === "string" && body.error) ||
           (typeof body.detail === "string" && body.detail) ||
           "Scan failed";
         setMessage(
@@ -402,6 +417,25 @@ export function SportsSignalsView({
               ? detail || "API timed out — try Rescore or restart the API."
               : detail,
         );
+        const createdOnError = Number(body.signals_created ?? 0);
+        setFilter("all");
+        setSort("opportunity");
+        setActiveCategory(null);
+        setActiveSport(null);
+        await loadItems(token, null, null, { replaceEmpty: createdOnError > 0 });
+        await Promise.all([loadCategories(token), refreshOddsStatus()]);
+        setWindow("today");
+        writeSportsBoardCache(itemsRef.current, { window: "today" });
+        const todayN = filterByWindow(itemsRef.current, "today").length;
+        const soonN = filterByWindow(itemsRef.current, "soon").length;
+        if (todayN === 0 && soonN > 0) {
+          setMessage(
+            `${detail} · ${soonN} play${soonN === 1 ? "" : "s"} in Next 48h — tap Show Next 48h.`,
+          );
+        }
+        rememberAction(mode);
+        router.refresh();
+        globalThis.dispatchEvent(new Event("atlas:dashboard-refresh"));
         setLoading(null);
         return;
       }
@@ -428,7 +462,7 @@ export function SportsSignalsView({
       setActiveSport(null);
 
       await loadItems(token, null, null, {
-        replaceEmpty: created > 0,
+        replaceEmpty: created > 0 || (mode !== "live" && itemsRef.current.length === 0),
       });
       await Promise.all([loadCategories(token), refreshOddsStatus()]);
       // Stay on Today — auto-widening to Next 48h hid tonight's empty slate after Scan/Fetch.
@@ -733,9 +767,14 @@ export function SportsSignalsView({
   const cacheRescoreFree = oddsStatus?.cache_rescore_free ?? false;
   const cacheFresh = oddsStatus?.cache_fresh ?? false;
   const cacheNeedsLive = oddsStatus?.cache_needs_live_refresh ?? false;
+  const cacheCold =
+    oddsStatus != null &&
+    oddsStatus.cache_has_data === false &&
+    (oddsStatus.near_term_event_count ?? 0) === 0;
   const busy = loading !== null;
   const showRepair =
     items.length === 0 ||
+    cacheCold ||
     Boolean(oddsStatus?.missing_today_slate) ||
     (oddsStatus != null &&
       oddsStatus.cache_has_data === false &&
@@ -760,6 +799,20 @@ export function SportsSignalsView({
       />
 
       <OddsQuotaBanner status={oddsStatus} />
+
+      {cacheCold && (
+        <div className="mb-4 rounded-xl border border-amber-500/50 bg-amber-500/15 px-4 py-3 text-sm text-amber-50">
+          <p className="font-semibold text-amber-100">Odds cache is empty</p>
+          <p className="mt-1 text-xs leading-relaxed text-amber-100/85">
+            Scan and Rescore need a seeded cache. Tap{" "}
+            <strong className="text-amber-50">Repair sports board</strong> once
+            {oddsStatus?.total_remaining != null
+              ? ` (~${oddsStatus.estimated_live_scan_credits ?? 8} credits, ${oddsStatus.total_remaining} left)`
+              : " (~8 Odds credits)"}{" "}
+            to Fetch tonight&apos;s FanDuel/DraftKings lines. After that, Scan stays free.
+          </p>
+        </div>
+      )}
 
       <SportsEventSearch
         onBetLogged={async (item) => {
