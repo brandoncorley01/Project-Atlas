@@ -107,8 +107,35 @@ async def test_refresh_sports_recovers_when_insert_returns_empty_representation(
 @pytest.mark.asyncio
 async def test_refresh_sports_keeps_board_when_insert_fails():
     db = MagicMock()
-    db.select = AsyncMock(return_value=[])
+    db.select = AsyncMock(return_value=[{"id": "old-1", "status": "active"}])
     db.insert = AsyncMock(side_effect=HTTPException(status_code=502, detail="Database error"))
+    db.delete = AsyncMock()
+    db.update = AsyncMock(return_value=[])
+
+    svc = SportsRefreshService(db, "user-1")
+    events = [{"id": "e1", "commence_time": "2099-01-01T00:00:00Z", "sport_title": "MLB"}]
+    fetch_stats = {"configured": True, "cached": True, "credits_used": 0, "events": 1}
+
+    from contextlib import ExitStack
+
+    with ExitStack() as stack:
+        for p in _patch_scan(events, fetch_stats, _setup_row(0)):
+            stack.enter_context(p)
+        result = await svc.refresh_sports(replace=True, cache_only=True)
+
+    assert result.get("ok") is True
+    assert result["signals_created"] == 0
+    assert result.get("signals_kept") is True
+    assert "unchanged" in (result.get("message") or "").lower()
+    db.delete.assert_not_called()
+    db.insert.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_refresh_sports_save_failure_empty_board_not_marked_kept():
+    db = MagicMock()
+    db.select = AsyncMock(return_value=[])
+    db.insert = AsyncMock(return_value=[])
     db.delete = AsyncMock()
     db.update = AsyncMock(return_value=[])
 
@@ -125,9 +152,8 @@ async def test_refresh_sports_keeps_board_when_insert_fails():
 
     assert result.get("ok") is False
     assert result["signals_created"] == 0
-    assert "failed to save" in (result.get("message") or "").lower()
-    db.delete.assert_not_called()
-    db.insert.assert_awaited()
+    assert result.get("signals_kept") is False
+    assert "could not save" in (result.get("message") or "").lower()
 
 
 @pytest.mark.asyncio
