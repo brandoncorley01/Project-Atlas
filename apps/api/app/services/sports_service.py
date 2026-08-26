@@ -1156,6 +1156,29 @@ class SportsRefreshService:
             )
         return result
 
+    async def _repair_live_fetch_allowed(self) -> bool:
+        """True when Repair may spend Odds credits on a live Fetch."""
+        from app import config
+        from app.providers.sports.odds_api import estimate_live_scan_credits, probe_all_odds_keys
+
+        if not config.settings.odds_explicit_fetch_allowed():
+            return False
+        try:
+            probe = await probe_all_odds_keys(use_cache=True)
+        except Exception as exc:
+            logger.info("Repair live-fetch probe skipped: %s", exc)
+            return config.settings.odds_live_spending_allowed()
+        if probe.get("quota_exhausted"):
+            return False
+        total = probe.get("total_remaining")
+        if total is not None and int(total) <= 0:
+            return False
+        estimate = estimate_live_scan_credits()
+        reserve = max(0, int(getattr(config.settings, "odds_credit_reserve", 0) or 0))
+        if total is not None and int(total) < estimate + reserve:
+            return False
+        return True
+
     async def repair_sports_board(
         self,
         *,
@@ -1179,6 +1202,8 @@ class SportsRefreshService:
         cache_warm_enough = bool(status.get("has_data")) and (today_events > 0 or near_events > 0)
 
         result: dict[str, Any]
+        can_live_seed = await self._repair_live_fetch_allowed()
+
         if cache_warm_enough and not missing_today_before:
             # Warm Today slate already on disk/remote — fill the board without spending.
             result = await self.refresh_sports(
@@ -1193,7 +1218,7 @@ class SportsRefreshService:
             result["missing_today_before"] = missing_today_before
             created = int(result.get("signals_created") or 0)
             kept = bool(result.get("signals_kept"))
-            if created == 0 and not kept:
+            if created == 0 and not kept and can_live_seed:
                 # Cache warm but scoring/save still empty — one live Fetch, then rescore again.
                 live = await self.refresh_sports(
                     replace=replace,
@@ -1235,15 +1260,25 @@ class SportsRefreshService:
                         created = int(result.get("signals_created") or 0)
                         kept = bool(result.get("signals_kept"))
         else:
-            # Cold / missing Today — live seed first (user tapped Repair to pull lines).
-            result = await self.refresh_sports(
-                replace=replace,
-                limit=limit,
-                force_refresh=True,
-                cache_only=False,
-                bypass_cooldown=True,
-            )
-            result["repair_mode"] = "live_seed"
+            # Cold / missing Today — live seed first when credits allow.
+            if can_live_seed:
+                result = await self.refresh_sports(
+                    replace=replace,
+                    limit=limit,
+                    force_refresh=True,
+                    cache_only=False,
+                    bypass_cooldown=True,
+                )
+                result["repair_mode"] = "live_seed"
+            else:
+                result = await self.refresh_sports(
+                    replace=replace,
+                    limit=limit,
+                    force_refresh=False,
+                    cache_only=True,
+                    bypass_cooldown=True,
+                )
+                result["repair_mode"] = "cache_rescore_no_credits"
             result["cache_was_cold"] = cache_was_cold
             result["missing_today_before"] = missing_today_before
             created = int(result.get("signals_created") or 0)
@@ -1282,7 +1317,7 @@ class SportsRefreshService:
         # Board Today is what the UI shows — cache can have tonight's games and still save 0 today picks.
         result["today_still_empty"] = today_picks == 0 if "today_picks_saved" in result else today_saved == 0
 
-        if created == 0 and not kept:
+        if created == 0 and not kept and today_picks == 0:
             result["ok"] = False
             err = str(result.get("message") or result.get("error") or "").strip()
             if cache_warm_now or today_saved > 0:
@@ -1297,10 +1332,12 @@ class SportsRefreshService:
                 )
             if not result.get("message"):
                 result["message"] = result["error"]
-        elif created > 0:
+        elif created > 0 or today_picks > 0:
             # Never mark ok=False when picks were saved — the Sports UI aborts reload on ok=false
             # and the board looks permanently empty (Scan/Repair "not working at all").
             result["ok"] = True
+            if created == 0 and today_picks > 0:
+                result["signals_created"] = today_picks
             base = str(result.get("message") or "").strip()
             if today_picks > 0:
                 today_note = f" · {today_picks} Today's plays on the board"
