@@ -20,9 +20,10 @@ export type SportsFilterKey =
   | "openai"
   | "my_bets"
   | "player_props";
-export type SportsWindowKey = "today" | "soon" | "week" | "month" | "futures" | "all";
+export type SportsWindowKey = "today" | "next24h" | "soon" | "week" | "month" | "futures" | "all";
 
 const NEAR_TERM_HOURS = 48;
+const ROLLING_24H = 24;
 const WEEK_HOURS = 168;
 const MONTH_HOURS = 720;
 const SPORTS_TZ = "America/New_York";
@@ -129,15 +130,18 @@ export function isSportsCalendarToday(row: SportsSignal): boolean {
   }
 }
 
-/** Card timing chip — must match the Window filter (next 24h Today), not a stale hours_until_start. */
+/** Card timing chip — calendar Today vs rolling Next 24h must not be conflated. */
 export function kickoffWindowLabel(row: SportsSignal): { label: string; className: string } | null {
   const hours = hoursUntilStart(row);
   if (hours == null || hours <= 0) return null;
-  if (hours <= 6) {
-    return { label: "Starting very soon", className: "bg-rose-500/20 text-rose-300" };
-  }
-  if (hours <= 24 || isSportsCalendarToday(row)) {
+  if (isSportsCalendarToday(row)) {
+    if (hours <= 6) {
+      return { label: "Starting very soon", className: "bg-rose-500/20 text-rose-300" };
+    }
     return { label: "Today", className: "bg-amber-500/20 text-amber-300" };
+  }
+  if (hours <= ROLLING_24H) {
+    return { label: "Next 24h", className: "bg-orange-500/20 text-orange-300" };
   }
   if (hours <= NEAR_TERM_HOURS) {
     return { label: "Next 48h", className: "bg-emerald-500/20 text-emerald-300" };
@@ -155,7 +159,15 @@ function compositeRank(row: SportsSignal): number {
   const opp = row.opportunity_score ?? 0;
   const edge = getEdge(row);
   const hours = getSoonest(row);
-  const soonBoost = hours <= 24 ? 12 : hours <= NEAR_TERM_HOURS ? 8 : hours <= WEEK_HOURS ? 2 : 0;
+  const soonBoost = isSportsCalendarToday(row)
+    ? 12
+    : hours <= ROLLING_24H
+      ? 8
+      : hours <= NEAR_TERM_HOURS
+        ? 6
+        : hours <= WEEK_HOURS
+          ? 2
+          : 0;
   const latePenalty =
     !isFutures(row) && hours > NEAR_TERM_HOURS
       ? Math.min(12, (hours - NEAR_TERM_HOURS) * 0.04)
@@ -181,8 +193,15 @@ export function filterByWindow(items: SportsSignal[], window: SportsWindowKey): 
     return live.filter((i) => {
       if (undatedInsightOrUser(i)) return true;
       if (isFutures(i)) return false;
+      return isSportsCalendarToday(i);
+    });
+  }
+  if (window === "next24h") {
+    return live.filter((i) => {
+      if (undatedInsightOrUser(i)) return true;
+      if (isFutures(i)) return false;
       const h = hoursUntilStart(i);
-      return h != null && h > 0 && (h <= 24 || isSportsCalendarToday(i));
+      return h != null && h > 0 && h <= ROLLING_24H;
     });
   }
   if (window === "futures") {
@@ -222,7 +241,7 @@ export function pickWindowWithResults(
   items: SportsSignal[],
   preferred: SportsWindowKey = "today",
 ): SportsWindowKey {
-  const order: SportsWindowKey[] = [preferred, "today", "soon", "week", "all"];
+  const order: SportsWindowKey[] = [preferred, "today", "next24h", "soon", "week", "all"];
   const seen = new Set<SportsWindowKey>();
   for (const key of order) {
     if (seen.has(key)) continue;

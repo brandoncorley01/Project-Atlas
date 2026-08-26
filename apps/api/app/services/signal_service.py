@@ -55,7 +55,7 @@ def _is_user_entry_row(row: dict) -> bool:
 
 def _sports_window_match(row: dict, window: str) -> bool:
     """Match board windows — concluded / started games are already excluded by is_sports_listable."""
-    from app.services.sports_ranking import is_today_slate
+    from app.services.sports_ranking import is_calendar_today, is_next_24h_slate
 
     hours = hours_until_event(row.get("event_start"))
     insight_or_user = _is_openai_web_row(row) or _is_user_entry_row(row)
@@ -68,7 +68,9 @@ def _sports_window_match(row: dict, window: str) -> bool:
     if hours <= 0:
         return False
     if window == "today":
-        return is_today_slate(row)
+        return is_calendar_today(row) or insight_or_user
+    if window == "next24h":
+        return is_next_24h_slate(row) or insight_or_user
     if window == "soon":
         return hours <= NEAR_TERM_HOURS and not is_futures_row(row)
     if window == "week":
@@ -300,7 +302,7 @@ class SignalService:
             except Exception as exc:
                 logger.warning("Sports list auto-grade skipped: %s", exc)
 
-        fetch_limit = 300 if category or window in {"all", "month", "futures", "today", "week"} else max(limit * 3, 80)
+        fetch_limit = 300 if category or window in {"all", "month", "futures", "today", "next24h", "week", "soon"} else max(limit * 3, 80)
         rows = await self.db.select(
             "sports_signals",
             filters={

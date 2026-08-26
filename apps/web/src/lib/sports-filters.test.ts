@@ -131,23 +131,32 @@ assert(hoursUntilStart(fixtures[7]) != null && (hoursUntilStart(fixtures[7]) as 
 
 const today = filterByWindow(fixtures, "today");
 if (isSportsCalendarToday(todayRow)) {
-  assert(today.some((r) => r.id === "today"), "today includes kickoff today");
+  assert(today.some((r) => r.id === "today"), "today includes kickoff today (ET calendar)");
 }
 assert(today.some((r) => r.id === "undated-insight"), "today keeps undated insight");
 assert(!today.some((r) => r.id === "week"), "today excludes week games");
-assert(!today.some((r) => r.id === "soon"), "today excludes 30h games");
+assert(!today.some((r) => r.id === "soon"), "today excludes tomorrow calendar-day games");
+
+const rolling20h = row({ id: "20h", event_start: hoursFromNow(20), hours_until_start: 20 });
 assert(
-  filterByWindow(
-    [row({ id: "20h", event_start: hoursFromNow(20), hours_until_start: 20 })],
-    "today",
-  ).some((r) => r.id === "20h"),
-  "today includes the next 24 hours",
+  filterByWindow([rolling20h], "next24h").some((r) => r.id === "20h"),
+  "next24h includes games within 24 hours",
 );
+if (!isSportsCalendarToday(rolling20h)) {
+  assert(
+    !filterByWindow([rolling20h], "today").some((r) => r.id === "20h"),
+    "today excludes rolling-24h games that are not on today's ET calendar",
+  );
+}
 
 if (isSportsCalendarToday(todayRow)) {
   assert(
     kickoffWindowLabel(todayRow)?.label !== "Next 48h",
     "tonight chip must not be Next 48h",
+  );
+  assert(
+    ["Today", "Starting very soon"].includes(kickoffWindowLabel(todayRow)?.label ?? ""),
+    "calendar tonight chip is Today (or Starting very soon)",
   );
 }
 const staleTonight = row({
@@ -162,6 +171,13 @@ if (isSportsCalendarToday(staleTonight)) {
   );
 }
 assert(kickoffWindowLabel(fixtures[1])?.label === "Next 48h", "tomorrow chip is Next 48h");
+if (!isSportsCalendarToday(rolling20h)) {
+  assert(kickoffWindowLabel(rolling20h)?.label === "Next 24h", "non-calendar 20h chip is Next 24h");
+}
+
+const next24 = filterByWindow(fixtures, "next24h");
+assert(next24.some((r) => r.id === "today") || next24.some((r) => r.id === "missing-hours"), "next24h has near-term");
+assert(!next24.some((r) => r.id === "week"), "next24h excludes 100h");
 
 const soon = filterByWindow(fixtures, "soon");
 assert(soon.some((r) => r.id === "today") && soon.some((r) => r.id === "soon"), "soon has 48h");
@@ -211,6 +227,7 @@ assert(deduped.length === 1 && deduped[0].id === "b", "dedupe keeps stronger sid
 
 console.log("sports-filters ok", {
   today: ids(today),
+  next24h: ids(next24),
   soon: ids(soon),
   week: ids(week),
   month: ids(month),
