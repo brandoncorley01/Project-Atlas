@@ -680,7 +680,9 @@ def odds_cache_status() -> dict[str, Any]:
     league_catalog = list(cache_stats.get("league_catalog") or [])
     if not league_catalog:
         league_catalog = list(near_meta.get("near_term_leagues") or [])
-    today_events = today_slate_events(raw_events) if raw_events else []
+    today_events = (
+        today_slate_events(filter_upcoming_events(raw_events)) if raw_events else []
+    )
     missing_today = not bool(today_events)
     return {
         "has_data": has_data,

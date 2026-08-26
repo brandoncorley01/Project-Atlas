@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from app import config
-from app.agents.sports_analyst import analyze_event, setup_to_row
+from app.agents.sports_analyst import analyze_event, fallback_slate_setup_from_event, setup_to_row
 from app.agents.sports_categories import tag_pool_categories
 from app.db.supabase_client import SupabaseClient
 from app.providers.sports.odds_api import OddsApiError, fetch_all_sports_odds
@@ -196,6 +196,10 @@ def _ensure_today_event_coverage(
             match_stats = lookup_match_stats(event, stats_index) if stats_index else None
             scored = analyze_event(event, match_stats=match_stats, calibration=soft_cal)
             if not scored:
+                fallback = fallback_slate_setup_from_event(event, calibration=soft_cal)
+                if fallback is None:
+                    continue
+                added.append(setup_to_row(user_id, fallback))
                 continue
             # Prefer moneyline, then highest opportunity — one card per game.
             scored.sort(
@@ -681,9 +685,22 @@ class SportsRefreshService:
 
         # Guarantee Today's Eastern slate fills when odds cache has tonight's games.
         # Dense weekend/tomorrow edges used to crowd out zero-edge FD/DK market lines.
-        from app.providers.sports.odds_api import today_slate_events
+        from app.providers.sports.odds_api import calendar_today_events, today_slate_events
 
         today_odds = today_slate_events(events)
+        if not today_odds:
+            # Scan pool can miss Tonight when cache is warm but the scored subset is thin.
+            try:
+                from app.providers.sports.odds_api import _read_cache
+
+                cache_payload = _read_cache()
+                if cache_payload:
+                    raw_upcoming = filter_upcoming_events(list(cache_payload.get("events") or []))
+                    today_odds = calendar_today_events(raw_upcoming)
+                    if today_odds:
+                        fetch_stats["today_odds_from_cache"] = len(today_odds)
+            except Exception as exc:
+                logger.info("Sports today cache hydrate skipped: %s", exc)
         today_setups = [r for r in setups if is_today_slate(r)]
         today_floor = min(len(today_odds), max(6, int(round(limit * 0.25)))) if today_odds else 0
         if today_odds and len(today_setups) < today_floor:
@@ -695,7 +712,15 @@ class SportsRefreshService:
             for event in today_odds:
                 try:
                     match_stats = lookup_match_stats(event, stats_index) if stats_index else None
-                    for setup in analyze_event(event, match_stats=match_stats, calibration=today_cal):
+                    scored_setups = analyze_event(
+                        event, match_stats=match_stats, calibration=today_cal
+                    )
+                    if not scored_setups:
+                        fallback = fallback_slate_setup_from_event(event, calibration=today_cal)
+                        if fallback is not None:
+                            today_scored.append(setup_to_row(self.user_id, fallback))
+                        continue
+                    for setup in scored_setups:
                         if setup.opportunity_score >= 18.0:
                             today_scored.append(setup_to_row(self.user_id, setup))
                 except Exception as exc:

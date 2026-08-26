@@ -270,3 +270,87 @@ def test_reinject_today_events_restores_dropped_tonight_cards():
         if str((r.get("scoring_snapshot") or {}).get("sport_key") or "") == "baseball_mlb"
     }
     assert len(today_eids) >= 12, f"expected all Tonight MLB events reinjected, got {len(today_eids)}"
+
+
+def test_ensure_today_event_coverage_fallback_without_bookmakers():
+    """Metadata-only Tonight games still get one Today card per event."""
+    today_odds = [
+        {
+            "id": "meta-1",
+            "home_team": "Yankees",
+            "away_team": "Red Sox",
+            "commence_time": _tonight(3),
+            "_sport_key": "baseball_mlb",
+            "_sport_label": "MLB",
+        },
+    ]
+    out = _ensure_today_event_coverage(
+        [],
+        today_odds,
+        user_id="user-1",
+        stats_index={},
+        calibration={"slate_mode": True},
+    )
+    assert len(out) == 1
+    snap = out[0].get("scoring_snapshot") or {}
+    assert snap.get("event_id") == "meta-1"
+    assert snap.get("slate_fallback") is True
+    assert out[0].get("event_start") == today_odds[0]["commence_time"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_sports_saves_today_when_cache_lacks_bookmakers():
+    """Scan must not leave Today empty when cache has Tonight metadata only."""
+    from unittest.mock import PropertyMock
+
+    from app.providers.sports import odds_api
+
+    def _meta_mlb(i: int) -> dict:
+        return {
+            "id": f"mlb-{i}",
+            "commence_time": _tonight(2 + i * 0.1),
+            "_sport_key": "baseball_mlb",
+            "_sport_label": "MLB",
+            "sport_title": "MLB",
+            "home_team": f"Home{i}",
+            "away_team": f"Away{i}",
+        }
+
+    events = [_meta_mlb(i) for i in range(6)]
+    cache = {"fetched_at": datetime.now(UTC).isoformat(), "events": events, "stats": {}}
+
+    db = MagicMock()
+    db.insert = AsyncMock(
+        side_effect=lambda table, rows: [{**r, "id": f"id-{i}"} for i, r in enumerate(rows)]
+    )
+    db.select = AsyncMock(return_value=[])
+    db.delete = AsyncMock(return_value=None)
+    db.update = AsyncMock(return_value=None)
+
+    svc = SportsRefreshService(db, "user-1")
+    with (
+        patch.object(
+            type(odds_api.config.settings),
+            "odds_api_keys",
+            new_callable=PropertyMock,
+            return_value=["k1"],
+        ),
+        patch.object(odds_api.config.settings, "odds_spend_mode", "cache_only"),
+        patch.object(odds_api, "_read_cache", return_value=cache),
+        patch("app.services.calibration_service.CalibrationService") as Cal,
+        patch("app.services.sports_service.fetch_sports_news", new=AsyncMock(return_value=[])),
+        patch(
+            "app.services.kalshi_public_pulse.enrich_setup_snapshots_with_kalshi",
+            new=AsyncMock(side_effect=lambda x: x),
+        ),
+        patch("app.config.reload_settings"),
+    ):
+        Cal.return_value.get_adjustments = AsyncMock(return_value={"sports_min_opportunity": 24})
+        result = await svc.refresh_sports(replace=True, limit=40, cache_only=True)
+
+    assert result.get("ok") is True
+    assert int(result.get("today_picks_saved") or 0) >= 6
+    saved = db.insert.call_args[0][1]
+    from app.services.sports_ranking import is_today_slate
+
+    assert sum(1 for r in saved if is_today_slate(r)) >= 6
