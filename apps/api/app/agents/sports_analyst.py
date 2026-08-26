@@ -926,6 +926,111 @@ def _select_best_per_market(setups: list[SportsBetSetup]) -> list[SportsBetSetup
     return winners
 
 
+def fallback_slate_setup_from_event(
+    event: dict[str, Any],
+    *,
+    calibration: dict[str, Any] | None = None,
+) -> SportsBetSetup | None:
+    """Minimal Today card when cache lists a game but FanDuel/DK bookmakers are missing.
+
+    Remote odds cache sometimes hydrates commence_time + teams without market payloads.
+    Without this fallback, Scan scores 0 calendar-Today picks while Next 24h still fills.
+    """
+    if _is_outright_event(event):
+        return None
+    home = str(event.get("home_team") or "").strip()
+    away = str(event.get("away_team") or "").strip()
+    if not home or not away:
+        return None
+    event_start = event.get("commence_time")
+    hours = _hours_until(event_start)
+    if hours is not None and hours <= 0:
+        return None
+
+    cal = calibration or {}
+    slate_mode = bool(cal.get("slate_mode"))
+    sport_key = str(event.get("_sport_key") or "")
+    sport = str(event.get("_sport_label") or event.get("sport_title") or "Sports")
+    event_name = f"{away} @ {home}"
+    kickoff = _format_kickoff(event_start)
+    selection = home
+    odds = -110
+    implied = american_to_implied_prob(odds)
+    opportunity = 28.0 if hours is not None and hours <= 24 else 24.0
+    if slate_mode:
+        opportunity = max(opportunity, float(cal.get("sports_min_opportunity") or 18.0))
+
+    explanation = (
+        f"Track {home} (moneyline) on {event_name}, starting {kickoff}. "
+        "Tonight's game is on the odds slate — FanDuel/DraftKings lines were not in cache. "
+        "Tap Repair sports board once for live numbers."
+    )
+    line_movement = {
+        "opening_odds": odds,
+        "consensus_books": 0,
+        "edge_pct": 0.0,
+        "preferred_book": PREFERRED_BOOK_KEY,
+        "preferred_book_title": PREFERRED_BOOK_TITLE,
+        "book_odds": [],
+        "event_id": event.get("id"),
+        "slate_fallback": True,
+    }
+
+    return SportsBetSetup(
+        sport=sport,
+        event_name=event_name,
+        event_start=event_start,
+        bet_type="moneyline",
+        selection=selection,
+        odds_american=odds,
+        odds_decimal=american_to_decimal(odds),
+        expected_value=0.0,
+        line_movement=line_movement,
+        sharp_indicator="market",
+        confidence_score=42.0,
+        risk_score=48.0,
+        opportunity_score=opportunity,
+        recommendation=f"Moneyline — {selection} · {kickoff} ({sport})",
+        explanation=explanation,
+        bull_case=f"{home} is on tonight's {sport} slate — Repair once for live FanDuel/DraftKings lines.",
+        bear_case="Placeholder line only until live odds are fetched — do not bet from -110 stub pricing.",
+        invalidation="Fetch live odds or wait for bookmakers to appear in cache before staking.",
+        suggested_action=f"Repair sports board for live {selection} ML pricing",
+        scoring_snapshot={
+            "edge_pct": 0.0,
+            "implied_prob": round(implied * 100, 2),
+            "book_count": 0,
+            "book_odds": [],
+            "preferred_book": PREFERRED_BOOK_KEY,
+            "preferred_book_title": PREFERRED_BOOK_TITLE,
+            "hours_to_start": round(hours, 1) if hours is not None else None,
+            "sport_key": sport_key,
+            "sport": sport,
+            "bet_type": "moneyline",
+            "pick_origin": "atlas",
+            "atlas_presented": True,
+            "atlas_tracked": True,
+            "source": "odds_slate_fallback",
+            "event_id": event.get("id"),
+            "home_team": home,
+            "away_team": away,
+            "slate_mode": True,
+            "us_market_line": True,
+            "slate_fallback": True,
+            "pick": {
+                "bet_type": "moneyline",
+                "team_or_side": home,
+                "point": None,
+            },
+            "market_context": {
+                "expected_value": 0.0,
+                "sharp_indicator": "market",
+                "bet_type": "moneyline",
+            },
+        },
+    )
+
+
 def setup_to_row(user_id: str, setup: SportsBetSetup) -> dict[str, Any]:
     now = datetime.now(UTC).isoformat()
     return {

@@ -80,6 +80,7 @@ async def test_repair_live_seeds_when_cache_rescore_saves_nothing():
             "app.providers.sports.odds_api.odds_cache_status",
             return_value=warm,
         ),
+        patch.object(svc, "_repair_live_fetch_allowed", new=AsyncMock(return_value=True)),
         patch.object(svc, "refresh_sports", new=live),
     ):
         result = await svc.repair_sports_board(limit=40)
@@ -118,6 +119,7 @@ async def test_repair_cold_cache_live_seeds():
                 warm,
             ],
         ),
+        patch.object(svc, "_repair_live_fetch_allowed", new=AsyncMock(return_value=True)),
         patch.object(
             svc,
             "refresh_sports",
@@ -189,6 +191,94 @@ async def test_repair_keeps_ok_when_picks_saved_even_if_today_empty():
     assert "error" not in result or result.get("error") in (None, "")
     assert "stayed on Today" in (result.get("message") or "")
     assert "switch Window to Next 48h" not in (result.get("message") or "")
+
+
+@pytest.mark.asyncio
+async def test_repair_skips_live_fetch_when_credits_exhausted():
+    """Warm cache + no credits → free rescore only (Repair must not look dead)."""
+    svc = SportsRefreshService(MagicMock(), "user-1")
+    warm = {
+        "has_data": True,
+        "missing_today_slate": False,
+        "today_event_count": 10,
+        "near_term_event_count": 200,
+    }
+    with (
+        patch(
+            "app.providers.sports.odds_api.odds_cache_status",
+            return_value=warm,
+        ),
+        patch.object(svc, "_repair_live_fetch_allowed", new=AsyncMock(return_value=False)),
+        patch.object(
+            svc,
+            "refresh_sports",
+            new=AsyncMock(
+                return_value={
+                    "ok": True,
+                    "signals_created": 8,
+                    "today_picks_saved": 6,
+                    "message": "cached rescore",
+                }
+            ),
+        ) as refresh,
+    ):
+        result = await svc.repair_sports_board(limit=40)
+
+    refresh.assert_awaited_once_with(
+        replace=True,
+        limit=40,
+        force_refresh=False,
+        cache_only=True,
+        bypass_cooldown=True,
+    )
+    assert result["repair_mode"] == "cache_rescore"
+    assert result["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_repair_cold_cache_uses_cache_when_no_credits():
+    svc = SportsRefreshService(MagicMock(), "user-1")
+    warm = {
+        "has_data": True,
+        "missing_today_slate": False,
+        "today_event_count": 6,
+        "near_term_event_count": 20,
+    }
+    with (
+        patch(
+            "app.providers.sports.odds_api.odds_cache_status",
+            side_effect=[
+                {
+                    "has_data": False,
+                    "missing_today_slate": True,
+                    "today_event_count": 0,
+                    "near_term_event_count": 0,
+                },
+                warm,
+                warm,
+            ],
+        ),
+        patch.object(svc, "_repair_live_fetch_allowed", new=AsyncMock(return_value=False)),
+        patch.object(
+            svc,
+            "refresh_sports",
+            new=AsyncMock(
+                return_value={
+                    "ok": True,
+                    "signals_created": 5,
+                    "today_picks_saved": 5,
+                    "message": "cache only",
+                }
+            ),
+        ) as refresh,
+    ):
+        result = await svc.repair_sports_board(limit=40)
+
+    refresh.assert_awaited_once_with(
+        replace=True, limit=40, force_refresh=False, cache_only=True, bypass_cooldown=True
+    )
+    assert result["repair_mode"] == "cache_rescore_no_credits"
+    assert result["ok"] is True
 
 
 @pytest.mark.asyncio
