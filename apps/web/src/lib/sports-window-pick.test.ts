@@ -4,7 +4,7 @@
  * Run with: npx --yes tsx apps/web/src/lib/sports-window-pick.test.ts
  */
 import assert from "node:assert/strict";
-import { pickWindowWithResults, type SportsWindowKey } from "./sports-filters.ts";
+import { isSportsCalendarToday, pickWindowWithResults, type SportsWindowKey } from "./sports-filters.ts";
 import type { SportsSignal } from "../components/sports/SportsSignalCard.tsx";
 
 function row(hoursFromNow: number, id: string): SportsSignal {
@@ -29,6 +29,13 @@ assert.equal(
 
 const tonight = [row(3, "tonight")];
 assert.equal(pickWindowWithResults(tonight, "today"), "today");
+
+const next24Only = [row(20, "twenty")];
+assert.equal(
+  pickWindowWithResults(next24Only, "today"),
+  isSportsCalendarToday(next24Only[0] as SportsSignal) ? "today" : "next24h",
+  "near-term picks widen to next24h when Today calendar is empty",
+);
 
 const empty: SportsSignal[] = [];
 assert.equal(pickWindowWithResults(empty, "today"), "today");

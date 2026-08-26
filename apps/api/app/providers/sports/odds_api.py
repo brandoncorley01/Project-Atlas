@@ -387,21 +387,30 @@ def calendar_today_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _event_is_today_slate(event: dict[str, Any]) -> bool:
-    """Next 24 hours of games — the Sports Today window (not midnight-ET only)."""
+    """Eastern calendar day — Sports Today window (ends at midnight ET)."""
+    return _event_is_calendar_today(event)
+
+
+def _event_is_next_24h(event: dict[str, Any]) -> bool:
+    """Rolling next-24-hours window (distinct from calendar Today)."""
     hours = hours_until_event(event.get("commence_time"))
     if hours is None or hours <= 0:
         return False
     if event.get("_is_outright"):
         return False
-    return hours <= 24 or _event_is_calendar_today(event)
+    return hours <= 24
 
 
 def today_slate_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [e for e in events if _event_is_today_slate(e)]
+    return calendar_today_events(events)
+
+
+def next_24h_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [e for e in events if _event_is_next_24h(e)]
 
 
 def cache_missing_today_slate(events: list[dict[str, Any]] | None = None) -> bool:
-    """True when cached odds have no usable next-24h / Eastern-today games.
+    """True when cached odds have no Eastern-calendar-today games.
 
     A warm near-term cache of only tomorrow+ games used to make Repair skip live
     Fetch — Today stayed empty on full MLB/WNBA nights.
@@ -410,7 +419,7 @@ def cache_missing_today_slate(events: list[dict[str, Any]] | None = None) -> boo
         cache = _read_cache()
         events = list(cache.get("events") or []) if cache else []
     upcoming = filter_upcoming_events(list(events))
-    today = today_slate_events(upcoming)
+    today = calendar_today_events(upcoming)
     return len(today) == 0
 
 

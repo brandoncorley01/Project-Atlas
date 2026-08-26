@@ -56,6 +56,25 @@ def test_cache_missing_today_when_only_tomorrow_games():
     assert odds_api.cache_missing_today_slate(_tonight_mlb_cache()["events"]) is False
 
 
+def test_today_slate_is_calendar_et_not_rolling_24h():
+    """Scan Today must target Eastern calendar day — not every game in the next 24 hours."""
+    tonight = _tonight_mlb_cache()["events"]
+    tomorrow_only = _tomorrow_only_cache()["events"]
+    assert len(odds_api.today_slate_events(tonight)) == 1
+    assert len(odds_api.today_slate_events(tomorrow_only)) == 0
+    rolling = [
+        {
+            "id": "roll1",
+            "commence_time": (datetime.now(UTC) + timedelta(hours=20)).isoformat().replace("+00:00", "Z"),
+            "_sport_key": "baseball_mlb",
+            "_sport_label": "MLB",
+            "home_team": "A",
+            "away_team": "B",
+        }
+    ]
+    assert len(odds_api.next_24h_events(rolling)) == 1
+
+
 @pytest.mark.asyncio
 async def test_fetch_cooldown_bypassed_when_today_missing():
     cache = _tomorrow_only_cache(minutes_ago=3)

@@ -38,7 +38,7 @@ def sports_today(*, tz: ZoneInfo = ATLAS_SPORTS_TZ) -> date:
 
 
 def is_calendar_today(row: dict[str, Any], *, tz: ZoneInfo = ATLAS_SPORTS_TZ) -> bool:
-    """True when the game kicks off later today (Eastern calendar day)."""
+    """True when the game kicks off later today (Eastern calendar day, through midnight ET)."""
     hours = hours_to_start(row)
     if hours is None or hours <= 0:
         return False
@@ -49,13 +49,18 @@ def is_calendar_today(row: dict[str, Any], *, tz: ZoneInfo = ATLAS_SPORTS_TZ) ->
 
 
 def is_today_slate(row: dict[str, Any], *, tz: ZoneInfo = ATLAS_SPORTS_TZ) -> bool:
-    """Today's odds window: next 24 hours (tonight + early tomorrow), not only Eastern midnight."""
+    """Today's board window — Eastern calendar day only (ends at midnight ET)."""
+    return is_calendar_today(row, tz=tz)
+
+
+def is_next_24h_slate(row: dict[str, Any]) -> bool:
+    """Rolling next-24-hours window (distinct from calendar Today)."""
     hours = hours_to_start(row)
     if hours is None or hours <= 0:
         return False
     if is_futures_row(row):
         return False
-    return hours <= TODAY_HOURS or is_calendar_today(row, tz=tz)
+    return hours <= SOON_HOURS
 
 
 def is_near_term(row: dict[str, Any], *, max_hours: float = NEAR_TERM_HOURS) -> bool:
