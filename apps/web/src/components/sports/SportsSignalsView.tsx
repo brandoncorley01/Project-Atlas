@@ -25,7 +25,7 @@ import {
   type SportsSortKey,
   type SportsWindowKey,
 } from "@/lib/sports-filters";
-import { apiRequestHeaders, getApiUrl, usesBffProxy } from "@/lib/api-url";
+import { apiRequestHeaders, getApiUrl, sportsEngineErrorMessage, usesBffProxy } from "@/lib/api-url";
 import { fetchIntelligenceStatus } from "@/lib/sports-intelligence-api";
 import {
   boardAsOfFromItems,
@@ -269,6 +269,27 @@ export function SportsSignalsView({
     return data.session?.access_token ?? undefined;
   }
 
+  function todayWindowHint(): string | null {
+    const todayN = filterByWindow(itemsRef.current, "today").length;
+    const next24N = filterByWindow(itemsRef.current, "next24h").length;
+    const soonN = filterByWindow(itemsRef.current, "soon").length;
+    if (todayN > 0) return null;
+    if (next24N > 0) {
+      return `${next24N} play${next24N === 1 ? "" : "s"} in Next 24h — tap Show Next 24h.`;
+    }
+    if (soonN > 0) {
+      return `${soonN} play${soonN === 1 ? "" : "s"} in Next 48h — tap Show Next 48h.`;
+    }
+    return null;
+  }
+
+  async function reloadBoardAfterEngineError(token?: string) {
+    await loadItems(token, null, null, { replaceEmpty: false });
+    await Promise.all([loadCategories(token), refreshOddsStatus()]);
+    setWindow("today");
+    writeSportsBoardCache(itemsRef.current, { window: "today" });
+  }
+
   useEffect(() => {
     // Soft remount: show cached/SSR board immediately; refresh without clearing on empty.
     // Do NOT await resolve-outcomes here — that was wiping the board on every navigation.
@@ -412,7 +433,9 @@ export function SportsSignalsView({
           "Scan failed";
         setMessage(
           res.status === 404
-            ? "Sports scan endpoint not found — restart API with .\\scripts\\start-dev.ps1"
+            ? usesBffProxy()
+              ? "Sports scan endpoint not found — wait for Render deploy, then try again."
+              : "Sports scan endpoint not found — restart API with .\\scripts\\start-dev.ps1"
             : res.status === 503
               ? detail || "API timed out — try Rescore or restart the API."
               : detail,
@@ -514,13 +537,10 @@ export function SportsSignalsView({
         );
       }
     } catch (err) {
-      const timedOut =
-        err instanceof DOMException && (err.name === "TimeoutError" || err.name === "AbortError");
-      setMessage(
-        timedOut
-          ? "Sports scan timed out — try Rescore (0 credits) or Fetch live odds."
-          : "Backend not responding — run .\\scripts\\start-dev.ps1",
-      );
+      const detail = sportsEngineErrorMessage(err, mode === "live" ? "Fetch" : "Scan");
+      await reloadBoardAfterEngineError(token);
+      const hint = todayWindowHint();
+      setMessage(hint ? `${detail} · ${hint}` : detail);
     }
     setLoading(null);
   }
@@ -657,13 +677,10 @@ export function SportsSignalsView({
 
       // Don't chain Insight here — it used to flip the Window off Today. Repair is odds-only.
     } catch (err) {
-      const timedOut =
-        err instanceof DOMException && (err.name === "TimeoutError" || err.name === "AbortError");
-      setMessage(
-        timedOut
-          ? "Repair timed out — try again, or tap Fetch live odds once."
-          : "Backend not responding — run .\\scripts\\start-dev.ps1",
-      );
+      const detail = sportsEngineErrorMessage(err, "Repair");
+      await reloadBoardAfterEngineError(token);
+      const hint = todayWindowHint();
+      setMessage(hint ? `${detail} · ${hint}` : detail);
     }
     setLoading(null);
   }
@@ -777,12 +794,10 @@ export function SportsSignalsView({
       router.refresh();
       globalThis.dispatchEvent(new Event("atlas:dashboard-refresh"));
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "";
-      setMessage(
-        msg.includes("timeout") || msg.includes("Timeout") || msg.includes("aborted")
-          ? "Atlas Insight timed out — restart the API, then try again."
-          : "Backend not responding — run .\\scripts\\start-dev.ps1",
-      );
+      const detail = sportsEngineErrorMessage(err, "Atlas Insight");
+      await reloadBoardAfterEngineError(token);
+      const hint = todayWindowHint();
+      setMessage(hint ? `${detail} · ${hint}` : detail);
     }
     setLoading(null);
   }

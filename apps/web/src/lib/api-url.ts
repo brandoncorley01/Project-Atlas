@@ -22,3 +22,19 @@ export function apiRequestHeaders(accessToken?: string): Record<string, string> 
   }
   return headers;
 }
+
+/** User-facing copy when Scan/Repair/Fetch cannot reach the API. */
+export function sportsEngineErrorMessage(
+  err: unknown,
+  action: "Scan" | "Repair" | "Fetch" | "Atlas Insight",
+): string {
+  const timedOut =
+    err instanceof DOMException && (err.name === "TimeoutError" || err.name === "AbortError");
+  if (timedOut) {
+    return `${action} timed out — try again. Scan and Rescore stay free on cached odds.`;
+  }
+  if (usesBffProxy()) {
+    return `${action} could not reach the API — Render may be waking up. Tap ${action} again, or use Restart in the header (~60s).`;
+  }
+  return `Backend not responding — run .\\scripts\\start-dev.ps1`;
+}
