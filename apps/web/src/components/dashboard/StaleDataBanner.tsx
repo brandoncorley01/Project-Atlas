@@ -16,7 +16,7 @@ const MODULE_FIX: Record<string, { href: string; label: string; how: string }> =
   sports: {
     href: "/sports",
     label: "Sports",
-    how: "Open Sports → Repair sports board",
+    how: "Open Sports → Scan sports odds",
   },
   stocks: {
     href: "/stocks",

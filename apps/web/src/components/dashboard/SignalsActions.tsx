@@ -186,7 +186,7 @@ export function SignalsActions() {
     setMessage(null);
     setMenuOpen(false);
 
-    const sports = await postEngine("/engine/refresh-sports?cache_only=true");
+    const sports = await postEngine("/engine/refresh-sports?premium_scan=true");
     if (!sports.ok) {
       setLoading(null);
       let text = engineFailureMessage(sports.data, "Sports scan failed");
@@ -290,7 +290,7 @@ export function SignalsActions() {
               <button
                 type="button"
                 className="block w-full px-3 py-2 text-left text-xs text-muted hover:bg-surface-hover hover:text-foreground"
-                onClick={() => runScan("/engine/refresh-sports?cache_only=true", "sports")}
+                onClick={() => runScan("/engine/refresh-sports?premium_scan=true", "sports")}
               >
                 Sports only (no parlays)
               </button>
