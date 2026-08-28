@@ -587,7 +587,24 @@ def _read_cache() -> dict[str, Any] | None:
     return None
 
 
+def _read_prior_line_snapshot() -> dict[str, dict[str, int]]:
+    cache = _read_cache()
+    if not cache:
+        return {}
+    stats = cache.get("stats") or {}
+    snap = stats.get("line_snapshot")
+    return snap if isinstance(snap, dict) else {}
+
+
 def _write_cache(events: list[dict[str, Any]], stats: dict[str, Any]) -> None:
+    from app.providers.sports.line_snapshot import build_line_snapshot
+
+    try:
+        stats = dict(stats)
+        stats["line_snapshot"] = build_line_snapshot(events)
+        stats["line_snapshot_at"] = datetime.now(UTC).isoformat()
+    except Exception as exc:
+        logger.info("Odds line snapshot skipped: %s", exc)
     payload = {
         "fetched_at": datetime.now(UTC).isoformat(),
         "events": events,
@@ -871,13 +888,27 @@ def _limit_sport_keys(keys: tuple[str, ...], *, force_refresh: bool = False) -> 
         # Seasonal priority order for globals that aren't already in CORE_GLOBAL.
         seasonal = _seasonal_key_order(tuple(k for k in keys if not is_us_market_sport_key(k)))
         global_ordered = tuple(dict.fromkeys(global_core + seasonal))
+        # Fri–Sun: widen live cap so busy slates (MLB + WNBA + NCAAF) fit in one Fetch.
+        effective_cap = cap or 4
+        try:
+            from zoneinfo import ZoneInfo
+
+            weekday = datetime.now(ZoneInfo("America/New_York")).weekday()
+            # Fri–Sun: widen default 8-league Fetch — respect explicit low caps (e.g. 6).
+            if weekday in (4, 5, 6):
+                if max_sports == 0:
+                    effective_cap = max(effective_cap, 10)
+                elif max_sports >= 8:
+                    effective_cap = min(12, max(effective_cap, 10))
+        except Exception:
+            pass
         if not pinned and not us_core and not global_ordered:
             fallback = tuple(k for k in keys if k in set(PRIORITY_SPORT_KEYS))
-            return fallback[: cap or 4]
+            return fallback[: effective_cap]
         return _mix_us_and_global_keys(
             us_core,
             global_ordered,
-            cap=cap or 4,
+            cap=effective_cap,
             pinned=pinned,
         )
 

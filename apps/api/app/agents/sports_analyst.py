@@ -105,6 +105,49 @@ def _compute_edge(best_american: int, all_americans: list[int]) -> float:
     return round((median_imp - best_imp) * 100, 2)
 
 
+def _book_disagreement_edge(prices: list[int]) -> float:
+    """Micro-edge when FanDuel and DraftKings disagree (2-book scans)."""
+    if len(prices) < 2:
+        return 0.0
+    spread = max(prices) - min(prices)
+    if spread >= 10:
+        return round(min(2.8, spread * 0.07), 2)
+    return 0.0
+
+
+def _apply_prior_line_movement(
+    *,
+    line_movement: dict[str, Any],
+    odds: int,
+    prior_lines: dict[str, Any],
+    market_key: str,
+    selection: str,
+    point: float | None,
+    sharp: str | None,
+) -> str | None:
+    """Boost steam/value when cached prior line moved toward this side."""
+    from app.providers.sports.line_snapshot import line_snapshot_key
+
+    if not prior_lines:
+        return sharp
+    skey = line_snapshot_key(market_key, selection, point)
+    prior_raw = prior_lines.get(skey)
+    if prior_raw is None:
+        return sharp
+    try:
+        prior_odds = int(prior_raw)
+    except (TypeError, ValueError):
+        return sharp
+    move = odds - prior_odds
+    line_movement["prior_odds"] = prior_odds
+    line_movement["line_move_am"] = move
+    if move >= 8:
+        return "steam"
+    if move >= 4 and sharp != "steam":
+        return "value"
+    return sharp
+
+
 def _hours_until(commence_time: str | None) -> float | None:
     return hours_until_event(commence_time)
 
@@ -594,6 +637,9 @@ def analyze_event(
         edge = float(cand["edge"])
         book_odds = cand.get("book_odds") or []
         has_us_book = any(b.get("key") in US_PREFERRED_BOOK_KEYS for b in book_odds)
+        if edge < min_edge and has_us_book and cand["book_count"] <= 2:
+            am_prices = [int(b["price"]) for b in book_odds if b.get("price") is not None]
+            edge = max(edge, _book_disagreement_edge(am_prices))
         # Prefer multi-book confirmation; FanDuel/DK alone is enough for US boards.
         min_books = 1 if has_us_book else 2
         # Single-book MMA totals/spreads have edge=0 vs themselves — still list as props.
@@ -746,6 +792,16 @@ def analyze_event(
             else None,
             "event_id": event.get("id"),
         }
+        prior_lines = event.get("_prior_lines") or {}
+        sharp = _apply_prior_line_movement(
+            line_movement=line_movement,
+            odds=odds,
+            prior_lines=prior_lines,
+            market_key=market_key,
+            selection=str(cand["selection"]),
+            point=cand.get("point"),
+            sharp=sharp,
+        )
 
         snap_categories = None
         if is_fight_prop:

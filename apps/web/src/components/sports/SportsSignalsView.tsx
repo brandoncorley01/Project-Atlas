@@ -46,6 +46,19 @@ interface SportsListMeta {
   odds_age_minutes?: number | null;
 }
 
+function scanUpgradeNote(stats: unknown): string {
+  if (!stats || typeof stats !== "object") return "";
+  const s = stats as Record<string, unknown>;
+  const parts: string[] = [];
+  const tonight = Number(s.today_setups ?? s.today_event_ids_covered ?? 0);
+  if (tonight > 0) parts.push(`${tonight} Tonight`);
+  if (s.stats_from_cache) parts.push("team form");
+  const secondary = Number(s.today_secondary_markets ?? 0);
+  if (secondary > 0) parts.push(`${secondary} spread/total`);
+  if (Number(s.line_snapshot_events ?? 0) > 0) parts.push("line steam");
+  return parts.length ? ` · ${parts.join(" · ")}` : "";
+}
+
 export function SportsSignalsView({
   initialItems,
   initialCategories = [],
@@ -497,8 +510,8 @@ export function SportsSignalsView({
         apiMessage ??
           (kept
             ? "No new edges found — kept your current picks on the board"
-            : created > 0
-              ? `Found ${created} plays · ${cacheUsed ? "0 Odds credits (cached)" : `~${creditsUsed ?? "?"} Odds credits`}`
+            :             created > 0
+              ? `Found ${created} plays · ${cacheUsed ? "0 Odds credits (cached)" : `~${creditsUsed ?? "?"} Odds credits`}${scanUpgradeNote(body.stats)}`
               : "No edges met the threshold — try Rescore (0 credits). Fetch only if the cache is empty."),
       );
 

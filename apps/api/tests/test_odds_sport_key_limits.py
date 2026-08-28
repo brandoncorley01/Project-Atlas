@@ -23,6 +23,15 @@ SUMMER_AVAILABLE = (
 )
 
 
+def _weekend_live_cap(configured: int) -> int:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    if datetime.now(ZoneInfo("America/New_York")).weekday() in (4, 5, 6) and configured >= 8:
+        return min(12, max(configured, 10))
+    return configured
+
+
 def test_limit_sport_keys_pins_all_summer_essentials_under_cap():
     with (
         patch.object(odds_api.config.settings, "odds_max_sports_per_scan", 8),
@@ -32,7 +41,7 @@ def test_limit_sport_keys_pins_all_summer_essentials_under_cap():
 
     for key in odds_api.ESSENTIAL_SUMMER_KEYS:
         assert key in picked, f"missing essential {key} in {picked}"
-    assert len(picked) <= 8
+    assert len(picked) <= _weekend_live_cap(8)
 
 
 def test_limit_sport_keys_cap6_still_keeps_essentials_before_globals():

@@ -13,7 +13,7 @@ from app.agents.sports_categories import tag_pool_categories
 from app.db.supabase_client import SupabaseClient
 from app.providers.sports.odds_api import OddsApiError, fetch_all_sports_odds
 from app.providers.sports.sports_news import build_news_analysis, fetch_sports_news, match_news_to_signal
-from app.providers.sports.team_stats import build_stats_index, lookup_match_stats
+from app.providers.sports.team_stats import build_stats_index, build_stats_index_from_cache, lookup_match_stats
 from app.services.freshness import filter_upcoming_events, hours_until_event, is_sports_actionable
 from app.services.sports_ranking import (
     composite_score,
@@ -269,6 +269,72 @@ def _reinject_today_events(
     return sort_for_display(dedupe_one_side_per_market(merged))[:limit]
 
 
+def _ensure_today_secondary_markets(
+    setups: list[dict[str, Any]],
+    today_odds: list[dict[str, Any]],
+    *,
+    user_id: str,
+    stats_index: dict[str, Any],
+    calibration: dict[str, Any],
+    min_games: int = 8,
+) -> tuple[list[dict[str, Any]], int]:
+    """On busy Tonight slates, add spread or total when only moneyline exists (0 credits)."""
+    if len(today_odds) < min_games:
+        return setups, 0
+
+    types_by_event: dict[str, set[str]] = {}
+    for row in setups:
+        if not is_today_slate(row):
+            continue
+        eid = _setup_event_id(row)
+        if not eid:
+            continue
+        types_by_event.setdefault(eid, set()).add(str(row.get("bet_type") or "").lower())
+
+    soft_cal = dict(calibration)
+    soft_cal["slate_mode"] = True
+    soft_cal["sports_min_edge_pct"] = 0.0
+    soft_cal["sports_min_opportunity"] = 16.0
+    added: list[dict[str, Any]] = []
+
+    for event in today_odds:
+        eid = str(event.get("id") or "")
+        if not eid:
+            continue
+        covered = types_by_event.get(eid, set())
+        if "moneyline" not in covered:
+            continue
+        if "spread" in covered and "total" in covered:
+            continue
+        try:
+            match_stats = lookup_match_stats(event, stats_index) if stats_index else None
+            scored = analyze_event(event, match_stats=match_stats, calibration=soft_cal)
+            secondary = [s for s in scored if str(s.bet_type or "") in {"spread", "total"}]
+            if not secondary:
+                continue
+            secondary.sort(key=lambda s: -float(s.opportunity_score or 0))
+            pick = None
+            if "spread" not in covered:
+                pick = next((s for s in secondary if s.bet_type == "spread"), None)
+            if pick is None and "total" not in covered:
+                pick = next((s for s in secondary if s.bet_type == "total"), None)
+            if pick is not None:
+                added.append(setup_to_row(user_id, pick))
+        except Exception as exc:
+            logger.info("Sports today secondary market skip: %s", exc)
+
+    if not added:
+        return setups, 0
+
+    by_key: dict[str, dict[str, Any]] = {}
+    for row in setups + added:
+        key = market_family_key(row)
+        prev = by_key.get(key)
+        if prev is None or composite_score(row) > composite_score(prev):
+            by_key[key] = row
+    return list(by_key.values()), len(added)
+
+
 def _select_diverse_setups(setups: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
     """Fill a large US+global board from cache-scored edges — no extra Odds credits."""
     if not setups:
@@ -521,6 +587,14 @@ class SportsRefreshService:
             fetch_stats["events_before_filter"] = raw_count
             fetch_stats["events_upcoming"] = len(events)
             fetch_stats["events_dropped_past"] = raw_count - len(events)
+            fetch_stats["scan_version"] = 2
+            from app.providers.sports.line_snapshot import attach_prior_lines
+            from app.providers.sports.odds_api import _read_prior_line_snapshot
+
+            prior_lines = _read_prior_line_snapshot()
+            events = attach_prior_lines(events, prior_lines)
+            if prior_lines:
+                fetch_stats["line_snapshot_events"] = len(prior_lines)
         except OddsApiError as exc:
             return {
                 "signals_created": 0,
@@ -636,8 +710,13 @@ class SportsRefreshService:
             except Exception as exc:
                 logger.warning("Team stats skipped (non-fatal): %s", exc)
                 stats_index = {}
-        elif not used_cache and spend_locked:
-            fetch_stats["scores_skipped"] = "spend_locked"
+        else:
+            stats_index = build_stats_index_from_cache(events)
+            if stats_index:
+                fetch_stats["stats_from_cache"] = True
+                fetch_stats["stats_sports_covered"] = len(stats_index)
+            elif not used_cache and spend_locked:
+                fetch_stats["scores_skipped"] = "spend_locked"
 
         from app.services.calibration_service import CalibrationService
 
@@ -758,6 +837,19 @@ class SportsRefreshService:
                 )
             except Exception as exc:
                 logger.warning("Sports today event coverage skipped (non-fatal): %s", exc)
+
+            try:
+                setups, secondary_n = _ensure_today_secondary_markets(
+                    setups,
+                    today_odds,
+                    user_id=self.user_id,
+                    stats_index=stats_index,
+                    calibration=calibration,
+                )
+                if secondary_n > 0:
+                    fetch_stats["today_secondary_markets"] = secondary_n
+            except Exception as exc:
+                logger.warning("Sports today secondary markets skipped (non-fatal): %s", exc)
 
         setups.sort(key=composite_score, reverse=True)
 
