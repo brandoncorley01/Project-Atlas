@@ -560,12 +560,14 @@ class SportsRefreshService:
         force_refresh: bool = False,
         cache_only: bool = False,
         bypass_cooldown: bool = False,
+        sport_keys: tuple[str, ...] | None = None,
     ) -> dict[str, Any]:
         from app.config import reload_settings
 
         reload_settings()
         try:
             events, fetch_stats = await fetch_all_sports_odds(
+                sport_keys=sport_keys,
                 force_refresh=force_refresh,
                 cache_only=cache_only,
                 bypass_cooldown=bypass_cooldown,
@@ -1266,38 +1268,33 @@ class SportsRefreshService:
         if total is not None and int(total) <= 0:
             return False
         estimate = estimate_live_scan_credits()
-        reserve = max(0, int(getattr(config.settings, "odds_credit_reserve", 0) or 0))
+        reserve = max(0, int(getattr(config.settings, "odds_min_credits_reserve", 0) or 0))
         if total is not None and int(total) < estimate + reserve:
             return False
         return True
 
-    async def repair_sports_board(
+    async def premium_scan_sports(
         self,
         *,
         replace: bool = True,
         limit: int = MAX_SIGNALS,
+        repair: bool = False,
     ) -> dict[str, Any]:
-        """Recover Today's sports board.
+        """Premium scan: free cache rescore, then targeted live seed when slate is incomplete."""
+        from app.providers.sports.odds_api import (
+            league_keys_missing_today_slate,
+            odds_cache_status,
+            slate_needs_live_seed,
+        )
 
-        Prefer a free cache rescore when Tonight's odds are already warm — that is
-        the common post-Fetch failure mode (cache seeded, board still 0 plays).
-        Only live-seed when Today/near-term cache is missing, or cache rescore
-        still leaves the board empty.
-        """
-        from app.providers.sports.odds_api import odds_cache_status
+        status_before = odds_cache_status()
+        has_cache = bool(status_before.get("has_data"))
+        cache_was_cold = not has_cache
+        missing_today_before = int(status_before.get("today_event_count") or 0) == 0 or bool(
+            status_before.get("missing_today_slate")
+        )
 
-        status = odds_cache_status()
-        today_events = int(status.get("today_event_count") or 0)
-        near_events = int(status.get("near_term_event_count") or 0)
-        cache_was_cold = not bool(status.get("has_data"))
-        missing_today_before = today_events == 0 or bool(status.get("missing_today_slate"))
-        cache_warm_enough = bool(status.get("has_data")) and (today_events > 0 or near_events > 0)
-
-        result: dict[str, Any]
-        can_live_seed = await self._repair_live_fetch_allowed()
-
-        if cache_warm_enough and not missing_today_before:
-            # Warm Today slate already on disk/remote — fill the board without spending.
+        if has_cache:
             result = await self.refresh_sports(
                 replace=replace,
                 limit=limit,
@@ -1305,64 +1302,34 @@ class SportsRefreshService:
                 cache_only=True,
                 bypass_cooldown=True,
             )
-            result["repair_mode"] = "cache_rescore"
+            result["scan_mode"] = "repair" if repair else "premium"
+            result["premium_phase"] = "cache_rescore"
+            if repair:
+                result["repair_mode"] = "cache_rescore"
             result["cache_was_cold"] = cache_was_cold
             result["missing_today_before"] = missing_today_before
-            created = int(result.get("signals_created") or 0)
-            kept = bool(result.get("signals_kept"))
-            if created == 0 and not kept and can_live_seed:
-                # Cache warm but scoring/save still empty — one live Fetch, then rescore again.
-                live = await self.refresh_sports(
-                    replace=replace,
-                    limit=limit,
-                    force_refresh=True,
-                    cache_only=False,
-                    bypass_cooldown=True,
-                )
-                live_created = int(live.get("signals_created") or 0)
-                if live_created > 0 or bool(live.get("ok")):
-                    result = live
-                    result["repair_mode"] = "live_seed_after_cache"
-                else:
-                    result = live
-                    result["repair_mode"] = "live_seed_after_cache"
+
+            needs_live = slate_needs_live_seed(status_before, result)
+            if not needs_live:
                 result["cache_was_cold"] = cache_was_cold
                 result["missing_today_before"] = missing_today_before
-                created = int(result.get("signals_created") or 0)
-                kept = bool(result.get("signals_kept"))
-                post = odds_cache_status()
-                post_today = int(post.get("today_event_count") or 0)
-                post_near = int(post.get("near_term_event_count") or 0)
-                if created == 0 and not kept and bool(post.get("has_data")) and (
-                    post_today > 0 or post_near > 0
-                ):
-                    fallback = await self.refresh_sports(
-                        replace=replace,
-                        limit=limit,
-                        force_refresh=False,
-                        cache_only=True,
-                        bypass_cooldown=True,
-                    )
-                    if int(fallback.get("signals_created") or 0) > 0 or bool(fallback.get("ok")):
-                        result = fallback
-                        result["repair_mode"] = "cache_rescore_after_live"
-                        result["live_seed_attempted"] = True
-                        result["cache_was_cold"] = cache_was_cold
-                        result["missing_today_before"] = missing_today_before
-                        created = int(result.get("signals_created") or 0)
-                        kept = bool(result.get("signals_kept"))
+                return result
         else:
-            # Cold / missing Today — live seed first when credits allow.
-            if can_live_seed:
-                result = await self.refresh_sports(
-                    replace=replace,
-                    limit=limit,
-                    force_refresh=True,
-                    cache_only=False,
-                    bypass_cooldown=True,
-                )
-                result["repair_mode"] = "live_seed"
-            else:
+            result = {
+                "ok": False,
+                "signals_created": 0,
+                "today_still_empty": True,
+                "scan_mode": "repair" if repair else "premium",
+                "premium_phase": "cold_cache",
+                "cache_was_cold": cache_was_cold,
+                "missing_today_before": missing_today_before,
+            }
+            needs_live = True
+
+        auto_live = bool(getattr(config.settings, "odds_premium_scan_auto_live", True))
+        can_live = await self._repair_live_fetch_allowed()
+        if not auto_live or not can_live:
+            if not has_cache:
                 result = await self.refresh_sports(
                     replace=replace,
                     limit=limit,
@@ -1370,33 +1337,108 @@ class SportsRefreshService:
                     cache_only=True,
                     bypass_cooldown=True,
                 )
-                result["repair_mode"] = "cache_rescore_no_credits"
+                result["scan_mode"] = "repair" if repair else "premium"
+                result["premium_phase"] = "cache_rescore_no_credits"
+            result["premium_live_skipped"] = True
+            result["premium_needs_live"] = True
+            if repair:
+                if not can_live:
+                    result["repair_mode"] = "cache_rescore_no_credits"
+                elif has_cache and int(result.get("signals_created") or 0) > 0:
+                    result["repair_mode"] = "cache_rescore"
             result["cache_was_cold"] = cache_was_cold
             result["missing_today_before"] = missing_today_before
-            created = int(result.get("signals_created") or 0)
-            kept = bool(result.get("signals_kept"))
+            return result
 
-            post = odds_cache_status()
-            post_today = int(post.get("today_event_count") or 0)
-            post_near = int(post.get("near_term_event_count") or 0)
-            cache_warm_now = bool(post.get("has_data")) and (post_today > 0 or post_near > 0)
-            if created == 0 and not kept and cache_warm_now:
-                fallback = await self.refresh_sports(
-                    replace=replace,
-                    limit=limit,
-                    force_refresh=False,
-                    cache_only=True,
-                    bypass_cooldown=True,
-                )
-                fb_created = int(fallback.get("signals_created") or 0)
-                if fb_created > 0 or bool(fallback.get("ok")):
-                    result = fallback
-                    result["repair_mode"] = "cache_rescore_after_live"
-                    result["live_seed_attempted"] = True
-                    result["cache_was_cold"] = cache_was_cold
-                    result["missing_today_before"] = missing_today_before
-                    created = fb_created
-                    kept = bool(fallback.get("signals_kept"))
+        missing_keys = league_keys_missing_today_slate(status_before)
+        result["premium_missing_leagues"] = list(missing_keys)
+
+        live_kwargs: dict[str, Any] = {
+            "replace": replace,
+            "limit": limit,
+            "force_refresh": True,
+            "cache_only": False,
+            "bypass_cooldown": True,
+        }
+        if missing_keys:
+            live_kwargs["sport_keys"] = missing_keys
+
+        live = await self.refresh_sports(**live_kwargs)
+        live_stats = live.get("stats") or {}
+        credits_used = int(live_stats.get("credits_used") or live.get("credits_used") or 0)
+        live_pulled = credits_used > 0 or bool(live_stats.get("sports_scanned"))
+        live_created = int(live.get("signals_created") or 0)
+
+        if live_pulled or live_created > 0 or bool(live.get("ok")):
+            final = await self.refresh_sports(
+                replace=replace,
+                limit=limit,
+                force_refresh=False,
+                cache_only=True,
+                bypass_cooldown=True,
+            )
+            final["scan_mode"] = result["scan_mode"]
+            final["premium_phase"] = "live_seed_rescore"
+            final["premium_live_seed"] = True
+            final["premium_missing_leagues"] = list(missing_keys)
+            final["credits_used"] = credits_used
+            final["cache_was_cold"] = cache_was_cold
+            final["missing_today_before"] = missing_today_before
+            if repair:
+                cold = not bool(status_before.get("has_data"))
+                missing_before = bool(status_before.get("missing_today_slate")) or int(
+                    status_before.get("today_event_count") or 0
+                ) == 0
+                if cold or missing_before:
+                    final["repair_mode"] = "live_seed"
+                elif missing_keys:
+                    final["repair_mode"] = "premium_live_seed"
+                else:
+                    final["repair_mode"] = "live_seed_after_cache"
+            return final
+
+        if has_cache or int(status_before.get("near_term_event_count") or 0) > 0:
+            fallback = await self.refresh_sports(
+                replace=replace,
+                limit=limit,
+                force_refresh=False,
+                cache_only=True,
+                bypass_cooldown=True,
+            )
+            if int(fallback.get("signals_created") or 0) > 0 or bool(fallback.get("ok")):
+                fallback["scan_mode"] = result["scan_mode"]
+                fallback["premium_phase"] = "cache_rescore_after_live"
+                fallback["premium_missing_leagues"] = list(missing_keys)
+                fallback["live_seed_attempted"] = True
+                fallback["cache_was_cold"] = cache_was_cold
+                fallback["missing_today_before"] = missing_today_before
+                if repair:
+                    fallback["repair_mode"] = "cache_rescore_after_live"
+                return fallback
+
+        live["scan_mode"] = result["scan_mode"]
+        live["premium_phase"] = "live_seed_failed"
+        live["premium_missing_leagues"] = list(missing_keys)
+        live["cache_was_cold"] = cache_was_cold
+        live["missing_today_before"] = missing_today_before
+        if repair:
+            live["repair_mode"] = "live_seed"
+        return live
+
+    async def repair_sports_board(
+        self,
+        *,
+        replace: bool = True,
+        limit: int = MAX_SIGNALS,
+    ) -> dict[str, Any]:
+        """Recover Today's sports board via premium two-phase scan (cache → live seed)."""
+        from app.providers.sports.odds_api import odds_cache_status
+
+        result = await self.premium_scan_sports(replace=replace, limit=limit, repair=True)
+        cache_was_cold = bool(result.get("cache_was_cold"))
+        missing_today_before = bool(result.get("missing_today_before"))
+        created = int(result.get("signals_created") or 0)
+        kept = bool(result.get("signals_kept"))
 
         post = odds_cache_status()
         today_saved = int(post.get("today_event_count") or 0)

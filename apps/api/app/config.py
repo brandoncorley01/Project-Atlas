@@ -80,6 +80,10 @@ class Settings(BaseSettings):
     # normal = previous behavior.
     odds_spend_mode: str = "cache_only"
 
+    # Premium Scan / Repair: after a free cache rescore, auto live-seed when Tonight's
+    # slate is missing or essentials are incomplete (targeted league fetch when possible).
+    odds_premium_scan_auto_live: bool = True
+
     environment: str = "development"
     default_user_id: str = ""
 

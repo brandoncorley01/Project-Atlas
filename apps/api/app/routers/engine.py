@@ -69,10 +69,13 @@ async def refresh_sports(
     limit: int = 120,
     force_refresh: bool = False,
     cache_only: bool = False,
+    premium_scan: bool = False,
 ) -> dict:
     """Fetch odds from The Odds API and rank +EV moneyline, spread, total, and futures plays.
 
-    - Scan with cache_only=true: never spend Odds credits; uses disk or durable Supabase cache.
+    - Scan with premium_scan=true: free cache rescore, then targeted live seed when Tonight
+      is missing or essentials are incomplete (uses credits only when needed).
+    - Scan with cache_only=true / Rescore: never spend Odds credits.
     - force_refresh=true (Fetch live odds): spend Odds credits for US-core books, then Atlas Insight.
     - Prefer POST /engine/repair-sports when the board is empty after a redeploy.
     """
@@ -80,16 +83,24 @@ async def refresh_sports(
 
     if force_refresh and cache_only:
         raise HTTPException(status_code=400, detail="force_refresh and cache_only cannot both be true")
+    if premium_scan and (force_refresh or cache_only):
+        raise HTTPException(
+            status_code=400,
+            detail="premium_scan cannot be combined with force_refresh or cache_only",
+        )
 
     from app.db.service_client import get_write_db
 
     service = SportsRefreshService(get_write_db(token), user_id)
-    result = await service.refresh_sports(
-        replace=replace,
-        limit=limit,
-        force_refresh=force_refresh,
-        cache_only=cache_only,
-    )
+    if premium_scan:
+        result = await service.premium_scan_sports(replace=replace, limit=limit)
+    else:
+        result = await service.refresh_sports(
+            replace=replace,
+            limit=limit,
+            force_refresh=force_refresh,
+            cache_only=cache_only,
+        )
     set_last_job("refresh_sports")
     status = "error" if result.get("ok") is False else "ok"
     return {"status": status, "module": "sports", **result}

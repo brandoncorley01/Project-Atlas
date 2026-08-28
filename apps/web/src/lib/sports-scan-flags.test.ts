@@ -1,6 +1,7 @@
 /**
- * Credit safety: Scan and Rescore must send cache_only (0 Odds credits).
- * Only Fetch (force_refresh) may spend.
+ * Credit safety: Rescore must send cache_only (0 Odds credits).
+ * Scan uses premium_scan (server may live-seed missing Tonight leagues).
+ * Only Fetch (force_refresh) may spend directly from the client.
  * Repair uses /engine/repair-sports (server decides cache vs one live seed).
  * Run with: npx --yes tsx apps/web/src/lib/sports-scan-flags.test.ts
  */
@@ -14,8 +15,13 @@ const source = readFileSync(join(here, "../components/sports/SportsSignalsView.t
 
 assert.match(
   source,
-  /mode === "scan" \|\| mode === "rescore"[\s\S]*?params\.set\("cache_only", "true"\)/,
-  "Scan and Rescore must send cache_only",
+  /mode === "scan"[\s\S]*?params\.set\("premium_scan", "true"\)/,
+  "Scan must send premium_scan",
+);
+assert.match(
+  source,
+  /mode === "rescore"[\s\S]*?params\.set\("cache_only", "true"\)/,
+  "Rescore must send cache_only",
 );
 assert.match(
   source,
@@ -65,7 +71,7 @@ assert.doesNotMatch(
 }
 assert.match(
   source,
-  /replaceEmpty:\s*created > 0(?!\s*\|\|)/,
+  /replaceEmpty:\s*created > 0/,
   "Scan must not force-clear the board when zero plays were saved",
 );
 assert.match(

@@ -417,11 +417,10 @@ export function SportsSignalsView({
     const apiUrl = getApiUrl();
     const params = new URLSearchParams();
     if (mode === "live") params.set("force_refresh", "true");
-    // Scan + Rescore are always cache-only (0 Odds credits).
-    // Only Fetch live odds spends credits — never auto-seed from Scan.
-    if (mode === "scan" || mode === "rescore") {
-      params.set("cache_only", "true");
-    }
+    // Premium Scan: server rescores cache first, then live-seeds missing Tonight leagues.
+    // Rescore stays cache-only (0 Odds credits).
+    if (mode === "scan") params.set("premium_scan", "true");
+    if (mode === "rescore") params.set("cache_only", "true");
     const query = params.toString() ? `?${params}` : "";
     try {
       if (mode === "live") {
@@ -531,6 +530,21 @@ export function SportsSignalsView({
       const next24N = filterByWindow(itemsRef.current, "next24h").length;
       const soonN = filterByWindow(itemsRef.current, "soon").length;
       const todayStillEmpty = Boolean(body.today_still_empty) || todayN === 0;
+      const premiumNeedsRepair =
+        mode === "scan" &&
+        todayStillEmpty &&
+        (Boolean(body.premium_needs_live) || Boolean(body.premium_live_skipped)) &&
+        !Boolean(body.premium_live_seed) &&
+        !repairBlocked;
+      if (premiumNeedsRepair) {
+        setLoading(null);
+        setMessage(
+          (apiMessage ? `${apiMessage} · ` : "") +
+            "Tonight's slate still missing — running Repair to live-seed missing leagues.",
+        );
+        await repairSportsBoard({ skipConfirm: true });
+        return;
+      }
       if (todayStillEmpty && next24N > 0) {
         setMessage(
           (apiMessage ? `${apiMessage} · ` : "") +

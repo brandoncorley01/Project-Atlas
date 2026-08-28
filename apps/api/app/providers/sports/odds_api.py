@@ -430,6 +430,99 @@ def _essential_keys_for_month() -> frozenset[str]:
     return ESSENTIAL_WINTER_KEYS
 
 
+def _essential_keys_for_today() -> frozenset[str]:
+    """Day-aware essentials — NCAAF on weekends, busy-night combat on Fri–Sun."""
+    base = set(_essential_keys_for_month())
+    try:
+        from zoneinfo import ZoneInfo
+
+        weekday = datetime.now(ZoneInfo("America/New_York")).weekday()
+    except Exception:
+        weekday = datetime.now(UTC).weekday()
+    if weekday in (5, 6):
+        base.add("americanfootball_ncaaf")
+    if weekday in (4, 5, 6):
+        base.update({"basketball_ncaab", "mma_mixed_martial_arts"})
+    return frozenset(base)
+
+
+def league_keys_missing_today_slate(
+    status: dict[str, Any] | None = None,
+) -> tuple[str, ...]:
+    """League keys expected Tonight that are absent or empty in the odds cache."""
+    cache = _read_cache()
+    raw = list(cache.get("events") or []) if cache else []
+    upcoming = filter_upcoming_events(raw) if raw else []
+    near_term, near_meta = _near_term_cache_events(upcoming) if upcoming else ([], {})
+    near_keys = frozenset(near_meta.get("near_term_league_keys") or [])
+    today_events = today_slate_events(upcoming) if upcoming else []
+    today_keys = frozenset(
+        str(e.get("_sport_key") or e.get("sport_key") or "")
+        for e in today_events
+        if e.get("_sport_key") or e.get("sport_key")
+    )
+
+    essentials = _essential_keys_for_today()
+    missing: list[str] = []
+    for key in _seasonal_key_order(tuple(essentials)):
+        if key not in near_keys:
+            missing.append(key)
+        elif key not in today_keys and len(today_events) < 6:
+            # Partial Tonight — league in cache but no calendar-today games yet.
+            missing.append(key)
+
+    if status is None and cache:
+        status = odds_cache_status()
+    if status and bool(status.get("missing_today_slate")) and not today_events:
+        # Tomorrow-only cache: widen beyond essentials toward priority fill.
+        preferred = SUMMER_PRIORITY_KEYS if datetime.now(UTC).month in (4, 5, 6, 7, 8, 9) else WINTER_PRIORITY_KEYS
+        for key in _seasonal_key_order(tuple(preferred[:12])):
+            if key not in near_keys and key not in missing:
+                missing.append(key)
+
+    return tuple(dict.fromkeys(missing))[:8]
+
+
+def slate_needs_live_seed(
+    status: dict[str, Any] | None = None,
+    scan_result: dict[str, Any] | None = None,
+) -> bool:
+    """True when a premium Scan/Repair should spend credits on a targeted live seed."""
+    status = status or odds_cache_status()
+    has_data = bool(status.get("has_data"))
+    near_count = int(status.get("near_term_event_count") or 0)
+    today_count = int(status.get("today_event_count") or 0)
+    missing_today = bool(status.get("missing_today_slate"))
+    needs_refresh = bool(status.get("cache_needs_live_refresh"))
+
+    if scan_result is not None:
+        created = int(scan_result.get("signals_created") or 0)
+        kept = bool(scan_result.get("signals_kept"))
+        today_picks = int(scan_result.get("today_picks_saved") or 0)
+        if created > 0 or today_picks > 0 or kept:
+            return False
+        today_still_empty = bool(scan_result.get("today_still_empty"))
+        if created == 0 and not kept and today_count > 0:
+            return True
+        if today_still_empty and today_count == 0:
+            return True
+        if today_still_empty and today_picks == 0 and today_count > 0:
+            return needs_refresh
+
+    if not has_data or near_count == 0:
+        return True
+    if missing_today or today_count == 0:
+        return True
+
+    missing_leagues = league_keys_missing_today_slate(status)
+    if missing_leagues:
+        return True
+
+    if needs_refresh and today_count < 4:
+        return True
+    return False
+
+
 def _cache_needs_live_refresh(near_term_keys: frozenset[str]) -> bool:
     """True when cached odds omit enough in-season leagues (e.g. MLB present, WNBA+MLS gone).
 
@@ -1346,10 +1439,9 @@ async def fetch_all_sports_odds(
     incomplete_essentials = bool(near_cached) and _cache_needs_live_refresh(near_keys)
     missing_today = cache_missing_today_slate(raw_cached)
     # Incomplete essentials OR an empty Today slate must be allowed to live-Fetch —
-    # cooldown must not trap Repair/Fetch on a warm-looking cache with no tonight games.
-    # Only bypass for missing Today — incomplete essentials with tonight games still
-    # respect cooldown (Today board already has something to show).
-    allow_live_despite_cooldown = missing_today or bypass_cooldown
+    # cooldown must not trap Repair/Fetch/Premium Scan on a warm-looking cache with
+    # no tonight games or missing leagues (e.g. MLB present, NCAAF/MMA absent).
+    allow_live_despite_cooldown = missing_today or incomplete_essentials or bypass_cooldown
 
     # CREDIT SAFETY (hard rules):
     # - Rescore (cache_only) never spends.
@@ -1492,8 +1584,9 @@ async def fetch_all_sports_odds(
             return events, stats
     elif force_refresh and allow_live_despite_cooldown:
         logger.info(
-            "Odds Fetch bypassing cooldown (missing_today=%s)",
+            "Odds Fetch bypassing cooldown (missing_today=%s incomplete_essentials=%s)",
             missing_today,
+            incomplete_essentials,
         )
 
     # Serve fresh cache without spending any credits (non-spend-locked modes).
