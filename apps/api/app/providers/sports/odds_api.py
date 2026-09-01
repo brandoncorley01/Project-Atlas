@@ -500,10 +500,15 @@ def slate_needs_live_seed(
         kept = bool(scan_result.get("signals_kept"))
         today_picks = int(scan_result.get("today_picks_saved") or 0)
         today_still_empty = bool(scan_result.get("today_still_empty"))
-        if today_picks > 0 or kept:
-            return False
+        # Empty Tonight must win over "kept" Next 24h / other-window picks.
         if today_still_empty:
             return True
+        if today_picks > 0:
+            return False
+        if today_picks == 0 and today_count > 0 and not missing_today:
+            return True
+        if kept:
+            return False
         created = int(scan_result.get("signals_created") or 0)
         if created > 0:
             return False

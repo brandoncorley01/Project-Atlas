@@ -936,6 +936,25 @@ class SportsRefreshService:
 
         setups = sort_for_display([row for row in setups if is_sports_actionable(row)])
 
+        # Actionable filter can drop metadata-only Tonight cards — re-inject one per game.
+        if today_odds and sum(1 for r in setups if is_today_slate(r)) == 0:
+            try:
+                setups = _ensure_today_event_coverage(
+                    setups,
+                    today_odds,
+                    user_id=self.user_id,
+                    stats_index=stats_index,
+                    calibration=calibration,
+                )
+                setups = sort_for_display(
+                    [row for row in setups if is_sports_actionable(row)]
+                )
+                fetch_stats["today_fallback_reinjected"] = sum(
+                    1 for r in setups if is_today_slate(r)
+                )
+            except Exception as exc:
+                logger.warning("Sports today fallback reinject skipped: %s", exc)
+
         try:
             from app.services.kalshi_public_pulse import enrich_setup_snapshots_with_kalshi
 
@@ -982,9 +1001,14 @@ class SportsRefreshService:
                     "Sports scan found no plays. Tap Repair sports board or Fetch live odds once "
                     "to seed the odds cache, then Scan again."
                 )
+            tonight_in_cache = bool(today_odds) or int(
+                fetch_stats.get("today_events") or fetch_stats.get("today_event_count") or 0
+            ) > 0
             return {
                 "signals_created": 0,
                 "signals_kept": has_existing,
+                "today_picks_saved": 0,
+                "today_still_empty": tonight_in_cache,
                 "contradictions_purged": purged,
                 "events_scanned": len(events),
                 "stats": fetch_stats,
@@ -1316,6 +1340,12 @@ class SportsRefreshService:
                 result["repair_mode"] = "cache_rescore"
             result["cache_was_cold"] = cache_was_cold
             result["missing_today_before"] = missing_today_before
+            today_picks = int(result.get("today_picks_saved") or 0)
+            if "today_still_empty" not in result:
+                cache_today = int(status_before.get("today_event_count") or 0)
+                result["today_still_empty"] = today_picks == 0 and cache_today > 0
+            elif today_picks == 0 and int(status_before.get("today_event_count") or 0) > 0:
+                result["today_still_empty"] = True
 
             needs_live = slate_needs_live_seed(status_before, result)
             if not needs_live:

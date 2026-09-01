@@ -50,6 +50,14 @@ def is_sports_actionable(row: dict[str, Any]) -> bool:
     """True when the game hasn't started — used only for new scans, not listing saved picks."""
     hours = hours_until_event(row.get("event_start"))
     if hours is None:
+        snap = row.get("scoring_snapshot") or {}
+        if snap.get("slate_fallback"):
+            snap_hours = snap.get("hours_to_start")
+            if snap_hours is not None:
+                try:
+                    return float(snap_hours) > 0
+                except (TypeError, ValueError):
+                    pass
         return False
     return hours > 0
 
