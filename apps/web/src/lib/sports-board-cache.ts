@@ -8,12 +8,26 @@ import { dedupeOneSidePerMarket, type SportsWindowKey } from "@/lib/sports-filte
 
 const STORAGE_KEY = "atlas.sports.board.v1";
 
+export type SportsBoardActionKind = "scan" | "live" | "rescore" | "openai";
+
+/** Legacy sessionStorage may still hold removed "repair" — map to Scan. */
+export function normalizeBoardActionKind(
+  kind: string | null | undefined,
+): SportsBoardActionKind | null {
+  if (!kind) return null;
+  if (kind === "repair") return "scan";
+  if (kind === "scan" || kind === "live" || kind === "rescore" || kind === "openai") {
+    return kind;
+  }
+  return null;
+}
+
 export interface SportsBoardCache {
   items: SportsSignal[];
   savedAt: string;
   /** Last successful Scan / Fetch / Rescore / Atlas Insight from this browser. */
   lastActionAt?: string | null;
-  lastActionKind?: "scan" | "live" | "rescore" | "openai" | "repair" | null;
+  lastActionKind?: SportsBoardActionKind | null;
   /** Last Window dropdown value — Repair/Scan must not reset this to Next 48h. */
   window?: SportsWindowKey | null;
   /** Max pick data_as_of from the board when saved. */
@@ -51,6 +65,7 @@ export function readSportsBoardCache(): SportsBoardCache | null {
     return {
       ...parsed,
       items: dedupeOneSidePerMarket(parsed.items),
+      lastActionKind: normalizeBoardActionKind(parsed.lastActionKind),
     };
   } catch {
     return null;
@@ -67,7 +82,9 @@ export function writeSportsBoardCache(
     items: dedupeOneSidePerMarket(items),
     savedAt: new Date().toISOString(),
     lastActionAt: extras?.lastActionAt ?? prev?.lastActionAt ?? null,
-    lastActionKind: extras?.lastActionKind ?? prev?.lastActionKind ?? null,
+    lastActionKind: normalizeBoardActionKind(
+      extras?.lastActionKind ?? prev?.lastActionKind ?? null,
+    ),
     window: extras?.window ?? prev?.window ?? null,
     boardAsOf: extras?.boardAsOf ?? boardAsOfFromItems(items) ?? prev?.boardAsOf ?? null,
     oddsFetchedAt: extras?.oddsFetchedAt ?? prev?.oddsFetchedAt ?? null,
@@ -79,9 +96,7 @@ export function writeSportsBoardCache(
   }
 }
 
-export function markSportsBoardAction(
-  kind: NonNullable<SportsBoardCache["lastActionKind"]>,
-): void {
+export function markSportsBoardAction(kind: SportsBoardActionKind): void {
   if (!canUseStorage()) return;
   const prev = readSportsBoardCache();
   writeSportsBoardCache(prev?.items ?? [], {
