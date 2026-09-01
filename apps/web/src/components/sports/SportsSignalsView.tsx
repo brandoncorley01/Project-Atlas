@@ -31,8 +31,10 @@ import {
   boardAsOfFromItems,
   hydrateSportsItems,
   markSportsBoardAction,
+  normalizeBoardActionKind,
   readSportsBoardCache,
   writeSportsBoardCache,
+  type SportsBoardActionKind,
 } from "@/lib/sports-board-cache";
 
 interface SportsSignalsViewProps {
@@ -85,9 +87,9 @@ export function SportsSignalsView({
   const [lastActionAt, setLastActionAt] = useState<string | null>(
     () => readSportsBoardCache()?.lastActionAt ?? null,
   );
-  const [lastActionKind, setLastActionKind] = useState<
-    "scan" | "live" | "rescore" | "openai" | null
-  >(() => readSportsBoardCache()?.lastActionKind ?? null);
+  const [lastActionKind, setLastActionKind] = useState<SportsBoardActionKind | null>(() =>
+    normalizeBoardActionKind(readSportsBoardCache()?.lastActionKind),
+  );
   const [oddsFetchedAt, setOddsFetchedAt] = useState<string | null>(
     () => readSportsBoardCache()?.oddsFetchedAt ?? null,
   );
@@ -338,7 +340,7 @@ export function SportsSignalsView({
     writeSportsBoardCache(readSportsBoardCache()?.items ?? [], { oddsFetchedAt: fetched });
   }, [oddsStatus?.cache_fetched_at]);
 
-  function rememberAction(kind: "scan" | "live" | "rescore" | "openai") {
+  function rememberAction(kind: SportsBoardActionKind) {
     const at = new Date().toISOString();
     setLastActionAt(at);
     setLastActionKind(kind);

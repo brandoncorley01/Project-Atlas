@@ -6,6 +6,7 @@ import {
   boardAsOfFromItems,
   formatRelativeAgo,
   hydrateSportsItems,
+  normalizeBoardActionKind,
 } from "./sports-board-cache.ts";
 import type { SportsSignal } from "../components/sports/SportsSignalCard.tsx";
 
@@ -40,5 +41,9 @@ assert(hydrated.length === 1 && hydrated[0].id === "x", "hydrate should keep ser
 
 const emptyHydrate = hydrateSportsItems([]);
 assert(Array.isArray(emptyHydrate), "empty hydrate returns array");
+
+assert(normalizeBoardActionKind("repair") === "scan", "legacy repair maps to scan");
+assert(normalizeBoardActionKind("scan") === "scan", "scan preserved");
+assert(normalizeBoardActionKind("bogus") === null, "unknown kind cleared");
 
 console.log("sports-board-cache.test.ts: ok");
