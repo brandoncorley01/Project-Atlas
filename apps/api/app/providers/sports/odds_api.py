@@ -464,10 +464,11 @@ def league_keys_missing_today_slate(
 
     essentials = _essential_keys_for_today()
     missing: list[str] = []
+    today_count = len(today_events)
     for key in _seasonal_key_order(tuple(essentials)):
         if key not in near_keys:
             missing.append(key)
-        elif key not in today_keys and len(today_events) < 6:
+        elif key not in today_keys and today_count < 6:
             # Partial Tonight — league in cache but no calendar-today games yet.
             missing.append(key)
 
@@ -496,18 +497,18 @@ def slate_needs_live_seed(
     needs_refresh = bool(status.get("cache_needs_live_refresh"))
 
     if scan_result is not None:
-        created = int(scan_result.get("signals_created") or 0)
         kept = bool(scan_result.get("signals_kept"))
         today_picks = int(scan_result.get("today_picks_saved") or 0)
-        if created > 0 or today_picks > 0 or kept:
-            return False
         today_still_empty = bool(scan_result.get("today_still_empty"))
-        if created == 0 and not kept and today_count > 0:
+        if today_picks > 0 or kept:
+            return False
+        if today_still_empty:
             return True
-        if today_still_empty and today_count == 0:
+        created = int(scan_result.get("signals_created") or 0)
+        if created > 0:
+            return False
+        if today_count > 0:
             return True
-        if today_still_empty and today_picks == 0 and today_count > 0:
-            return needs_refresh
 
     if not has_data or near_count == 0:
         return True
@@ -515,7 +516,7 @@ def slate_needs_live_seed(
         return True
 
     missing_leagues = league_keys_missing_today_slate(status)
-    if missing_leagues:
+    if missing_leagues and (missing_today or today_count < 6):
         return True
 
     if needs_refresh and today_count < 4:

@@ -35,6 +35,17 @@ def test_slate_needs_live_seed_warm_board_filled():
     assert odds_api.slate_needs_live_seed(status, scan) is False
 
 
+def test_slate_needs_live_seed_today_empty_despite_other_picks():
+    """Next 24h picks must not block live seed when Today (ET) board is still empty."""
+    status = _warm_status()
+    scan = {
+        "signals_created": 20,
+        "today_picks_saved": 0,
+        "today_still_empty": True,
+    }
+    assert odds_api.slate_needs_live_seed(status, scan) is True
+
+
 def test_slate_needs_live_seed_warm_cache_empty_board():
     status = _warm_status()
     scan = {"signals_created": 0, "signals_kept": False, "today_picks_saved": 0}
@@ -78,7 +89,7 @@ async def test_premium_scan_cache_only_when_slate_complete():
                 }
             ),
         ) as refresh,
-        patch.object(svc, "_repair_live_fetch_allowed", new=AsyncMock(return_value=True)),
+        patch.object(svc, "_premium_live_fetch_allowed", new=AsyncMock(return_value=True)),
     ):
         result = await svc.premium_scan_sports(limit=40)
 
@@ -113,7 +124,7 @@ async def test_premium_scan_live_seeds_missing_today():
             ],
         ),
         patch.object(svc, "refresh_sports", new=refresh),
-        patch.object(svc, "_repair_live_fetch_allowed", new=AsyncMock(return_value=True)),
+        patch.object(svc, "_premium_live_fetch_allowed", new=AsyncMock(return_value=True)),
         patch.object(
             odds_api,
             "league_keys_missing_today_slate",

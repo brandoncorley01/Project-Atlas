@@ -119,7 +119,7 @@ async def test_repair_live_seeds_when_today_missing_even_if_near_term_warm():
                 warm_today,
             ],
         ),
-        patch.object(svc, "_repair_live_fetch_allowed", new=AsyncMock(return_value=True)),
+        patch.object(svc, "_premium_live_fetch_allowed", new=AsyncMock(return_value=True)),
         patch.object(
             svc,
             "refresh_sports",

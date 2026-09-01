@@ -520,7 +520,16 @@ export function SportsSignalsView({
       } else if (todayStillEmpty && created > 0) {
         setMessage(
           (apiMessage ? `${apiMessage} · ` : "") +
-            "Today's slate is still empty — tap Scan sports odds to pull tonight's lines.",
+            "Today's slate is still empty — tap Scan sports odds again or Fetch live odds once.",
+        );
+      } else if (
+        Boolean(body.premium_needs_live) &&
+        Boolean(body.premium_live_skipped) &&
+        todayStillEmpty
+      ) {
+        setMessage(
+          (apiMessage ? `${apiMessage} · ` : "") +
+            "Tonight needs a live odds pull — tap Fetch live odds once (Odds credits required).",
         );
       }
       router.refresh();

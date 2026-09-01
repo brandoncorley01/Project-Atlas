@@ -80,7 +80,7 @@ async def test_repair_live_seeds_when_cache_rescore_saves_nothing():
             "app.providers.sports.odds_api.odds_cache_status",
             return_value=warm,
         ),
-        patch.object(svc, "_repair_live_fetch_allowed", new=AsyncMock(return_value=True)),
+        patch.object(svc, "_premium_live_fetch_allowed", new=AsyncMock(return_value=True)),
         patch.object(svc, "refresh_sports", new=live),
     ):
         result = await svc.repair_sports_board(limit=40)
@@ -119,7 +119,7 @@ async def test_repair_cold_cache_live_seeds():
                 warm,
             ],
         ),
-        patch.object(svc, "_repair_live_fetch_allowed", new=AsyncMock(return_value=True)),
+        patch.object(svc, "_premium_live_fetch_allowed", new=AsyncMock(return_value=True)),
         patch.object(
             svc,
             "refresh_sports",
@@ -207,7 +207,7 @@ async def test_repair_skips_live_fetch_when_credits_exhausted():
             "app.providers.sports.odds_api.odds_cache_status",
             return_value=warm,
         ),
-        patch.object(svc, "_repair_live_fetch_allowed", new=AsyncMock(return_value=False)),
+        patch.object(svc, "_premium_live_fetch_allowed", new=AsyncMock(return_value=False)),
         patch.object(
             svc,
             "refresh_sports",
@@ -257,7 +257,7 @@ async def test_repair_cold_cache_uses_cache_when_no_credits():
                 warm,
             ],
         ),
-        patch.object(svc, "_repair_live_fetch_allowed", new=AsyncMock(return_value=False)),
+        patch.object(svc, "_premium_live_fetch_allowed", new=AsyncMock(return_value=False)),
         patch.object(
             svc,
             "refresh_sports",

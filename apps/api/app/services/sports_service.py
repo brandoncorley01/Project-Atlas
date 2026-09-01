@@ -1250,8 +1250,11 @@ class SportsRefreshService:
             )
         return result
 
-    async def _repair_live_fetch_allowed(self) -> bool:
-        """True when Repair may spend Odds credits on a live Fetch."""
+    async def _premium_live_fetch_allowed(
+        self,
+        sport_keys: tuple[str, ...] | None = None,
+    ) -> bool:
+        """True when premium Scan may spend credits on a targeted live seed."""
         from app import config
         from app.providers.sports.odds_api import estimate_live_scan_credits, probe_all_odds_keys
 
@@ -1260,18 +1263,23 @@ class SportsRefreshService:
         try:
             probe = await probe_all_odds_keys(use_cache=True)
         except Exception as exc:
-            logger.info("Repair live-fetch probe skipped: %s", exc)
+            logger.info("Premium live-fetch probe skipped: %s", exc)
             return config.settings.odds_live_spending_allowed()
         if probe.get("quota_exhausted"):
             return False
         total = probe.get("total_remaining")
         if total is not None and int(total) <= 0:
             return False
-        estimate = estimate_live_scan_credits()
-        reserve = max(0, int(getattr(config.settings, "odds_min_credits_reserve", 0) or 0))
+        count = len(sport_keys) if sport_keys else None
+        estimate = estimate_live_scan_credits(count)
+        reserve = 0 if sport_keys else max(0, int(getattr(config.settings, "odds_min_credits_reserve", 0) or 0))
         if total is not None and int(total) < estimate + reserve:
             return False
         return True
+
+    async def _repair_live_fetch_allowed(self) -> bool:
+        """True when Repair may spend Odds credits on a live Fetch."""
+        return await self._premium_live_fetch_allowed(None)
 
     async def premium_scan_sports(
         self,
@@ -1327,7 +1335,8 @@ class SportsRefreshService:
             needs_live = True
 
         auto_live = bool(getattr(config.settings, "odds_premium_scan_auto_live", True))
-        can_live = await self._repair_live_fetch_allowed()
+        missing_keys = league_keys_missing_today_slate(status_before)
+        can_live = await self._premium_live_fetch_allowed(missing_keys or None)
         if not auto_live or not can_live:
             if not has_cache:
                 result = await self.refresh_sports(
@@ -1346,11 +1355,17 @@ class SportsRefreshService:
                     result["repair_mode"] = "cache_rescore_no_credits"
                 elif has_cache and int(result.get("signals_created") or 0) > 0:
                     result["repair_mode"] = "cache_rescore"
+            if int(result.get("signals_created") or 0) > 0:
+                result["ok"] = True
+            elif not result.get("message"):
+                result["message"] = (
+                    "Tonight's slate still needs a live odds pull — tap Fetch live odds once "
+                    "(Odds credits low or unavailable for auto-seed)."
+                )
             result["cache_was_cold"] = cache_was_cold
             result["missing_today_before"] = missing_today_before
             return result
 
-        missing_keys = league_keys_missing_today_slate(status_before)
         result["premium_missing_leagues"] = list(missing_keys)
 
         live_kwargs: dict[str, Any] = {
