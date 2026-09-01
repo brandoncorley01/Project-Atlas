@@ -39,9 +39,8 @@ class Settings(BaseSettings):
     odds_cache_remote: bool = True
 
     # Max sportsbooks leagues fetched per live scan (1 credit each).
-    # Default 8 fits seasonal essentials (≤5) plus US/global fillers.
-    # 0 = no cap (expensive).
-    odds_max_sports_per_scan: int = 8
+    # Default 10 fits seasonal essentials plus tennis/soccer global fillers.
+    odds_max_sports_per_scan: int = 10
 
     # priority = in-season majors only (credit-safe); full = every active game sport.
     odds_scan_scope: str = "priority"

@@ -31,9 +31,18 @@ def _tomorrow_only_cache(*, minutes_ago: float = 5.0) -> dict:
     }
 
 
+def _tonight_et(hours: float = 2.0) -> str:
+    from zoneinfo import ZoneInfo
+
+    now = datetime.now(ZoneInfo("America/New_York"))
+    if now.hour >= 22:
+        hours = min(hours, 0.75)
+    return (now + timedelta(hours=hours)).astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
 def _tonight_mlb_cache(*, minutes_ago: float = 5.0) -> dict:
     fetched = (datetime.now(UTC) - timedelta(minutes=minutes_ago)).isoformat()
-    commence = (datetime.now(UTC) + timedelta(hours=3)).isoformat().replace("+00:00", "Z")
+    commence = _tonight_et(2.0)
     return {
         "fetched_at": fetched,
         "events": [

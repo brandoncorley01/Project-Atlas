@@ -134,6 +134,11 @@ US_BOOKMAKER_KEYS = "fanduel,draftkings"
 # those prefixes pin every foreign league and crowd out MLB/WNBA/NFL on the board.
 PRIORITY_SPORT_PREFIXES = frozenset({"mma", "boxing"})
 
+# Global families always eligible in priority scope + premium seed when absent from cache.
+GLOBAL_SCAN_FAMILIES = frozenset(
+    {"tennis", "golf", "soccer", "cricket", "rugbyleague", "aussierules"}
+)
+
 # Exact keys treated as the American FanDuel/DK board for ranking / diversification.
 US_MARKET_SPORT_KEYS = frozenset(
     {
@@ -437,13 +442,97 @@ def _essential_keys_for_today() -> frozenset[str]:
         from zoneinfo import ZoneInfo
 
         weekday = datetime.now(ZoneInfo("America/New_York")).weekday()
+        month = datetime.now(ZoneInfo("America/New_York")).month
     except Exception:
         weekday = datetime.now(UTC).weekday()
+        month = datetime.now(UTC).month
     if weekday in (5, 6):
         base.add("americanfootball_ncaaf")
     if weekday in (4, 5, 6):
         base.update({"basketball_ncaab", "mma_mixed_martial_arts"})
+    # US Open window — premium Scan must not skip live tennis when MLB fills the cap.
+    if month in (8, 9):
+        base.update({"tennis_atp_us_open", "tennis_wta_us_open"})
     return frozenset(base)
+
+
+def _catalog_keys_from_cache(cache: dict[str, Any] | None = None) -> tuple[str, ...]:
+    """Sport keys from the last odds pull (or event payloads)."""
+    cache = cache if cache is not None else _read_cache()
+    if not cache:
+        return ()
+    stats = dict(cache.get("stats") or {})
+    keys = tuple(str(k) for k in (stats.get("sport_keys") or []) if k)
+    if keys:
+        return keys
+    raw = list(cache.get("events") or [])
+    seen: list[str] = []
+    for event in raw:
+        key = str(event.get("_sport_key") or event.get("sport_key") or "")
+        if key and key not in seen:
+            seen.append(key)
+    return tuple(seen)
+
+
+def _keys_for_family(keys: tuple[str, ...], family: str) -> tuple[str, ...]:
+    fam = str(family or "").lower()
+    return tuple(k for k in keys if _sport_family(k) == fam)
+
+
+def league_keys_missing_global_families(
+    status: dict[str, Any] | None = None,
+) -> tuple[str, ...]:
+    """Global sport families (tennis, golf, soccer, …) absent from near-term cache."""
+    cache = _read_cache()
+    raw = list(cache.get("events") or []) if cache else []
+    upcoming = filter_upcoming_events(raw) if raw else []
+    near_term, near_meta = _near_term_cache_events(upcoming) if upcoming else ([], {})
+    near_keys = frozenset(str(k) for k in (near_meta.get("near_term_league_keys") or []) if k)
+    present = {_sport_family(k) for k in near_keys}
+    missing_families = [f for f in GLOBAL_SCAN_FAMILIES if f not in present]
+    if not missing_families:
+        return ()
+
+    catalog = _catalog_keys_from_cache(cache)
+    fallback_catalog = tuple(
+        dict.fromkeys(
+            list(catalog)
+            + list(PRIORITY_SPORT_KEYS)
+            + list(DEFAULT_SPORT_KEYS)
+            + list(CORE_GLOBAL_LIVE_KEYS)
+        )
+    )
+    month = datetime.now(UTC).month
+    preferred = SUMMER_PRIORITY_KEYS if month in (4, 5, 6, 7, 8, 9) else WINTER_PRIORITY_KEYS
+    ordered_catalog = _seasonal_key_order(
+        tuple(dict.fromkeys(list(fallback_catalog) + list(preferred)))
+    )
+
+    out: list[str] = []
+    for family in missing_families:
+        candidates = _keys_for_family(ordered_catalog, family)
+        if family == "soccer":
+            # Prefer a major soccer card when MLS alone is present.
+            if "soccer" in present and near_keys:
+                continue
+            candidates = tuple(
+                k
+                for k in candidates
+                if k in preferred or k in CORE_GLOBAL_LIVE_KEYS
+            ) or candidates
+        pick = next((k for k in candidates if k not in near_keys), None)
+        if pick:
+            out.append(pick)
+    return tuple(dict.fromkeys(out))[:6]
+
+
+def league_keys_for_premium_seed(
+    status: dict[str, Any] | None = None,
+) -> tuple[str, ...]:
+    """Leagues to live-seed on premium Scan — Tonight essentials + missing global families."""
+    today_missing = league_keys_missing_today_slate(status)
+    global_missing = league_keys_missing_global_families(status)
+    return tuple(dict.fromkeys(list(today_missing) + list(global_missing)))[:10]
 
 
 def league_keys_missing_today_slate(
@@ -468,8 +557,8 @@ def league_keys_missing_today_slate(
     for key in _seasonal_key_order(tuple(essentials)):
         if key not in near_keys:
             missing.append(key)
-        elif key not in today_keys and today_count < 6:
-            # Partial Tonight — league in cache but no calendar-today games yet.
+        elif today_count > 0 and key not in today_keys and key in near_keys:
+            # Partial Tonight — league is in cache but has no calendar-today games yet.
             missing.append(key)
 
     if status is None and cache:
@@ -500,6 +589,8 @@ def slate_needs_live_seed(
         kept = bool(scan_result.get("signals_kept"))
         today_picks = int(scan_result.get("today_picks_saved") or 0)
         today_still_empty = bool(scan_result.get("today_still_empty"))
+        if has_data and near_count > 0 and league_keys_missing_global_families(status):
+            return True
         # Empty Tonight must win over "kept" Next 24h / other-window picks.
         if today_still_empty:
             return True
@@ -522,6 +613,9 @@ def slate_needs_live_seed(
 
     missing_leagues = league_keys_missing_today_slate(status)
     if missing_leagues and (missing_today or today_count < 6):
+        return True
+
+    if has_data and near_count > 0 and league_keys_missing_global_families(status):
         return True
 
     if needs_refresh and today_count < 4:
@@ -931,7 +1025,7 @@ def _mix_us_and_global_keys(
 
     # ~60% US / ~40% global of the *remaining* slots after essentials.
     if remaining >= 3:
-        global_slots = max(1, min(len(global_rest), round(remaining * 0.4)))
+        global_slots = max(2, min(len(global_rest), round(remaining * 0.4)))
     elif remaining == 2:
         global_slots = 1
     else:
@@ -1016,7 +1110,9 @@ def _limit_sport_keys(keys: tuple[str, ...], *, force_refresh: bool = False) -> 
         filtered = tuple(
             k
             for k in keys
-            if k in priority or _sport_family(k) in PRIORITY_SPORT_PREFIXES
+            if k in priority
+            or _sport_family(k) in PRIORITY_SPORT_PREFIXES
+            or _sport_family(k) in GLOBAL_SCAN_FAMILIES
         )
         if filtered:
             keys = filtered
