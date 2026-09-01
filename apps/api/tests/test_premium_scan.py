@@ -153,7 +153,7 @@ async def test_premium_scan_skips_live_when_credits_blocked():
             "refresh_sports",
             new=AsyncMock(return_value={"ok": False, "signals_created": 0, "today_still_empty": True}),
         ) as refresh,
-        patch.object(svc, "_repair_live_fetch_allowed", new=AsyncMock(return_value=False)),
+        patch.object(svc, "_premium_live_fetch_allowed", new=AsyncMock(return_value=False)),
     ):
         result = await svc.premium_scan_sports(limit=40)
 
