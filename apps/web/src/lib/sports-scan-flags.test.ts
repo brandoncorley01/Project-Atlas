@@ -1,7 +1,7 @@
 /**
- * Credit safety: Scan and Rescore must send cache_only (0 Odds credits).
- * Only Fetch (force_refresh) may spend.
- * Repair uses /engine/repair-sports (server decides cache vs one live seed).
+ * Credit safety: Rescore must send cache_only (0 Odds credits).
+ * Scan uses premium_scan (server may live-seed missing Tonight leagues when needed).
+ * Only Fetch (force_refresh) may spend directly from the client.
  * Run with: npx --yes tsx apps/web/src/lib/sports-scan-flags.test.ts
  */
 import assert from "node:assert/strict";
@@ -14,8 +14,13 @@ const source = readFileSync(join(here, "../components/sports/SportsSignalsView.t
 
 assert.match(
   source,
-  /mode === "scan" \|\| mode === "rescore"[\s\S]*?params\.set\("cache_only", "true"\)/,
-  "Scan and Rescore must send cache_only",
+  /mode === "scan"[\s\S]*?params\.set\("premium_scan", "true"\)/,
+  "Scan must send premium_scan",
+);
+assert.match(
+  source,
+  /mode === "rescore"[\s\S]*?params\.set\("cache_only", "true"\)/,
+  "Rescore must send cache_only",
 );
 assert.match(
   source,
@@ -25,17 +30,17 @@ assert.match(
 assert.match(
   source,
   /globalThis\.confirm\(/,
-  "Fetch/Repair must confirm before spending credits",
+  "Fetch must confirm before spending credits",
 );
-assert.match(
+assert.doesNotMatch(
+  source,
+  /repairSportsBoard/,
+  "Sports UI must not auto-run or expose Repair sports board",
+);
+assert.doesNotMatch(
   source,
   /\/engine\/repair-sports/,
-  "Repair sports board must call /engine/repair-sports",
-);
-assert.match(
-  source,
-  /Repair sports board/,
-  "Sports UI must expose Repair sports board",
+  "Sports view must not call /engine/repair-sports",
 );
 assert.match(
   source,
@@ -45,38 +50,17 @@ assert.match(
 assert.match(
   source,
   /setWindow\("today"\)/,
-  "Scan/Repair must pin the Window to Today, not auto-widen to Next 48h",
+  "Scan must pin the Window to Today, not auto-widen to Next 48h",
 );
 assert.doesNotMatch(
   source,
   /pickWindowWithResults/,
   "Sports view must not auto-widen Today to Next 48h",
 );
-{
-  const repairStart = source.indexOf("async function repairSportsBoard");
-  const insightStart = source.indexOf("async function refreshOpenAiPicks");
-  assert.ok(repairStart >= 0 && insightStart > repairStart, "repair and insight functions exist");
-  const repairFn = source.slice(repairStart, insightStart);
-  assert.doesNotMatch(
-    repairFn,
-    /refreshOpenAiPicks\(/,
-    "Repair must not chain Atlas Insight (that flipped the Window off Today)",
-  );
-}
 assert.match(
   source,
-  /replaceEmpty:\s*created > 0(?!\s*\|\|)/,
+  /replaceEmpty:\s*created > 0/,
   "Scan must not force-clear the board when zero plays were saved",
-);
-assert.match(
-  source,
-  /Always reload after Repair/,
-  "Repair must reload the board even when ok=false",
-);
-assert.match(
-  source,
-  /Odds cache is empty — Scan needs a one-time Repair/,
-  "Cold cache Scan must route into Repair",
 );
 assert.match(
   source,

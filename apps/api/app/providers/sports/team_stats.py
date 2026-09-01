@@ -390,6 +390,29 @@ async def fetch_scores_by_sport(
     return {k: list(by_sport.get(k) or []) for k in keys}
 
 
+def build_stats_index_from_cache(events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Build team form from disk scores cache only — 0 Odds credits on Scan/Rescore."""
+    cache = _read_cache()
+    if not cache:
+        return {}
+    by_sport = cache.get("by_sport") or {}
+    if not isinstance(by_sport, dict):
+        return {}
+    sport_keys = {str(e.get("_sport_key") or "") for e in events if e.get("_sport_key")}
+    index: dict[str, dict[str, Any]] = {}
+    for sport_key in sport_keys:
+        if not sport_key or sport_key not in by_sport:
+            continue
+        games = list(by_sport.get(sport_key) or [])
+        if not games:
+            continue
+        index[sport_key] = {
+            "team_index": _ingest_completed_games(games),
+            "games": games,
+        }
+    return index
+
+
 async def build_stats_index(events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """sport_key -> {team_index, games, match_lookup helper data}."""
     sport_keys = {str(e.get("_sport_key") or "") for e in events if e.get("_sport_key")}

@@ -120,7 +120,7 @@ export async function runDashboardFixAll(opts?: {
       return {
         ok: false,
         message:
-          "Fix all timed out — Sports may still need a scan. Open Sports → Repair sports board, then retry Home.",
+          "Fix all timed out — Sports may still need a scan. Open Sports → Scan sports odds, then retry Home.",
         steps: [],
       };
     }

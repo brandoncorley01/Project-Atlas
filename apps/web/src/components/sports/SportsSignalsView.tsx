@@ -46,6 +46,19 @@ interface SportsListMeta {
   odds_age_minutes?: number | null;
 }
 
+function scanUpgradeNote(stats: unknown): string {
+  if (!stats || typeof stats !== "object") return "";
+  const s = stats as Record<string, unknown>;
+  const parts: string[] = [];
+  const tonight = Number(s.today_setups ?? s.today_event_ids_covered ?? 0);
+  if (tonight > 0) parts.push(`${tonight} Tonight`);
+  if (s.stats_from_cache) parts.push("team form");
+  const secondary = Number(s.today_secondary_markets ?? 0);
+  if (secondary > 0) parts.push(`${secondary} spread/total`);
+  if (Number(s.line_snapshot_events ?? 0) > 0) parts.push("line steam");
+  return parts.length ? ` · ${parts.join(" · ")}` : "";
+}
+
 export function SportsSignalsView({
   initialItems,
   initialCategories = [],
@@ -61,7 +74,7 @@ export function SportsSignalsView({
     () => readSportsBoardCache()?.window ?? "today",
   );
   const [loading, setLoading] = useState<
-    null | "scan" | "live" | "rescore" | "openai" | "repair"
+    null | "scan" | "live" | "rescore" | "openai"
   >(null);
   const [message, setMessage] = useState<string | null>(null);
   const [parlaySelection, setParlaySelection] = useState<Set<string>>(new Set());
@@ -73,7 +86,7 @@ export function SportsSignalsView({
     () => readSportsBoardCache()?.lastActionAt ?? null,
   );
   const [lastActionKind, setLastActionKind] = useState<
-    "scan" | "live" | "rescore" | "openai" | "repair" | null
+    "scan" | "live" | "rescore" | "openai" | null
   >(() => readSportsBoardCache()?.lastActionKind ?? null);
   const [oddsFetchedAt, setOddsFetchedAt] = useState<string | null>(
     () => readSportsBoardCache()?.oddsFetchedAt ?? null,
@@ -92,17 +105,6 @@ export function SportsSignalsView({
     oddsStatus != null &&
     oddsStatus.cache_has_data === false &&
     (oddsStatus.near_term_event_count ?? 0) === 0;
-  /** Repair can still free-rescore warm cache when Fetch is blocked (credits exhausted). */
-  const repairBlocked = Boolean(
-    fetchBlocked &&
-      !cacheRescoreFree &&
-      (oddsStatus?.near_term_event_count ?? 0) === 0 &&
-      oddsStatus?.cache_has_data === false,
-  );
-  const todayBoardEmpty = useMemo(
-    () => filterByWindow(items, "today").length === 0,
-    [items, window],
-  );
 
   useEffect(() => {
     void fetchIntelligenceStatus().then((s) => setIntelligenceEnabled(s.enabled));
@@ -336,7 +338,7 @@ export function SportsSignalsView({
     writeSportsBoardCache(readSportsBoardCache()?.items ?? [], { oddsFetchedAt: fetched });
   }, [oddsStatus?.cache_fetched_at]);
 
-  function rememberAction(kind: "scan" | "live" | "rescore" | "openai" | "repair") {
+  function rememberAction(kind: "scan" | "live" | "rescore" | "openai") {
     const at = new Date().toISOString();
     setLastActionAt(at);
     setLastActionKind(kind);
@@ -377,20 +379,6 @@ export function SportsSignalsView({
   }
 
   async function refreshSports(mode: "scan" | "live" | "rescore") {
-    // Cold odds cache: Scan/Rescore are cache-only and will always fail. Route to Repair
-    // (one live seed) so Today can fill — matches the empty-state CTA.
-    const cacheCold =
-      oddsStatus != null &&
-      oddsStatus.cache_has_data === false &&
-      (oddsStatus.near_term_event_count ?? 0) === 0;
-    if ((mode === "scan" || mode === "rescore") && cacheCold) {
-      setMessage(
-        "Odds cache is empty — Scan needs a one-time Repair to Fetch tonight's lines.",
-      );
-      await repairSportsBoard({ skipConfirm: true });
-      return;
-    }
-
     setLoading(mode);
     setMessage(null);
 
@@ -404,11 +392,10 @@ export function SportsSignalsView({
     const apiUrl = getApiUrl();
     const params = new URLSearchParams();
     if (mode === "live") params.set("force_refresh", "true");
-    // Scan + Rescore are always cache-only (0 Odds credits).
-    // Only Fetch live odds spends credits — never auto-seed from Scan.
-    if (mode === "scan" || mode === "rescore") {
-      params.set("cache_only", "true");
-    }
+    // Premium Scan: server rescores cache first, then live-seeds missing Tonight leagues.
+    // Rescore stays cache-only (0 Odds credits).
+    if (mode === "scan") params.set("premium_scan", "true");
+    if (mode === "rescore") params.set("cache_only", "true");
     const query = params.toString() ? `?${params}` : "";
     try {
       if (mode === "live") {
@@ -497,8 +484,8 @@ export function SportsSignalsView({
         apiMessage ??
           (kept
             ? "No new edges found — kept your current picks on the board"
-            : created > 0
-              ? `Found ${created} plays · ${cacheUsed ? "0 Odds credits (cached)" : `~${creditsUsed ?? "?"} Odds credits`}`
+            :             created > 0
+              ? `Found ${created} plays · ${cacheUsed ? "0 Odds credits (cached)" : `~${creditsUsed ?? "?"} Odds credits`}${scanUpgradeNote(body.stats)}`
               : "No edges met the threshold — try Rescore (0 credits). Fetch only if the cache is empty."),
       );
 
@@ -522,18 +509,27 @@ export function SportsSignalsView({
         setMessage(
           (apiMessage ? `${apiMessage} · ` : "") +
             `Today's slate (through midnight ET) is empty — ${next24N} play${next24N === 1 ? "" : "s"} in Next 24h. ` +
-            "Tap Show Next 24h below, or Repair for tonight's live odds.",
+            "Tap Show Next 24h below, or Scan sports odds for tonight's live lines.",
         );
       } else if (todayStillEmpty && soonN > 0) {
         setMessage(
           (apiMessage ? `${apiMessage} · ` : "") +
             `Today's slate is empty — ${soonN} play${soonN === 1 ? "" : "s"} in Next 48h. ` +
-            "Tap Show Next 48h below, or Repair sports board.",
+            "Tap Show Next 48h below, or Scan sports odds.",
         );
       } else if (todayStillEmpty && created > 0) {
         setMessage(
           (apiMessage ? `${apiMessage} · ` : "") +
-            "Today's slate is still empty — tap Repair sports board to Fetch tonight's odds.",
+            "Today's slate is still empty — tap Scan sports odds again or Fetch live odds once.",
+        );
+      } else if (
+        Boolean(body.premium_needs_live) &&
+        Boolean(body.premium_live_skipped) &&
+        todayStillEmpty
+      ) {
+        setMessage(
+          (apiMessage ? `${apiMessage} · ` : "") +
+            "Tonight needs a live odds pull — tap Fetch live odds once (Odds credits required).",
         );
       }
       router.refresh();
@@ -550,182 +546,12 @@ export function SportsSignalsView({
       if (liveOddsPulled && created <= 0) {
         setMessage(
           apiMessage
-            ? `${apiMessage} · Board still empty — tap Repair sports board or Rescore (0 credits).`
-            : "Live odds pulled but no plays ranked — tap Repair sports board.",
+            ? `${apiMessage} · Board still empty — tap Scan sports odds or Rescore (0 credits).`
+            : "Live odds pulled but no plays ranked — tap Scan sports odds.",
         );
       }
     } catch (err) {
       const detail = sportsEngineErrorMessage(err, mode === "live" ? "Fetch" : "Scan");
-      await reloadBoardAfterEngineError(token);
-      const hint = todayWindowHint();
-      setMessage(hint ? `${detail} · ${hint}` : detail);
-    }
-    setLoading(null);
-  }
-
-  async function repairSportsBoard(opts?: { skipConfirm?: boolean }) {
-    setLoading("repair");
-    setMessage(null);
-
-    const token = await getToken();
-    if (!usesBffProxy() && !token) {
-      setMessage("Not signed in");
-      setLoading(null);
-      return;
-    }
-
-    if (repairBlocked) {
-      setMessage(
-        "Odds cache is empty and credits are exhausted — add another free Odds API key, then Repair again.",
-      );
-      setLoading(null);
-      return;
-    }
-
-    const needsLiveSeed =
-      cacheCold ||
-      Boolean(oddsStatus?.missing_today_slate) ||
-      (oddsStatus?.today_event_count ?? 0) === 0;
-    const freeRescoreOnly = Boolean(cacheRescoreFree && !needsLiveSeed && !cacheCold);
-
-    if (!opts?.skipConfirm) {
-      if (freeRescoreOnly) {
-        const ok = globalThis.confirm(
-          "Repair will rescore tonight's cached FanDuel/DraftKings lines onto your board (0 Odds credits).\n\nContinue?",
-        );
-        if (!ok) {
-          setLoading(null);
-          return;
-        }
-      } else if (!fetchBlocked) {
-        const estimate = oddsStatus?.estimated_live_scan_credits ?? 8;
-        const remaining = oddsStatus?.total_remaining;
-        const ok = globalThis.confirm(
-          needsLiveSeed
-            ? `Repair will Fetch live odds once (~${estimate} credits` +
-                (remaining != null ? `, ${remaining} left` : "") +
-                ") for Today's slate (through midnight ET).\n\nScan and Rescore stay free after that.\n\nContinue?"
-            : `Repair may Fetch live odds (~${estimate} credits` +
-                (remaining != null ? `, ${remaining} left` : "") +
-                ") if the free cache rescore cannot fill the board.\n\nContinue?",
-        );
-        if (!ok) {
-          setLoading(null);
-          return;
-        }
-      }
-      // Credits exhausted but warm cache: skip confirm — free rescore only.
-    }
-
-    const apiUrl = getApiUrl();
-    try {
-      const res = await fetch(`${apiUrl}/engine/repair-sports`, {
-        method: "POST",
-        headers: apiRequestHeaders(token),
-        credentials: usesBffProxy() ? "include" : "same-origin",
-        signal: AbortSignal.timeout(180000),
-      });
-      let body: Record<string, unknown> = {};
-      try {
-        body = await res.json();
-      } catch {
-        setMessage(
-          res.status === 503
-            ? "Repair timed out — try again, or tap Fetch live odds once."
-            : `Repair failed (HTTP ${res.status}). Try again in a moment.`,
-        );
-        setLoading(null);
-        return;
-      }
-      if (!res.ok || body.ok === false || body.status === "error") {
-        const detail =
-          (typeof body.message === "string" && body.message) ||
-          (typeof body.error === "string" && body.error) ||
-          (typeof body.detail === "string" && body.detail) ||
-          "Repair failed";
-        setMessage(detail);
-        // Always reload after Repair — ok:false used to skip loadItems and leave a blank
-        // board even when rows were written (empty PostgREST representation) or when a
-        // warm-cache fallback saved picks under a soft error.
-        const createdOnError = Number(body.signals_created ?? 0);
-        setFilter("all");
-        setSort("opportunity");
-        setActiveCategory(null);
-        setActiveSport(null);
-        await loadItems(token, null, null, { replaceEmpty: createdOnError > 0 });
-        await Promise.all([loadCategories(token), refreshOddsStatus()]);
-        setWindow("today");
-        writeSportsBoardCache(itemsRef.current, { window: "today" });
-        const todayN = filterByWindow(itemsRef.current, "today").length;
-        const next24N = filterByWindow(itemsRef.current, "next24h").length;
-        const soonN = filterByWindow(itemsRef.current, "soon").length;
-        if (todayN === 0 && next24N > 0) {
-          setMessage(
-            `${detail} · ${next24N} play${next24N === 1 ? "" : "s"} in Next 24h — tap Show Next 24h.`,
-          );
-        } else if (todayN === 0 && soonN > 0) {
-          setMessage(
-            `${detail} · ${soonN} play${soonN === 1 ? "" : "s"} in Next 48h — tap Show Next 48h.`,
-          );
-        }
-        rememberAction("repair");
-        router.refresh();
-        globalThis.dispatchEvent(new Event("atlas:dashboard-refresh"));
-        setLoading(null);
-        return;
-      }
-
-      const created = Number(body.signals_created ?? 0);
-      const apiMessage = body.message as string | undefined;
-      rememberAction("repair");
-      setMessage(
-        apiMessage ??
-          (created > 0
-            ? `Repaired — ${created} plays on the board`
-            : "Repair finished — board still empty"),
-      );
-
-      setFilter("all");
-      setSort("opportunity");
-      setActiveCategory(null);
-      setActiveSport(null);
-
-      // Always reload — Repair can rewrite the board even when signals_created is 0
-      // (kept rows / empty PostgREST representation / fallback Today slate).
-      await loadItems(token, null, null, { replaceEmpty: false });
-      await Promise.all([loadCategories(token), refreshOddsStatus()]);
-      // Repair must stay on Today even when the slate is still empty. Auto-widening
-      // to Next 48h hid a failed Today fill and looked like Repair "didn't pull today's odds."
-      setWindow("today");
-      writeSportsBoardCache(itemsRef.current, { window: "today" });
-      const todayN = filterByWindow(itemsRef.current, "today").length;
-      const next24N = filterByWindow(itemsRef.current, "next24h").length;
-      const soonN = filterByWindow(itemsRef.current, "soon").length;
-      const todayStillEmpty = Boolean(body.today_still_empty) || todayN === 0;
-      if (todayStillEmpty && next24N > 0) {
-        setMessage(
-          (apiMessage ? `${apiMessage} · ` : "") +
-            `Today's slate is still empty — ${next24N} play${next24N === 1 ? "" : "s"} in Next 24h. ` +
-            "Tap Show Next 24h, or Repair again for tonight.",
-        );
-      } else if (todayStillEmpty && soonN > 0) {
-        setMessage(
-          (apiMessage ? `${apiMessage} · ` : "") +
-            `Today's slate is still empty — ${soonN} play${soonN === 1 ? "" : "s"} in Next 48h. ` +
-            "Tap Show Next 48h, or Repair again for tonight.",
-        );
-      } else if (todayStillEmpty) {
-        setMessage(
-          apiMessage ??
-            "Repair finished but Today is still empty — check Odds credits, then Repair again.",
-        );
-      }
-      router.refresh();
-      globalThis.dispatchEvent(new Event("atlas:dashboard-refresh"));
-
-      // Don't chain Insight here — it used to flip the Window off Today. Repair is odds-only.
-    } catch (err) {
-      const detail = sportsEngineErrorMessage(err, "Repair");
       await reloadBoardAfterEngineError(token);
       const hint = todayWindowHint();
       setMessage(hint ? `${detail} · ${hint}` : detail);
@@ -852,14 +678,6 @@ export function SportsSignalsView({
 
   const activeMeta = categories.find((c) => c.slug === activeCategory);
   const busy = loading !== null;
-  const showRepair =
-    items.length === 0 ||
-    cacheCold ||
-    todayBoardEmpty ||
-    Boolean(oddsStatus?.missing_today_slate) ||
-    (oddsStatus != null &&
-      oddsStatus.cache_has_data === false &&
-      (oddsStatus.today_event_count ?? 0) === 0);
 
   return (
     <div className="w-full min-w-0 overflow-x-clip">
@@ -885,12 +703,12 @@ export function SportsSignalsView({
         <div className="mb-4 rounded-xl border border-amber-500/50 bg-amber-500/15 px-4 py-3 text-sm text-amber-50">
           <p className="font-semibold text-amber-100">Odds cache is empty</p>
           <p className="mt-1 text-xs leading-relaxed text-amber-100/85">
-            Scan and Rescore need a seeded cache. Tap{" "}
-            <strong className="text-amber-50">Repair sports board</strong> once
+            Tap <strong className="text-amber-50">Scan sports odds</strong> — premium Scan
+            rescores from cache first, then live-seeds tonight&apos;s FanDuel/DraftKings lines
             {oddsStatus?.total_remaining != null
-              ? ` (~${oddsStatus.estimated_live_scan_credits ?? 8} credits, ${oddsStatus.total_remaining} left)`
-              : " (~8 Odds credits)"}{" "}
-            to Fetch tonight&apos;s FanDuel/DraftKings lines. After that, Scan stays free.
+              ? ` (~${oddsStatus.estimated_live_scan_credits ?? 8} credits only when needed, ${oddsStatus.total_remaining} left)`
+              : " when needed (~8 Odds credits)"}
+            . Rescore stays free after that.
           </p>
         </div>
       )}
@@ -930,28 +748,11 @@ export function SportsSignalsView({
             type="button"
             onClick={() => refreshSports("scan")}
             disabled={busy}
-            title="Scan sports odds from cache only — 0 Odds credits. Never spends. Use Fetch only when the cache is empty."
+            title="Premium Scan: free cache rescore first, then live-seeds missing Tonight leagues only when needed."
             className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-md shadow-violet-600/25 disabled:opacity-50"
           >
             {loading === "scan" ? "Scanning…" : "Scan sports odds"}
           </button>
-          {showRepair && (
-            <button
-              type="button"
-              onClick={() => void repairSportsBoard()}
-              disabled={busy || repairBlocked}
-              title={
-                repairBlocked
-                  ? "Odds cache is empty and credits are exhausted — add a new free Odds API key, then Repair again."
-                  : fetchBlocked
-                    ? "Credits exhausted — Repair will free-rescore warm cached odds (0 credits)."
-                    : "Recover missing picks: warm durable cache rescans free; cold cache does one live Fetch."
-              }
-              className="rounded-lg border border-amber-500/50 bg-amber-500/15 px-4 py-2 text-sm font-semibold text-amber-100 hover:bg-amber-500/25 disabled:opacity-50"
-            >
-              {loading === "repair" ? "Repairing…" : "Repair sports board"}
-            </button>
-          )}
           <button
             type="button"
             onClick={() => refreshSports("live")}
@@ -1060,17 +861,17 @@ export function SportsSignalsView({
           description={
             window === "today" && !activeCategory && filter === "all" && !activeSport
               ? filterByWindow(items, "next24h").length > 0
-                ? `Nothing on today's slate (through midnight ET). ${filterByWindow(items, "next24h").length} play(s) are in Next 24h — open that window, or Repair for tonight's live odds.`
+                ? `Nothing on today's slate (through midnight ET). ${filterByWindow(items, "next24h").length} play(s) are in Next 24h — open that window, or Scan for tonight's live odds.`
                 : filterByWindow(items, "soon").length > 0
-                  ? `Nothing on today's slate. ${filterByWindow(items, "soon").length} play(s) are in Next 48h — open that window, or Repair for tonight's live odds.`
-                  : "Nothing on today's slate. Tap Repair sports board to Fetch live odds for tonight's games."
+                  ? `Nothing on today's slate. ${filterByWindow(items, "soon").length} play(s) are in Next 48h — open that window, or Scan sports odds.`
+                  : "Nothing on today's slate. Tap Scan sports odds to pull tonight's FanDuel/DraftKings lines."
               : window === "next24h" && !activeCategory && filter === "all" && !activeSport
                 ? "No plays in the next 24 hours. Try Today (ET), Next 48h, or All dates."
               : window === "soon" && !activeCategory && filter === "all" && !activeSport
                 ? "No plays in the next 48 hours. Try This week, Next 30 days, or All dates."
                 : activeCategory || activeSport || filter !== "all"
                   ? "Try All leagues, All bet types, or widen the Window (Next 24h / Next 48h / All dates)."
-                  : "Use Repair sports board if picks vanished after a redeploy. Fetch live odds seeds FanDuel/DraftKings lines; Rescore re-ranks free; Atlas Insight adds analyst consensus."
+                  : "Tap Scan sports odds to refresh picks. Fetch live odds seeds lines manually; Rescore re-ranks free; Atlas Insight adds analyst consensus."
           }
           action={
             <div className="flex flex-wrap justify-center gap-2">
@@ -1092,14 +893,6 @@ export function SportsSignalsView({
                   Show Next 48h
                 </button>
               ) : null}
-              <button
-                type="button"
-                onClick={() => void repairSportsBoard()}
-                disabled={busy || repairBlocked}
-                className="rounded-lg border border-amber-500/50 bg-amber-500/15 px-4 py-2 text-sm font-semibold text-amber-100 disabled:opacity-50"
-              >
-                {loading === "repair" ? "Repairing…" : "Repair sports board"}
-              </button>
               <button
                 type="button"
                 onClick={() => refreshSports("scan")}

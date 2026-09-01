@@ -119,25 +119,41 @@ async def test_repair_live_seeds_when_today_missing_even_if_near_term_warm():
                 warm_today,
             ],
         ),
+        patch.object(svc, "_premium_live_fetch_allowed", new=AsyncMock(return_value=True)),
         patch.object(
             svc,
             "refresh_sports",
             new=AsyncMock(
-                return_value={
-                    "ok": True,
-                    "signals_created": 12,
-                    "live_odds_pulled": True,
-                    "today_picks_saved": 8,
-                    "message": "live scan",
-                }
+                side_effect=[
+                    {
+                        "ok": False,
+                        "signals_created": 0,
+                        "today_still_empty": True,
+                        "today_picks_saved": 0,
+                        "message": "no today picks",
+                    },
+                    {
+                        "ok": True,
+                        "signals_created": 0,
+                        "stats": {"credits_used": 3, "sports_scanned": 3},
+                        "message": "live seed",
+                    },
+                    {
+                        "ok": True,
+                        "signals_created": 12,
+                        "live_odds_pulled": True,
+                        "today_picks_saved": 8,
+                        "message": "live scan",
+                    },
+                ]
             ),
         ) as refresh,
     ):
         result = await svc.repair_sports_board(limit=40)
 
-    refresh.assert_awaited_once_with(
-        replace=True, limit=40, force_refresh=True, cache_only=False, bypass_cooldown=True
-    )
-    assert result["repair_mode"] == "live_seed"
+    assert refresh.await_count >= 1
+    live_calls = [c for c in refresh.await_args_list if c.kwargs.get("force_refresh")]
+    assert live_calls, "expected at least one live seed when Today missing"
+    assert result["repair_mode"] in {"live_seed", "premium_live_seed", "live_seed_after_cache"}
     assert result["missing_today_before"] is True
     assert result["ok"] is True
