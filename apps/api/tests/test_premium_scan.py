@@ -46,6 +46,25 @@ def test_slate_needs_live_seed_today_empty_despite_other_picks():
     assert odds_api.slate_needs_live_seed(status, scan) is True
 
 
+def test_slate_needs_live_seed_kept_other_window_does_not_block_tonight():
+    """Kept Next 24h board must not skip live seed when Tonight is still empty."""
+    status = _warm_status(today=6)
+    scan = {
+        "signals_created": 0,
+        "signals_kept": True,
+        "today_picks_saved": 0,
+        "today_still_empty": True,
+    }
+    assert odds_api.slate_needs_live_seed(status, scan) is True
+
+
+def test_slate_needs_live_seed_cache_has_tonight_zero_saved():
+    """Warm cache with Tonight games but zero saved Today picks still needs live seed."""
+    status = _warm_status(today=4)
+    scan = {"signals_created": 18, "signals_kept": False, "today_picks_saved": 0}
+    assert odds_api.slate_needs_live_seed(status, scan) is True
+
+
 def test_slate_needs_live_seed_warm_cache_empty_board():
     status = _warm_status()
     scan = {"signals_created": 0, "signals_kept": False, "today_picks_saved": 0}
@@ -136,6 +155,42 @@ async def test_premium_scan_live_seeds_missing_today():
     assert refresh.await_count == 3
     assert refresh.await_args_list[1].kwargs["force_refresh"] is True
     assert refresh.await_args_list[1].kwargs["sport_keys"] == ("baseball_mlb", "basketball_wnba")
+    assert result["premium_phase"] == "live_seed_rescore"
+    assert result["premium_live_seed"] is True
+
+
+@pytest.mark.asyncio
+async def test_premium_scan_live_seeds_when_kept_board_missing_today():
+    """Premium Scan must live-seed when cache rescore kept other picks but Today is empty."""
+    svc = SportsRefreshService(MagicMock(), "user-1")
+    refresh = AsyncMock(
+        side_effect=[
+            {
+                "ok": True,
+                "signals_created": 0,
+                "signals_kept": True,
+                "today_picks_saved": 0,
+            },
+            {"ok": True, "signals_created": 0, "stats": {"credits_used": 2, "sports_scanned": 2}},
+            {"ok": True, "signals_created": 8, "today_picks_saved": 4, "today_still_empty": False},
+        ]
+    )
+    with (
+        patch(
+            "app.providers.sports.odds_api.odds_cache_status",
+            side_effect=[_warm_status(today=4), _warm_status(today=4)],
+        ),
+        patch.object(svc, "refresh_sports", new=refresh),
+        patch.object(svc, "_premium_live_fetch_allowed", new=AsyncMock(return_value=True)),
+        patch.object(
+            odds_api,
+            "league_keys_missing_today_slate",
+            return_value=("baseball_mlb",),
+        ),
+    ):
+        result = await svc.premium_scan_sports(limit=40)
+
+    assert refresh.await_count == 3
     assert result["premium_phase"] == "live_seed_rescore"
     assert result["premium_live_seed"] is True
 

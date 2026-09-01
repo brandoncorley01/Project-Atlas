@@ -362,6 +362,8 @@ class SignalService:
         rows = sort_for_display(rows)
         # Never truncate away Atlas Insight / player props when applying the board limit.
         if offset == 0 and limit > 0 and len(rows) > limit:
+            from app.services.sports_ranking import is_calendar_today
+
             insight = [r for r in rows if _is_openai_web_row(r) or _is_user_entry_row(r)]
             props = [
                 r
@@ -373,9 +375,10 @@ class SignalService:
                 and not _is_openai_web_row(r)
                 and not _is_user_entry_row(r)
             ]
+            today_rows = [r for r in rows if is_calendar_today(r)]
             reserved: list[dict] = []
             seen_ids: set[str] = set()
-            for r in insight + props:
+            for r in insight + props + today_rows:
                 rid = str(r.get("id") or "")
                 if rid and rid in seen_ids:
                     continue
