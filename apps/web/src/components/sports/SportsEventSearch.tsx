@@ -3,6 +3,7 @@
 import { useCallback, useMemo, useState, type FormEvent } from "react";
 import { apiRequestHeaders, getApiUrl, usesBffProxy } from "@/lib/api-url";
 import type { SportsSignal } from "@/components/sports/SportsSignalCard";
+import { formatSportsKickoffET } from "@/lib/sports-time";
 
 export interface BookAvailability {
   book_key: string;
@@ -95,18 +96,8 @@ async function getToken() {
 }
 
 function formatStart(iso?: string | null) {
-  if (!iso) return "Time TBD";
-  try {
-    return new Date(iso).toLocaleString(undefined, {
-      weekday: "short",
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    });
-  } catch {
-    return iso;
-  }
+  const label = formatSportsKickoffET(iso);
+  return label === "TBD" ? "Time TBD" : label;
 }
 
 function oddsLabel(n: number) {

@@ -19,6 +19,7 @@ import { sportBetMetadata } from "@/lib/watchlist-api";
 import { CATEGORY_SLUG_LABELS } from "@/lib/sports-categories";
 import { getSportMeta } from "@/lib/sport-meta";
 import { hoursUntilStart, kickoffWindowLabel } from "@/lib/sports-filters";
+import { formatSportsKickoffET } from "@/lib/sports-time";
 
 export interface SportsSignal {
   id: string;
@@ -107,18 +108,7 @@ function betTypeLabel(betType: string) {
 }
 
 function formatEventStart(iso?: string | null) {
-  if (!iso) return "TBD";
-  try {
-    return new Date(iso).toLocaleString(undefined, {
-      weekday: "short",
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    });
-  } catch {
-    return iso;
-  }
+  return formatSportsKickoffET(iso);
 }
 
 export function SportsSignalCard({

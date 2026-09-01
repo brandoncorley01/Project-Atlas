@@ -13,6 +13,7 @@ import { PARLAY_CATEGORY_LABELS } from "@/lib/parlay-categories";
 import { apiFetch } from "@/lib/api";
 import { usesBffProxy } from "@/lib/api-url";
 import { createClient } from "@/lib/supabase/client";
+import { formatSportsKickoffET } from "@/lib/sports-time";
 
 export interface ParlayLeg {
   id?: string;
@@ -74,18 +75,7 @@ function styleColor(style: string) {
 }
 
 function formatEventStart(iso?: string | null) {
-  if (!iso) return "TBD";
-  try {
-    return new Date(iso).toLocaleString(undefined, {
-      weekday: "short",
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    });
-  } catch {
-    return iso;
-  }
+  return formatSportsKickoffET(iso);
 }
 
 function formatTimeWindow(row: Parlay) {

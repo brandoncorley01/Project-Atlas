@@ -1,4 +1,5 @@
 import type { SportsSignal } from "@/components/sports/SportsSignalCard";
+import { easternDayKey } from "@/lib/sports-time";
 
 export type SportsSortKey =
   | "soonest"
@@ -26,7 +27,6 @@ const NEAR_TERM_HOURS = 48;
 const ROLLING_24H = 24;
 const WEEK_HOURS = 168;
 const MONTH_HOURS = 720;
-const SPORTS_TZ = "America/New_York";
 
 export function isOpenAiSportsPick(row: SportsSignal): boolean {
   return Boolean(
@@ -107,15 +107,6 @@ function getSoonest(row: SportsSignal): number {
 function isFutures(row: SportsSignal): boolean {
   const bet = (row.bet_type || "").toLowerCase();
   return bet === "futures" || bet === "outright";
-}
-
-function easternDayKey(iso: string | Date): string {
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone: SPORTS_TZ,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(typeof iso === "string" ? new Date(iso) : iso);
 }
 
 /** Same Eastern calendar day as now — for Today parlays / sports window. */
