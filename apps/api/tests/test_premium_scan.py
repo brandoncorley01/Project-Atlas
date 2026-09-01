@@ -32,7 +32,8 @@ def test_slate_needs_live_seed_missing_today():
 def test_slate_needs_live_seed_warm_board_filled():
     status = _warm_status()
     scan = {"signals_created": 12, "today_picks_saved": 8, "today_still_empty": False}
-    assert odds_api.slate_needs_live_seed(status, scan) is False
+    with patch.object(odds_api, "league_keys_missing_global_families", return_value=()):
+        assert odds_api.slate_needs_live_seed(status, scan) is False
 
 
 def test_slate_needs_live_seed_today_empty_despite_other_picks():
@@ -71,12 +72,22 @@ def test_slate_needs_live_seed_warm_cache_empty_board():
     assert odds_api.slate_needs_live_seed(status, scan) is True
 
 
+def _tonight_et(hours: float = 3.0) -> str:
+    """Kickoff later today in US/Eastern — stable across UTC midnight."""
+    from zoneinfo import ZoneInfo
+
+    now = datetime.now(ZoneInfo("America/New_York"))
+    if now.hour >= 22:
+        hours = min(hours, 0.75)
+    kick = now + timedelta(hours=hours)
+    return kick.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
 def test_league_keys_missing_today_partial_mlb_only():
-    commence = (datetime.now(UTC) + timedelta(hours=3)).isoformat().replace("+00:00", "Z")
     events = [
         {
             "id": "mlb1",
-            "commence_time": commence,
+            "commence_time": _tonight_et(3),
             "_sport_key": "baseball_mlb",
             "home_team": "A",
             "away_team": "B",
@@ -95,6 +106,10 @@ async def test_premium_scan_cache_only_when_slate_complete():
         patch(
             "app.providers.sports.odds_api.odds_cache_status",
             return_value=_warm_status(),
+        ),
+        patch(
+            "app.providers.sports.odds_api.league_keys_missing_global_families",
+            return_value=(),
         ),
         patch.object(
             svc,
@@ -146,7 +161,7 @@ async def test_premium_scan_live_seeds_missing_today():
         patch.object(svc, "_premium_live_fetch_allowed", new=AsyncMock(return_value=True)),
         patch.object(
             odds_api,
-            "league_keys_missing_today_slate",
+            "league_keys_for_premium_seed",
             return_value=("baseball_mlb", "basketball_wnba"),
         ),
     ):

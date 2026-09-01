@@ -340,7 +340,7 @@ def _select_diverse_setups(setups: list[dict[str, Any]], *, limit: int) -> list[
     if not setups:
         return []
 
-    from app.providers.sports.odds_api import is_us_market_sport_key
+    from app.providers.sports.odds_api import GLOBAL_SCAN_FAMILIES, _sport_family, is_us_market_sport_key
 
     # Always keep the full horizon pool. Near-term-only often yields <25 plays and
     # makes the board look empty / single-market after a Rescore.
@@ -414,6 +414,24 @@ def _select_diverse_setups(setups: list[dict[str, Any]], *, limit: int) -> list[
             if sum(1 for r in selected if not is_us_market_sport_key(_setup_sport_key(r))) >= global_floor:
                 break
             _take(row)
+
+    # Round 1c: guarantee at least one near-term card per major global family in pool.
+    for family in ("tennis", "golf"):
+        if family not in GLOBAL_SCAN_FAMILIES:
+            continue
+        fam_rows = [
+            r
+            for r in global_pool
+            if _sport_family(_setup_sport_key(r)) == family or family in str(r.get("sport") or "").lower()
+        ]
+        if not fam_rows:
+            continue
+        if any(
+            _sport_family(_setup_sport_key(r)) == family or family in str(r.get("sport") or "").lower()
+            for r in selected
+        ):
+            continue
+        _take(fam_rows[0])
 
     near_pool = sorted(
         (r for r in pool if is_near_term(r)),
@@ -1314,7 +1332,7 @@ class SportsRefreshService:
     ) -> dict[str, Any]:
         """Premium scan: free cache rescore, then targeted live seed when slate is incomplete."""
         from app.providers.sports.odds_api import (
-            league_keys_missing_today_slate,
+            league_keys_for_premium_seed,
             odds_cache_status,
             slate_needs_live_seed,
         )
@@ -1365,7 +1383,7 @@ class SportsRefreshService:
             needs_live = True
 
         auto_live = bool(getattr(config.settings, "odds_premium_scan_auto_live", True))
-        missing_keys = league_keys_missing_today_slate(status_before)
+        missing_keys = league_keys_for_premium_seed(status_before)
         can_live = await self._premium_live_fetch_allowed(missing_keys or None)
         if not auto_live or not can_live:
             if not has_cache:

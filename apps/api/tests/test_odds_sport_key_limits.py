@@ -75,8 +75,11 @@ def test_cache_needs_live_refresh_majority_not_all():
 
 def test_odds_cache_status_keeps_needs_live_under_spend_lock():
     from datetime import UTC, datetime, timedelta
+    from zoneinfo import ZoneInfo
 
-    commence = (datetime.now(UTC) + timedelta(hours=4)).isoformat().replace("+00:00", "Z")
+    now_et = datetime.now(ZoneInfo("America/New_York"))
+    kick = (now_et + timedelta(hours=1)).astimezone(UTC)
+    commence = kick.isoformat().replace("+00:00", "Z")
     cache = {
         "fetched_at": datetime.now(UTC).isoformat(),
         "events": [
