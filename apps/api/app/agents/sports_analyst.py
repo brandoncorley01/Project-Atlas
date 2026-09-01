@@ -156,18 +156,20 @@ def _format_kickoff(event_start: str | None) -> str:
     if not event_start:
         return "time TBD"
     try:
+        from app.services.sports_ranking import ATLAS_SPORTS_TZ
+
         text = str(event_start).strip()
         if text.endswith("Z"):
             text = text[:-1] + "+00:00"
         dt = datetime.fromisoformat(text)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=UTC)
-        dt = dt.astimezone(UTC)
+        dt = dt.astimezone(ATLAS_SPORTS_TZ)
         day = dt.day
         hour = dt.strftime("%I").lstrip("0") or "12"
         minute = dt.strftime("%M")
         ampm = dt.strftime("%p")
-        return f"{dt.strftime('%a %b')} {day} · {hour}:{minute} {ampm} UTC"
+        return f"{dt.strftime('%a %b')} {day} · {hour}:{minute} {ampm} ET"
     except (TypeError, ValueError):
         return "soon"
 

@@ -1,6 +1,7 @@
 "use client";
 
 import type { SportsSortKey, SportsFilterKey, SportsWindowKey } from "@/lib/sports-filters";
+import { sportsTodayLabelET } from "@/lib/sports-time";
 import { TermHint } from "@/components/ui/TermHint";
 
 interface SportsToolbarProps {
@@ -37,8 +38,7 @@ const FILTER_OPTIONS: { value: SportsFilterKey; label: string }[] = [
   { value: "value", label: "Value plays" },
 ];
 
-const WINDOW_OPTIONS: { value: SportsWindowKey; label: string }[] = [
-  { value: "today", label: "Today (ET)" },
+const WINDOW_OPTIONS_BASE: { value: SportsWindowKey; label: string }[] = [
   { value: "next24h", label: "Next 24h" },
   { value: "soon", label: "Next 48h" },
   { value: "week", label: "This week" },
@@ -47,10 +47,17 @@ const WINDOW_OPTIONS: { value: SportsWindowKey; label: string }[] = [
   { value: "all", label: "All dates" },
 ];
 
+function windowOptions(): { value: SportsWindowKey; label: string }[] {
+  return [
+    { value: "today", label: `Today (ET · ${sportsTodayLabelET()})` },
+    ...WINDOW_OPTIONS_BASE,
+  ];
+}
+
 function windowHint(window: SportsWindowKey): string {
   switch (window) {
     case "today":
-      return "today's slate through midnight ET";
+      return `today's Eastern slate (${sportsTodayLabelET()}) through midnight ET`;
     case "next24h":
       return "next 24 hours";
     case "soon":
@@ -99,7 +106,7 @@ export function SportsToolbar({
             onChange={(e) => onWindowChange(e.target.value as SportsWindowKey)}
             className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-violet-500"
           >
-            {WINDOW_OPTIONS.map((o) => (
+            {windowOptions().map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
               </option>
