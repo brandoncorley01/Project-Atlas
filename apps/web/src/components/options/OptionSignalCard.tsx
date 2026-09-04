@@ -12,6 +12,21 @@ import { optionSignalMetadata } from "@/lib/watchlist-api";
 import { formatStrike } from "@/lib/format-strike";
 import { useState } from "react";
 
+export interface HedgeStrategy {
+  role?: string;
+  option_type: string;
+  strike: number;
+  expiration?: string;
+  premium?: number;
+  contract_cost?: number;
+  confidence_score?: number;
+  risk_score?: number;
+  opportunity_score?: number;
+  profit_probability?: number;
+  delta?: number | null;
+  rationale?: string;
+}
+
 export interface OptionSignal {
   id: string;
   underlying: string;
@@ -28,6 +43,7 @@ export interface OptionSignal {
   risk_warning: string;
   contract_cost?: number;
   is_budget?: boolean;
+  hedge_strategy?: HedgeStrategy | null;
   context?: {
     top_headline?: string | null;
     has_catalyst?: boolean;
@@ -39,6 +55,7 @@ export interface OptionSignal {
     profit_probability?: number;
     trade_plan?: TradePlan;
     market_context?: Record<string, unknown>;
+    hedge_strategy?: HedgeStrategy;
   };
 }
 
@@ -55,6 +72,60 @@ function recommendedStrategy(plan?: TradePlan) {
   if (!plan?.strategies?.length) return null;
   return (
     plan.strategies.find((s) => s.id === plan.recommended_strategy_id) ?? plan.strategies[0]
+  );
+}
+
+function HedgeStrategyPanel({
+  underlying,
+  hedge,
+}: {
+  underlying: string;
+  hedge: HedgeStrategy;
+}) {
+  const optionType = (hedge.option_type ?? "option").toUpperCase();
+  const premium = Number(hedge.premium ?? 0);
+  const contractCost = hedge.contract_cost ?? premium * 100;
+  const winProb = hedge.profit_probability;
+
+  return (
+    <div className="mt-4 rounded-xl border border-dashed border-border bg-background/40 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+            Hedge strategy
+          </p>
+          <p className="mt-1 text-base font-semibold">
+            {underlying} {optionType} ${formatStrike(hedge.strike)}
+          </p>
+          <p className="mt-1 text-sm text-muted">
+            Same expiry · Premium ${premium.toFixed(2)} · ${contractCost.toFixed(0)}/contract
+          </p>
+        </div>
+        {winProb != null && winProb > 0 && (
+          <div className="text-right">
+            <p className="text-xs text-muted">Hedge win odds</p>
+            <p className="text-lg font-bold">{Number(winProb).toFixed(0)}%</p>
+          </div>
+        )}
+      </div>
+      <p className="mt-3 text-sm leading-relaxed text-muted">
+        {hedge.rationale ??
+          "Opposite-side contract on the same expiration if the primary thesis fails."}
+      </p>
+      <div className="mt-3 grid max-w-sm grid-cols-3 gap-2">
+        <ScoreBadge
+          label="Confidence"
+          value={Number(hedge.confidence_score ?? 0)}
+          variant="confidence"
+        />
+        <ScoreBadge label="Risk" value={Number(hedge.risk_score ?? 0)} variant="risk" />
+        <ScoreBadge
+          label="Opportunity"
+          value={Number(hedge.opportunity_score ?? 0)}
+          variant="opportunity"
+        />
+      </div>
+    </div>
   );
 }
 
@@ -79,6 +150,7 @@ export function OptionSignalCard({
   const isBudget = row.is_budget ?? contractCost <= 100;
   const optionType = (row.option_type ?? "option").toUpperCase();
   const headline = ctx?.top_headline;
+  const hedge = row.hedge_strategy ?? row.scoring_snapshot?.hedge_strategy ?? null;
 
   return (
     <article
@@ -212,6 +284,8 @@ export function OptionSignalCard({
         <ScoreBadge label="Risk" value={Number(row.risk_score)} variant="risk" />
         <ScoreBadge label="Opportunity" value={Number(row.opportunity_score)} variant="opportunity" />
       </div>
+
+      {hedge && <HedgeStrategyPanel underlying={row.underlying} hedge={hedge} />}
 
       {tradePlan ? (
         <div className="mt-4">

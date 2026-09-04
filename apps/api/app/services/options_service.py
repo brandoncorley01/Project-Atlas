@@ -37,6 +37,13 @@ def contract_identity_key(candidate: object) -> str:
     return f"{symbol}:{option_type}:{strike}:{expiration}"
 
 
+def symbol_expiration_key(candidate: object) -> str:
+    """One directional thesis per underlying + expiration."""
+    symbol = str(getattr(candidate, "symbol", "") or "").upper()
+    expiration = getattr(candidate, "expiration", None)
+    return f"{symbol}:{expiration}"
+
+
 def _strike_value(candidate: object) -> float:
     try:
         return float(getattr(candidate, "strike", 0) or 0)
@@ -44,17 +51,102 @@ def _strike_value(candidate: object) -> float:
         return 0.0
 
 
+def _option_type(candidate: object) -> str:
+    return str(getattr(candidate, "option_type", "") or "").lower()
+
+
+def _signal_direction_rank(signal: object) -> tuple[float, float, float]:
+    """Higher = more confident directional pick (confidence, win odds, opportunity)."""
+    scored = signal.planned.scored  # type: ignore[attr-defined]
+    snap = scored.scoring_snapshot or {}
+    return (
+        float(getattr(scored, "confidence_score", 0) or 0),
+        float(snap.get("profit_probability") or 0),
+        float(getattr(scored, "opportunity_score", 0) or 0),
+    )
+
+
+def build_hedge_strategy(signal: object) -> dict:
+    """Compact opposite-side contract snapshot nested under the primary pick."""
+    scored = signal.planned.scored  # type: ignore[attr-defined]
+    c = scored.candidate
+    snap = scored.scoring_snapshot or {}
+    premium = float(getattr(c, "premium", 0) or 0)
+    contract_cost = snap.get("contract_cost")
+    if contract_cost is None:
+        contract_cost = round(premium * 100, 2)
+    expiration = getattr(c, "expiration", None)
+    return {
+        "role": "opposite_side_hedge",
+        "option_type": _option_type(c),
+        "strike": _strike_value(c),
+        "expiration": expiration.isoformat() if hasattr(expiration, "isoformat") else expiration,
+        "premium": premium,
+        "contract_cost": float(contract_cost or 0),
+        "confidence_score": float(getattr(scored, "confidence_score", 0) or 0),
+        "risk_score": float(getattr(scored, "risk_score", 0) or 0),
+        "opportunity_score": float(getattr(scored, "opportunity_score", 0) or 0),
+        "profit_probability": float(snap.get("profit_probability") or 0),
+        "delta": getattr(c, "delta", None),
+        "bid": getattr(c, "bid", None),
+        "ask": getattr(c, "ask", None),
+        "rationale": (
+            "Same-expiry opposite side — Atlas's hedge if the primary directional thesis fails."
+        ),
+    }
+
+
+def attach_hedge_strategy(primary: object, members: list) -> None:
+    """Nest the best opposite-side same-expiry contract under the primary pick."""
+    primary_type = _option_type(primary.planned.scored.candidate)  # type: ignore[attr-defined]
+    opposite = "put" if primary_type == "call" else "call"
+    hedges = [
+        s
+        for s in members
+        if s is not primary and _option_type(s.planned.scored.candidate) == opposite
+    ]
+    scored = primary.planned.scored  # type: ignore[attr-defined]
+    snap = dict(scored.scoring_snapshot or {})
+    if not hedges:
+        snap.pop("hedge_strategy", None)
+        scored.scoring_snapshot = snap
+        return
+    hedge = max(hedges, key=_signal_direction_rank)
+    snap["hedge_strategy"] = build_hedge_strategy(hedge)
+    scored.scoring_snapshot = snap
+
+
+def choose_primary_per_expiration(explained: list) -> list:
+    """One confident direction per symbol+expiry; opposite side becomes a hedge."""
+    groups: dict[str, list] = {}
+    order: list[str] = []
+    for signal in explained:
+        key = symbol_expiration_key(signal.planned.scored.candidate)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(signal)
+
+    primaries: list = []
+    for key in order:
+        members = groups[key]
+        primary = max(members, key=_signal_direction_rank)
+        attach_hedge_strategy(primary, members)
+        primaries.append(primary)
+    return primaries
+
+
 def _near_duplicate_strike(candidate: object, kept: list) -> bool:
     """Reject half-strike twins (18.0 vs 18.5) on the same chain that look identical."""
     sym = str(getattr(candidate, "symbol", "") or "").upper()
-    option_type = str(getattr(candidate, "option_type", "") or "").lower()
+    option_type = _option_type(candidate)
     expiration = getattr(candidate, "expiration", None)
     strike = _strike_value(candidate)
     for other in kept:
         c = other.planned.scored.candidate
         if str(c.symbol or "").upper() != sym:
             continue
-        if str(c.option_type or "").lower() != option_type:
+        if _option_type(c) != option_type:
             continue
         if getattr(c, "expiration", None) != expiration:
             continue
@@ -69,35 +161,43 @@ def select_signals_to_save(
     limit: int = MAX_SIGNALS_STORED,
     max_per_symbol: int = MAX_PER_SYMBOL,
 ) -> list:
-    """Dedupe contracts, skip near-twin strikes, and cap per underlying."""
+    """Pick one direction per expiry, attach hedges, then diversify across underlyings."""
+    # Collapse call+put on the same expiry into a primary + nested hedge first.
+    directional = choose_primary_per_expiration(explained)
+
     to_save: list = []
     seen: set[str] = set()
+    seen_expiry: set[str] = set()
     per_symbol: dict[str, int] = {}
 
-    for signal in explained:
+    for signal in directional:
         if len(to_save) >= limit:
             break
         c = signal.planned.scored.candidate
         key = contract_identity_key(c)
-        if key in seen or _near_duplicate_strike(c, to_save):
+        expiry_key = symbol_expiration_key(c)
+        if key in seen or expiry_key in seen_expiry or _near_duplicate_strike(c, to_save):
             continue
         sym = str(c.symbol or "").upper()
         if per_symbol.get(sym, 0) >= max_per_symbol:
             continue
         seen.add(key)
+        seen_expiry.add(expiry_key)
         per_symbol[sym] = per_symbol.get(sym, 0) + 1
         to_save.append(signal)
 
-    # If the per-symbol cap left empty slots, fill with remaining unique contracts.
+    # If the per-symbol cap left empty slots, fill with remaining unique expiries.
     if len(to_save) < limit:
-        for signal in explained:
+        for signal in directional:
             if len(to_save) >= limit:
                 break
             c = signal.planned.scored.candidate
             key = contract_identity_key(c)
-            if key in seen or _near_duplicate_strike(c, to_save):
+            expiry_key = symbol_expiration_key(c)
+            if key in seen or expiry_key in seen_expiry or _near_duplicate_strike(c, to_save):
                 continue
             seen.add(key)
+            seen_expiry.add(expiry_key)
             to_save.append(signal)
 
     return to_save

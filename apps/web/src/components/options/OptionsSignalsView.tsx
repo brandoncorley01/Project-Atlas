@@ -238,7 +238,7 @@ export function OptionsSignalsView({
         )}
         <EmptyState
           title="No options picks yet"
-          description='Tap "Deep scan market" below. Atlas ranks call and put setups by confidence and profit odds.'
+          description='Tap "Deep scan market" below. Atlas picks one confident direction per expiry and nests the opposite side as a hedge.'
           action={
             <button
               type="button"
