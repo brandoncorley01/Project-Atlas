@@ -8,8 +8,10 @@ const PROXY_TIMEOUT_MS = 60_000;
 const DASHBOARD_PROXY_TIMEOUT_MS = 50_000;
 const AI_PROXY_TIMEOUT_MS = 90_000;
 const INSIGHT_SEARCH_PROXY_TIMEOUT_MS = 150_000;
-/** Engine scans / Fix all — align with client 300s waits (under Vercel maxDuration). */
-const ENGINE_LONG_PROXY_TIMEOUT_MS = 280_000;
+/** Render free-tier cold start often needs ~20–40s before /health answers. */
+const API_WAKE_TIMEOUT_MS = 25_000;
+/** Engine scans / Fix all — leave headroom under Vercel maxDuration (300s) for wake ping. */
+const ENGINE_LONG_PROXY_TIMEOUT_MS = 250_000;
 
 /** Vercel Pro allows up to 300s; Hobby caps at 60s regardless. */
 export const maxDuration = 300;
@@ -51,6 +53,68 @@ function proxyTimeoutFor(subpath: string): number {
   return PROXY_TIMEOUT_MS;
 }
 
+function isEngineLongPath(subpath: string): boolean {
+  return (
+    subpath === "engine/fix-all"
+    || subpath === "engine/refresh-options"
+    || subpath === "engine/refresh-stocks"
+    || subpath === "engine/refresh-sports"
+    || subpath === "engine/repair-sports"
+    || subpath.startsWith("engine/refresh-sports")
+    || subpath.startsWith("engine/repair-sports")
+  );
+}
+
+function isUnreachableError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return (
+    message.includes("fetch failed")
+    || message.includes("ECONNREFUSED")
+    || message.includes("ECONNRESET")
+    || message.includes("ENOTFOUND")
+    || message.includes("socket")
+    || message.includes("network")
+    || message.includes("timeout")
+    || message.includes("aborted")
+    || message.includes("TimeoutError")
+    || message.includes("AbortError")
+  );
+}
+
+/** Ping /health so a sleeping Render free-tier instance is awake before Scan. */
+async function wakeApiIfNeeded(subpath: string): Promise<void> {
+  if (!isEngineLongPath(subpath)) return;
+  const healthUrl = `${API_BASE}/health`;
+  try {
+    await fetch(healthUrl, {
+      method: "GET",
+      cache: "no-store",
+      headers: { Connection: "close" },
+      signal: AbortSignal.timeout(API_WAKE_TIMEOUT_MS),
+    });
+  } catch (err) {
+    console.warn("[atlas proxy] API wake ping failed (will still try Scan)", healthUrl, err);
+  }
+}
+
+async function upstreamFetch(
+  target: string,
+  init: RequestInit,
+  *,
+  retries = 0,
+): Promise<Response> {
+  try {
+    return await fetch(target, init);
+  } catch (err) {
+    if (retries > 0 && isUnreachableError(err)) {
+      // Brief pause then retry — wakeApiIfNeeded already ran; avoid burning the 300s budget.
+      await new Promise((r) => setTimeout(r, 2000));
+      return upstreamFetch(target, init, { retries: retries - 1 });
+    }
+    throw err;
+  }
+}
+
 async function proxyRequest(request: NextRequest, pathSegments: string[]) {
   try {
     const supabase = await createClient();
@@ -75,17 +139,23 @@ async function proxyRequest(request: NextRequest, pathSegments: string[]) {
     const hasBody = request.method !== "GET" && request.method !== "HEAD";
     const body = hasBody ? await request.text() : undefined;
 
-    const upstream = await fetch(target, {
-      method: request.method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-        Connection: "close",
+    await wakeApiIfNeeded(subpath);
+
+    const upstream = await upstreamFetch(
+      target,
+      {
+        method: request.method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          Connection: "close",
+        },
+        body: body || undefined,
+        cache: "no-store",
+        signal: AbortSignal.timeout(timeoutMs),
       },
-      body: body || undefined,
-      cache: "no-store",
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+      { retries: isEngineLongPath(subpath) ? 1 : 0 },
+    );
 
     const text = await upstream.text();
     if (!upstream.ok) {
@@ -145,20 +215,17 @@ async function proxyRequest(request: NextRequest, pathSegments: string[]) {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Proxy request failed";
-    const unreachable =
-      message.includes("fetch failed") ||
-      message.includes("ECONNREFUSED") ||
-      message.includes("timeout") ||
-      message.includes("aborted");
+    const unreachable = isUnreachableError(err);
     return NextResponse.json(
       {
         detail: unreachable
           ? process.env.NODE_ENV === "development"
             ? `Cannot reach API at ${API_BASE}. Tap Restart in the top-right header (~60 seconds).`
             : message.includes("timeout") || message.includes("aborted")
-              ? "Scan timed out — try again. For Sports use Scan (cache) or Fetch live; Fix all may need a second pass after a cold start."
-              : "Atlas API is temporarily unavailable. Try again in a moment."
+              ? "Scan timed out while the API was waking up — tap Scan again (second try usually works)."
+              : "Atlas API is waking up (Render). Tap Scan again in a few seconds."
           : message,
+        api_waking: unreachable,
       },
       { status: unreachable ? 503 : 500 },
     );

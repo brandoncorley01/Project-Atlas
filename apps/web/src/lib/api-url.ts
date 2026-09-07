@@ -31,10 +31,19 @@ export function sportsEngineErrorMessage(
   const timedOut =
     err instanceof DOMException && (err.name === "TimeoutError" || err.name === "AbortError");
   if (timedOut) {
-    return `${action} timed out — try again. Scan and Rescore stay free on cached odds.`;
+    return `${action} timed out while the API was busy — tap ${action} again (second try usually works after Render wakes).`;
   }
   if (usesBffProxy()) {
-    return `${action} could not reach the API — Render may be waking up. Tap ${action} again, or use Restart in the header (~60s).`;
+    return `${action} could not reach the API — Render may be waking up. Tap ${action} again in a few seconds.`;
   }
   return `Backend not responding — run .\\scripts\\start-dev.ps1`;
+}
+
+/** True when a Scan/Repair response means the API was cold / unreachable. */
+export function isApiWakingResponse(status: number, body: Record<string, unknown>): boolean {
+  if (status !== 503 && status !== 502) return false;
+  if (body.api_waking === true) return true;
+  const detail = typeof body.detail === "string" ? body.detail : "";
+  const message = typeof body.message === "string" ? body.message : "";
+  return /waking|unavailable|timed out|timeout|Render/i.test(`${detail} ${message}`);
 }

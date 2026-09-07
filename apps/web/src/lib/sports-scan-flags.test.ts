@@ -67,5 +67,20 @@ assert.match(
   /Odds cache is empty/,
   "Sports UI must surface empty odds cache banner",
 );
+assert.match(
+  source,
+  /isApiWakingResponse/,
+  "Scan must detect Render cold-start responses and retry",
+);
+assert.match(
+  source,
+  /API is waking up — retrying Scan/,
+  "Scan must show a wake-and-retry message on cold start",
+);
+assert.match(
+  source,
+  /300_000|300000/,
+  "Scan client timeout must cover BFF wake + long engine budget",
+);
 
 console.log("sports-scan-flags.test.ts: ok");

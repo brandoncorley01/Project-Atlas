@@ -25,7 +25,7 @@ import {
   type SportsSortKey,
   type SportsWindowKey,
 } from "@/lib/sports-filters";
-import { apiRequestHeaders, getApiUrl, sportsEngineErrorMessage, usesBffProxy } from "@/lib/api-url";
+import { apiRequestHeaders, getApiUrl, isApiWakingResponse, sportsEngineErrorMessage, usesBffProxy } from "@/lib/api-url";
 import { fetchIntelligenceStatus } from "@/lib/sports-intelligence-api";
 import {
   boardAsOfFromItems,
@@ -414,23 +414,34 @@ export function SportsSignalsView({
           return;
         }
       }
-      const res = await fetch(`${apiUrl}/engine/refresh-sports${query}`, {
-        method: "POST",
-        headers: apiRequestHeaders(token),
-        credentials: usesBffProxy() ? "include" : "same-origin",
-        signal: AbortSignal.timeout(180000),
-      });
-      let body: Record<string, unknown> = {};
-      try {
-        body = await res.json();
-      } catch {
-        setMessage(
-          res.status === 503
-            ? "Sports scan timed out — try Rescore (0 credits) or Fetch live odds."
-            : `Sports scan failed (HTTP ${res.status}). Try again in a moment.`,
-        );
-        setLoading(null);
-        return;
+
+      // Match BFF long timeout (+ Render wake). 180s aborted mid-wake and looked like Scan was broken.
+      const engineTimeoutMs = 300_000;
+      async function postRefresh(): Promise<{
+        res: Response;
+        body: Record<string, unknown>;
+      }> {
+        const res = await fetch(`${apiUrl}/engine/refresh-sports${query}`, {
+          method: "POST",
+          headers: apiRequestHeaders(token),
+          credentials: usesBffProxy() ? "include" : "same-origin",
+          signal: AbortSignal.timeout(engineTimeoutMs),
+        });
+        let body: Record<string, unknown> = {};
+        try {
+          body = await res.json();
+        } catch {
+          body = {};
+        }
+        return { res, body };
+      }
+
+      let { res, body } = await postRefresh();
+      // One automatic retry when Render is cold — matches the BFF wake/retry path.
+      if (!res.ok && isApiWakingResponse(res.status, body) && mode !== "live") {
+        setMessage("API is waking up — retrying Scan…");
+        await new Promise((r) => setTimeout(r, 2500));
+        ({ res, body } = await postRefresh());
       }
       if (!res.ok || body.ok === false || body.status === "error") {
         const detail =
@@ -553,6 +564,48 @@ export function SportsSignalsView({
         );
       }
     } catch (err) {
+      // Network throw on first attempt: wake briefly and retry once (Render cold start).
+      if (mode !== "live") {
+        try {
+          setMessage("API is waking up — retrying Scan…");
+          await new Promise((r) => setTimeout(r, 2500));
+          const retryRes = await fetch(`${apiUrl}/engine/refresh-sports${query}`, {
+            method: "POST",
+            headers: apiRequestHeaders(token),
+            credentials: usesBffProxy() ? "include" : "same-origin",
+            signal: AbortSignal.timeout(300_000),
+          });
+          let retryBody: Record<string, unknown> = {};
+          try {
+            retryBody = await retryRes.json();
+          } catch {
+            retryBody = {};
+          }
+          if (retryRes.ok && retryBody.ok !== false && retryBody.status !== "error") {
+            const created = Number(retryBody.signals_created ?? 0);
+            const apiMessage =
+              typeof retryBody.message === "string" ? retryBody.message : undefined;
+            rememberAction(mode);
+            setMessage(apiMessage ?? (created > 0 ? `Found ${created} plays` : "Scan finished"));
+            setFilter("all");
+            setSort("opportunity");
+            setActiveCategory(null);
+            setActiveSport(null);
+            await loadItems(token, null, null, {
+              replaceEmpty: created > 0 || itemsRef.current.length === 0,
+            });
+            await Promise.all([loadCategories(token), refreshOddsStatus()]);
+            setWindow("today");
+            writeSportsBoardCache(itemsRef.current, { window: "today" });
+            router.refresh();
+            globalThis.dispatchEvent(new Event("atlas:dashboard-refresh"));
+            setLoading(null);
+            return;
+          }
+        } catch {
+          // fall through to normal error handling
+        }
+      }
       const detail = sportsEngineErrorMessage(err, mode === "live" ? "Fetch" : "Scan");
       await reloadBoardAfterEngineError(token);
       const hint = todayWindowHint();
