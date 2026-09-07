@@ -100,9 +100,9 @@ async function wakeApiIfNeeded(subpath: string): Promise<void> {
 async function upstreamFetch(
   target: string,
   init: RequestInit,
-  *,
-  retries = 0,
+  options: { retries?: number } = {},
 ): Promise<Response> {
+  const retries = options.retries ?? 0;
   try {
     return await fetch(target, init);
   } catch (err) {
