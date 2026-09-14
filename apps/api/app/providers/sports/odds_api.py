@@ -387,13 +387,20 @@ def _near_term_cache_events(
 
 
 def _event_is_calendar_today(event: dict[str, Any]) -> bool:
-    """True when commence_time is later today (US/Eastern)."""
+    """True when commence_time is later today (US/Eastern).
+
+    Only real matchups count — championship outrights/winner keys must not inflate
+    today_event_count while analyze/fallback cannot place Today board cards.
+    """
     from app.services.sports_ranking import event_local_date, sports_today
 
     hours = hours_until_event(event.get("commence_time"))
     if hours is None or hours <= 0:
         return False
     if event.get("_is_outright"):
+        return False
+    sport_key = str(event.get("_sport_key") or event.get("sport_key") or "")
+    if sport_key and _is_outright_sport(sport_key):
         return False
     day = event_local_date(event.get("commence_time"))
     return day is not None and day == sports_today()
@@ -661,11 +668,23 @@ def slate_needs_live_seed(
         kept = bool(scan_result.get("signals_kept"))
         today_picks = int(scan_result.get("today_picks_saved") or 0)
         today_still_empty = bool(scan_result.get("today_still_empty"))
+        today_covered = int(
+            scan_result.get("today_event_ids_covered")
+            or (scan_result.get("stats") or {}).get("today_event_ids_covered")
+            or 0
+        )
         if has_data and near_count > 0 and league_keys_missing_global_families(status):
             return True
         # Empty Tonight must win over "kept" Next 24h / other-window picks.
         if today_still_empty:
             return True
+        # Thin Tonight vs warm cache — a single card must not block live seed for the
+        # rest of today's 11-game slate (coverage used to bail on today_picks > 0).
+        if today_count > 0 and not missing_today:
+            covered = today_covered if today_covered > 0 else today_picks
+            min_cover = max(3, int(round(today_count * 0.45))) if today_count >= 6 else max(1, today_count)
+            if covered < min(today_count, min_cover):
+                return True
         if today_picks > 0:
             return False
         if today_picks == 0 and today_count > 0 and not missing_today:
