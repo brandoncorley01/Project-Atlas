@@ -998,8 +998,18 @@ def fallback_slate_setup_from_event(
         return None
     home = str(event.get("home_team") or "").strip()
     away = str(event.get("away_team") or "").strip()
-    if not home or not away:
-        return None
+    # Remote/partial cache rows sometimes keep commence_time but drop team names.
+    # Still place a Today tracking card so the board does not stay empty while
+    # today_event_count > 0 (analyze_event also returns [] without teams).
+    if not home and not away:
+        label = str(event.get("sport_title") or event.get("_sport_label") or "Tonight").strip()
+        eid = str(event.get("id") or "")[:8]
+        home = f"{label} home" if not eid else f"{label} {eid}"
+        away = "Visitor"
+    elif not home:
+        home = "Home"
+    elif not away:
+        away = "Away"
     event_start = event.get("commence_time")
     hours = _hours_until(event_start)
     if hours is not None and hours <= 0:

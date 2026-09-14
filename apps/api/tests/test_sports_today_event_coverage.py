@@ -298,6 +298,44 @@ def test_ensure_today_event_coverage_fallback_without_bookmakers():
     assert out[0].get("event_start") == today_odds[0]["commence_time"]
 
 
+def test_ensure_today_event_coverage_fallback_without_teams():
+    """Team-less Tonight metadata still gets a Today card (cache count vs board gap)."""
+    today_odds = [
+        {
+            "id": "meta-noteam",
+            "home_team": "",
+            "away_team": "",
+            "commence_time": _tonight(3),
+            "_sport_key": "baseball_mlb",
+            "_sport_label": "MLB",
+        },
+    ]
+    out = _ensure_today_event_coverage(
+        [],
+        today_odds,
+        user_id="user-1",
+        stats_index={},
+        calibration={"slate_mode": True},
+    )
+    assert len(out) == 1
+    assert (out[0].get("scoring_snapshot") or {}).get("event_id") == "meta-noteam"
+    assert (out[0].get("scoring_snapshot") or {}).get("slate_fallback") is True
+
+
+def test_winner_keys_do_not_count_as_calendar_today():
+    """Championship outrights must not inflate today_event_count."""
+    from app.providers.sports.odds_api import _event_is_calendar_today
+
+    event = {
+        "id": "ws-1",
+        "commence_time": _tonight(5),
+        "_sport_key": "baseball_mlb_world_series_winner",
+        "home_team": "",
+        "away_team": "",
+    }
+    assert _event_is_calendar_today(event) is False
+
+
 @pytest.mark.asyncio
 async def test_refresh_sports_saves_today_when_cache_lacks_bookmakers():
     """Scan must not leave Today empty when cache has Tonight metadata only."""
@@ -354,3 +392,83 @@ async def test_refresh_sports_saves_today_when_cache_lacks_bookmakers():
     from app.services.sports_ranking import is_today_slate
 
     assert sum(1 for r in saved if is_today_slate(r)) >= 6
+
+
+@pytest.mark.asyncio
+async def test_refresh_sports_saves_today_when_cache_lacks_teams():
+    """Team-less Tonight rows still produce Today cards under cache_only Scan."""
+    from unittest.mock import PropertyMock
+
+    from app.providers.sports import odds_api
+
+    events = [
+        {
+            "id": f"mlb-{i}",
+            "commence_time": _tonight(2 + i * 0.1),
+            "_sport_key": "baseball_mlb",
+            "_sport_label": "MLB",
+            "home_team": "",
+            "away_team": "",
+        }
+        for i in range(6)
+    ]
+    # Tomorrow noise so a broken Today path would still save other-window picks.
+    for i in range(10):
+        events.append(
+            {
+                "id": f"tmr-{i}",
+                "commence_time": (datetime.now(UTC) + timedelta(hours=32 + i))
+                .isoformat()
+                .replace("+00:00", "Z"),
+                "_sport_key": "soccer_epl",
+                "_sport_label": "EPL",
+                "home_team": f"H{i}",
+                "away_team": f"A{i}",
+                "bookmakers": [
+                    {
+                        "key": "fanduel",
+                        "markets": [
+                            {
+                                "key": "h2h",
+                                "outcomes": [
+                                    {"name": f"H{i}", "price": -110},
+                                    {"name": f"A{i}", "price": -110},
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+    cache = {"fetched_at": datetime.now(UTC).isoformat(), "events": events, "stats": {}}
+    db = MagicMock()
+    db.insert = AsyncMock(
+        side_effect=lambda table, rows: [{**r, "id": f"id-{i}"} for i, r in enumerate(rows)]
+    )
+    db.select = AsyncMock(return_value=[])
+    db.delete = AsyncMock(return_value=None)
+    db.update = AsyncMock(return_value=None)
+    svc = SportsRefreshService(db, "user-1")
+    with (
+        patch.object(
+            type(odds_api.config.settings),
+            "odds_api_keys",
+            new_callable=PropertyMock,
+            return_value=["k1"],
+        ),
+        patch.object(odds_api.config.settings, "odds_spend_mode", "cache_only"),
+        patch.object(odds_api, "_read_cache", return_value=cache),
+        patch("app.services.calibration_service.CalibrationService") as Cal,
+        patch("app.services.sports_service.fetch_sports_news", new=AsyncMock(return_value=[])),
+        patch(
+            "app.services.kalshi_public_pulse.enrich_setup_snapshots_with_kalshi",
+            new=AsyncMock(side_effect=lambda x: x),
+        ),
+        patch("app.config.reload_settings"),
+    ):
+        Cal.return_value.get_adjustments = AsyncMock(return_value={"sports_min_opportunity": 24})
+        result = await svc.refresh_sports(replace=True, limit=40, cache_only=True)
+
+    assert result.get("ok") is True
+    assert int(result.get("today_picks_saved") or 0) >= 6
+    assert result.get("today_still_empty") is False

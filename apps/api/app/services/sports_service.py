@@ -53,6 +53,20 @@ def _setup_event_id(row: dict[str, Any]) -> str:
     return str(snap.get("event_id") or lm.get("event_id") or "")
 
 
+def _odds_event_id(event: dict[str, Any]) -> str:
+    """Stable id for a cache event — fall back when Odds payloads omit id."""
+    eid = str(event.get("id") or "").strip()
+    if eid:
+        return eid
+    sport = str(event.get("_sport_key") or event.get("sport_key") or "")
+    home = str(event.get("home_team") or "").strip()
+    away = str(event.get("away_team") or "").strip()
+    start = str(event.get("commence_time") or "").strip()
+    if home and away and start:
+        return f"{sport}|{away}|{home}|{start}"
+    return start
+
+
 def _is_odds_derived_row(row: dict[str, Any]) -> bool:
     if is_user_entry_row(row):
         return False
@@ -181,7 +195,7 @@ def _ensure_today_event_coverage(
     missing = [
         e
         for e in today_odds
-        if str(e.get("id") or "") and str(e.get("id") or "") not in covered
+        if _odds_event_id(e) and _odds_event_id(e) not in covered
     ]
     if not missing:
         return setups
@@ -199,7 +213,15 @@ def _ensure_today_event_coverage(
                 fallback = fallback_slate_setup_from_event(event, calibration=soft_cal)
                 if fallback is None:
                     continue
-                added.append(setup_to_row(user_id, fallback))
+                row = setup_to_row(user_id, fallback)
+                # Guarantee coverage keys even when Odds omitted event.id.
+                eid = _odds_event_id(event)
+                if eid:
+                    snap = row.setdefault("scoring_snapshot", {})
+                    lm = row.setdefault("line_movement", {})
+                    snap.setdefault("event_id", eid)
+                    lm.setdefault("event_id", eid)
+                added.append(row)
                 continue
             # Prefer moneyline, then highest opportunity — one card per game.
             scored.sort(
@@ -208,7 +230,14 @@ def _ensure_today_event_coverage(
                     -float(s.opportunity_score or 0),
                 )
             )
-            added.append(setup_to_row(user_id, scored[0]))
+            row = setup_to_row(user_id, scored[0])
+            eid = _odds_event_id(event)
+            if eid:
+                snap = row.setdefault("scoring_snapshot", {})
+                lm = row.setdefault("line_movement", {})
+                snap.setdefault("event_id", eid)
+                lm.setdefault("event_id", eid)
+            added.append(row)
         except Exception as exc:
             logger.info("Sports today event coverage skip: %s", exc)
 
@@ -1143,9 +1172,11 @@ class SportsRefreshService:
                 and _setup_event_id(row)
                 and str(row.get("id") or "") not in saved_ids
             }
-            preserve_thin_today = len(prior_today_event_ids) >= 6 and len(
+            # Guard even small Tonight boards (2–5 games) — prior threshold of 6
+            # let a bad rescore delete a thin but real Today slate.
+            preserve_thin_today = len(prior_today_event_ids) >= 2 and len(
                 new_today_event_ids
-            ) < max(4, int(round(len(prior_today_event_ids) * 0.55)))
+            ) < max(1, int(round(len(prior_today_event_ids) * 0.55)))
             delete_ids: list[str] = []
             preserved_today = 0
             for row in active:
@@ -1274,6 +1305,7 @@ class SportsRefreshService:
             "calibration": calibration,
             "ok": True,
             "today_picks_saved": sum(1 for r in setups if is_today_slate(r)) if setups else 0,
+            "today_event_ids_covered": int(fetch_stats.get("today_event_ids_covered") or 0),
             "today_still_empty": (
                 sum(1 for r in setups if is_today_slate(r)) == 0 if setups is not None else True
             ),

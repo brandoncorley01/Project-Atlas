@@ -36,6 +36,19 @@ def test_slate_needs_live_seed_warm_board_filled():
         assert odds_api.slate_needs_live_seed(status, scan) is False
 
 
+def test_slate_needs_live_seed_thin_today_coverage():
+    """One Today card must not block live seed when cache has a full Tonight slate."""
+    status = _warm_status(today=11)
+    scan = {
+        "signals_created": 40,
+        "today_picks_saved": 1,
+        "today_event_ids_covered": 1,
+        "today_still_empty": False,
+    }
+    with patch.object(odds_api, "league_keys_missing_global_families", return_value=()):
+        assert odds_api.slate_needs_live_seed(status, scan) is True
+
+
 def test_slate_needs_live_seed_today_empty_despite_other_picks():
     """Next 24h picks must not block live seed when Today (ET) board is still empty."""
     status = _warm_status()
