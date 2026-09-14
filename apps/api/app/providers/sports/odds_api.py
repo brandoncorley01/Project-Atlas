@@ -121,10 +121,17 @@ CORE_GLOBAL_LIVE_KEYS = (
     "soccer_fifa_world_cup",
     "tennis_atp_us_open",
     "tennis_wta_us_open",
+    "tennis_atp_china_open",
+    "tennis_wta_china_open",
+    "tennis_atp_shanghai_masters",
+    "tennis_wta_wuhan_open",
     "tennis_atp_wimbledon",
     "tennis_wta_wimbledon",
+    "tennis_atp_aus_open_singles",
+    "tennis_wta_aus_open_singles",
     "golf_pga_championship",
     "golf_the_open_championship",
+    "golf_masters_tournament",
 )
 
 # Only pull lines from American retail books — same credit cost, playable numbers.
@@ -197,6 +204,9 @@ SUMMER_PRIORITY_KEYS = (
     "soccer_uefa_champs_league",
     "tennis_atp_us_open",
     "tennis_wta_us_open",
+    "tennis_atp_china_open",
+    "tennis_wta_china_open",
+    "tennis_atp_shanghai_masters",
     "golf_pga_championship",
     "basketball_ncaab",
     "basketball_wncaab",
@@ -218,8 +228,10 @@ WINTER_PRIORITY_KEYS = (
     "soccer_usa_mls",
     "mma_mixed_martial_arts",
     "boxing_boxing",
-    "tennis_atp_australian_open",
-    "tennis_wta_australian_open",
+    "tennis_atp_aus_open_singles",
+    "tennis_wta_aus_open_singles",
+    "tennis_atp_china_open",
+    "tennis_wta_china_open",
     "baseball_mlb",
 )
 
@@ -441,17 +453,22 @@ def _essential_keys_for_today() -> frozenset[str]:
     try:
         from zoneinfo import ZoneInfo
 
-        weekday = datetime.now(ZoneInfo("America/New_York")).weekday()
-        month = datetime.now(ZoneInfo("America/New_York")).month
+        now_et = datetime.now(ZoneInfo("America/New_York"))
+        weekday = now_et.weekday()
+        month = now_et.month
+        day = now_et.day
     except Exception:
-        weekday = datetime.now(UTC).weekday()
-        month = datetime.now(UTC).month
+        now_et = datetime.now(UTC)
+        weekday = now_et.weekday()
+        month = now_et.month
+        day = now_et.day
     if weekday in (5, 6):
         base.add("americanfootball_ncaaf")
     if weekday in (4, 5, 6):
         base.update({"basketball_ncaab", "mma_mixed_martial_arts"})
-    # US Open window — premium Scan must not skip live tennis when MLB fills the cap.
-    if month in (8, 9):
+    # US Open only during the tournament window (late Aug → first week of Sep).
+    # Pinning through all of September burned credits on dead Slam keys after the final.
+    if (month == 8 and day >= 24) or (month == 9 and day <= 8):
         base.update({"tennis_atp_us_open", "tennis_wta_us_open"})
     return frozenset(base)
 
@@ -474,15 +491,62 @@ def _catalog_keys_from_cache(cache: dict[str, Any] | None = None) -> tuple[str, 
     return tuple(seen)
 
 
+def _empty_sport_keys_from_cache(cache: dict[str, Any] | None = None) -> frozenset[str]:
+    """Keys that returned 0 events on the last live pull — do not keep re-seeding them."""
+    cache = cache if cache is not None else _read_cache()
+    if not cache:
+        return frozenset()
+    sports = dict((cache.get("stats") or {}).get("sports") or {})
+    return frozenset(str(k) for k, n in sports.items() if int(n or 0) == 0)
+
+
 def _keys_for_family(keys: tuple[str, ...], family: str) -> tuple[str, ...]:
     fam = str(family or "").lower()
     return tuple(k for k in keys if _sport_family(k) == fam)
 
 
+def _seasonal_global_candidates(family: str) -> tuple[str, ...]:
+    """Likely Odds API keys for a global family this month — not ended Slam pins."""
+    month = datetime.now(UTC).month
+    fam = str(family or "").lower()
+    if fam == "tennis":
+        if month in (1, 2):
+            return ("tennis_atp_aus_open_singles", "tennis_wta_aus_open_singles")
+        if month in (5, 6):
+            return ("tennis_atp_french_open", "tennis_wta_french_open")
+        if month == 7:
+            return ("tennis_atp_wimbledon", "tennis_wta_wimbledon")
+        if (month == 8) or (month == 9 and datetime.now(UTC).day <= 8):
+            return ("tennis_atp_us_open", "tennis_wta_us_open")
+        if month in (9, 10):
+            return (
+                "tennis_atp_china_open",
+                "tennis_wta_china_open",
+                "tennis_atp_shanghai_masters",
+                "tennis_wta_wuhan_open",
+            )
+        if month == 11:
+            return ("tennis_atp_finals", "tennis_wta_finals")
+        return ()
+    if fam == "golf":
+        if month in (3, 4):
+            return ("golf_masters_tournament",)
+        if month == 5:
+            return ("golf_pga_championship",)
+        if month == 7:
+            return ("golf_the_open_championship",)
+        return ()
+    return ()
+
+
 def league_keys_missing_global_families(
     status: dict[str, Any] | None = None,
 ) -> tuple[str, ...]:
-    """Global sport families (tennis, golf, soccer, …) absent from near-term cache."""
+    """Global sport families (tennis, golf, soccer, …) absent from near-term cache.
+
+    Only proposes keys that are still plausible — skips leagues that already returned
+    0 rows on the last live pull so premium Scan does not burn credits on dead Slams.
+    """
     cache = _read_cache()
     raw = list(cache.get("events") or []) if cache else []
     upcoming = filter_upcoming_events(raw) if raw else []
@@ -493,34 +557,42 @@ def league_keys_missing_global_families(
     if not missing_families:
         return ()
 
+    empty_keys = _empty_sport_keys_from_cache(cache)
     catalog = _catalog_keys_from_cache(cache)
+    month = datetime.now(UTC).month
+    preferred = SUMMER_PRIORITY_KEYS if month in (4, 5, 6, 7, 8, 9) else WINTER_PRIORITY_KEYS
     fallback_catalog = tuple(
         dict.fromkeys(
             list(catalog)
+            + list(preferred)
             + list(PRIORITY_SPORT_KEYS)
             + list(DEFAULT_SPORT_KEYS)
             + list(CORE_GLOBAL_LIVE_KEYS)
         )
     )
-    month = datetime.now(UTC).month
-    preferred = SUMMER_PRIORITY_KEYS if month in (4, 5, 6, 7, 8, 9) else WINTER_PRIORITY_KEYS
-    ordered_catalog = _seasonal_key_order(
-        tuple(dict.fromkeys(list(fallback_catalog) + list(preferred)))
-    )
+    ordered_catalog = _seasonal_key_order(fallback_catalog)
 
     out: list[str] = []
     for family in missing_families:
-        candidates = _keys_for_family(ordered_catalog, family)
-        if family == "soccer":
+        seasonal = _seasonal_global_candidates(family)
+        family_catalog = _keys_for_family(ordered_catalog, family)
+        if family in {"tennis", "golf"}:
+            # Only seasonal tournaments — never re-seed Aus Open / Masters mid-year
+            # just because they appear in CORE_GLOBAL fallback lists.
+            candidates = seasonal
+        elif family == "soccer":
             # Prefer a major soccer card when MLS alone is present.
             if "soccer" in present and near_keys:
                 continue
             candidates = tuple(
-                k
-                for k in candidates
-                if k in preferred or k in CORE_GLOBAL_LIVE_KEYS
-            ) or candidates
-        pick = next((k for k in candidates if k not in near_keys), None)
+                k for k in family_catalog if k in preferred or k in CORE_GLOBAL_LIVE_KEYS
+            ) or family_catalog
+        else:
+            candidates = family_catalog
+        pick = next(
+            (k for k in candidates if k not in near_keys and k not in empty_keys),
+            None,
+        )
         if pick:
             out.append(pick)
     return tuple(dict.fromkeys(out))[:6]
@@ -1880,10 +1952,10 @@ async def fetch_all_sports_odds(
         elif key in keys:
             empty_live_keys.append(key)
 
-    # Empty in-season cards (ended NFL preseason / MMA off-week) used to burn the
-    # whole 8-league cap and leave Tonight missing soccer/tennis. Backfill with the
-    # next priority keys up to the number of empty slots (same credit budget intent).
-    if force_refresh and empty_live_keys and sport_keys is None:
+    # Empty in-season cards (ended NFL preseason / MMA off-week / finished Slam) used to
+    # burn the cap and leave Tonight missing soccer/tennis. Backfill with the next
+    # priority keys — including when premium Scan targeted a short list of dead keys.
+    if force_refresh and empty_live_keys:
         attempted = set(keys) | set(futures_keys)
         # Rebuild uncapped seasonal order from the active catalog, then take fillers.
         title_by_key = title_by_key or {}
@@ -1893,16 +1965,24 @@ async def fetch_all_sports_odds(
             key=lambda s: (priority_index.get(s["key"], 999), str(s.get("title") or s["key"])),
         )
         catalog_keys = tuple(s["key"] for s in active_game) or DEFAULT_SPORT_KEYS
+        # When a targeted seed emptied (e.g. dead US Open), prefer same-family actives first.
+        empty_families = {_sport_family(k) for k in empty_live_keys}
+        family_fillers = [
+            k
+            for k in catalog_keys
+            if k not in attempted and _sport_family(k) in empty_families
+        ]
         # Prefer US+global mix without re-pinning the empties we just tried.
-        fillers = [
+        mix_fillers = [
             k
             for k in _limit_sport_keys(catalog_keys, force_refresh=True)
             if k not in attempted
         ]
+        fillers = list(dict.fromkeys(family_fillers + mix_fillers))
         # If mix still empty (all essentials failed), walk full seasonal order.
         if not fillers:
             fillers = [k for k in _seasonal_key_order(catalog_keys) if k not in attempted]
-        backfill_n = min(len(empty_live_keys), len(fillers))
+        backfill_n = min(max(len(empty_live_keys), 2 if sport_keys else 0), len(fillers))
         backfill_keys = tuple(fillers[:backfill_n])
         if backfill_keys:
             logger.info(
@@ -1927,11 +2007,18 @@ async def fetch_all_sports_odds(
             stats["sport_keys"] = list(keys) + list(futures_keys)
             stats["sports_scanned"] = len(keys) + len(futures_keys)
             stats["live_backfill_keys"] = list(backfill_keys)
-            stats["league_catalog"] = [
-                _sport_label(k, title_by_key.get(k)) for k in keys
-            ] + [
-                _sport_label(k, title_by_key.get(k)) for k in futures_keys
-            ]
+
+    # League catalog for UI — only leagues that returned events (attempted empties lied).
+    with_rows = [
+        k for k in list(keys) + list(futures_keys) if int(stats["sports"].get(k) or 0) > 0
+    ]
+    stats["league_catalog"] = [
+        _sport_label(k, title_by_key.get(k)) for k in with_rows
+    ] or [
+        _sport_label(k, title_by_key.get(k)) for k in keys
+    ] + [
+        _sport_label(k, title_by_key.get(k)) for k in futures_keys
+    ]
 
     # Count only leagues that returned data as credits spent — empty skips still cost a
     # request, but aspirational credits_used previously marked failed pulls as "live".
