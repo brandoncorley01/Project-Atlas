@@ -55,7 +55,7 @@ def _is_user_entry_row(row: dict) -> bool:
 
 def _sports_window_match(row: dict, window: str) -> bool:
     """Match board windows — concluded / started games are already excluded by is_sports_listable."""
-    from app.services.sports_ranking import is_calendar_today, is_next_24h_slate
+    from app.services.sports_ranking import is_next_24h_slate, is_today_slate
 
     hours = hours_until_event(row.get("event_start"))
     insight_or_user = _is_openai_web_row(row) or _is_user_entry_row(row)
@@ -68,7 +68,7 @@ def _sports_window_match(row: dict, window: str) -> bool:
     if hours <= 0:
         return False
     if window == "today":
-        return is_calendar_today(row) or insight_or_user
+        return is_today_slate(row) or insight_or_user
     if window == "next24h":
         return is_next_24h_slate(row) or insight_or_user
     if window == "soon":
@@ -444,7 +444,7 @@ class SignalService:
         rows = sort_for_display(rows)
         # Never truncate away Atlas Insight / player props when applying the board limit.
         if offset == 0 and limit > 0 and len(rows) > limit:
-            from app.services.sports_ranking import is_calendar_today
+            from app.services.sports_ranking import is_today_slate
 
             insight = [r for r in rows if _is_openai_web_row(r) or _is_user_entry_row(r)]
             props = [
@@ -457,7 +457,7 @@ class SignalService:
                 and not _is_openai_web_row(r)
                 and not _is_user_entry_row(r)
             ]
-            today_rows = [r for r in rows if is_calendar_today(r)]
+            today_rows = [r for r in rows if is_today_slate(r)]
             reserved: list[dict] = []
             seen_ids: set[str] = set()
             for r in insight + props + today_rows:

@@ -1,5 +1,5 @@
 import type { SportsSignal } from "@/components/sports/SportsSignalCard";
-import { easternDayKey } from "@/lib/sports-time";
+import { sportsSlateDayKey } from "@/lib/sports-time";
 
 export type SportsSortKey =
   | "soonest"
@@ -109,13 +109,13 @@ function isFutures(row: SportsSignal): boolean {
   return bet === "futures" || bet === "outright";
 }
 
-/** Same Eastern calendar day as now — for Today parlays / sports window. */
+/** Today sports-day slate (rolls at 6am ET) — includes early-AM West Coast nightcaps. */
 export function isSportsCalendarToday(row: SportsSignal): boolean {
   if (!row.event_start || isFutures(row)) return false;
   const hours = hoursUntilStart(row);
   if (hours == null || hours <= 0) return false;
   try {
-    return easternDayKey(row.event_start) === easternDayKey(new Date());
+    return sportsSlateDayKey(row.event_start) === sportsSlateDayKey(new Date());
   } catch {
     return false;
   }
