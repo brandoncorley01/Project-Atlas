@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -18,8 +18,10 @@ MONTH_HOURS = 720  # 30 days — longer-dated game lines
 MAX_SCAN_HORIZON_HOURS = 2160
 STRONG_NEWS_MIN_SCORE = 4.0
 
-# US sports slate day — "Today" parlays use Eastern calendar date.
+# US sports slate day — "Today" board rolls at 6am ET so West Coast nightcaps
+# after midnight still sit on Tonight/Today instead of only Next 24h.
 ATLAS_SPORTS_TZ = ZoneInfo("America/New_York")
+SPORTS_SLATE_ROLL_HOUR = 6
 
 
 def hours_to_start(row: dict[str, Any]) -> float | None:
@@ -37,6 +39,29 @@ def sports_today(*, tz: ZoneInfo = ATLAS_SPORTS_TZ) -> date:
     return datetime.now(tz).date()
 
 
+def sports_slate_date(
+    when: datetime | str | None = None,
+    *,
+    tz: ZoneInfo = ATLAS_SPORTS_TZ,
+) -> date | None:
+    """Sports 'Today' date — rolls forward at 6:00 AM Eastern.
+
+    A 1:05 AM ET Tuesday tip still belongs to Monday's Tonight/Today slate.
+    """
+    if when is None:
+        local = datetime.now(tz)
+    elif isinstance(when, str):
+        parsed = parse_iso(when)
+        if not parsed:
+            return None
+        local = parsed.astimezone(tz)
+    else:
+        local = when.astimezone(tz) if when.tzinfo else when.replace(tzinfo=tz)
+    if local.hour < SPORTS_SLATE_ROLL_HOUR:
+        return local.date() - timedelta(days=1)
+    return local.date()
+
+
 def is_calendar_today(row: dict[str, Any], *, tz: ZoneInfo = ATLAS_SPORTS_TZ) -> bool:
     """True when the game kicks off later today (Eastern calendar day, through midnight ET)."""
     hours = hours_to_start(row)
@@ -49,8 +74,15 @@ def is_calendar_today(row: dict[str, Any], *, tz: ZoneInfo = ATLAS_SPORTS_TZ) ->
 
 
 def is_today_slate(row: dict[str, Any], *, tz: ZoneInfo = ATLAS_SPORTS_TZ) -> bool:
-    """Today's board window — Eastern calendar day only (ends at midnight ET)."""
-    return is_calendar_today(row, tz=tz)
+    """Today's board window — Eastern sports day rolling at 6am (includes early-AM nightcaps)."""
+    hours = hours_to_start(row)
+    if hours is None or hours <= 0:
+        return False
+    if is_futures_row(row):
+        return False
+    event_slate = sports_slate_date(row.get("event_start"), tz=tz)
+    current_slate = sports_slate_date(tz=tz)
+    return event_slate is not None and current_slate is not None and event_slate == current_slate
 
 
 def is_next_24h_slate(row: dict[str, Any]) -> bool:
@@ -90,7 +122,7 @@ def timing_tier(row: dict[str, Any]) -> str:
         return "past"
     if is_futures_row(row):
         return "futures"
-    if is_calendar_today(row):
+    if is_today_slate(row):
         return "calendar_today"
     if hours <= SOON_HOURS:
         return "live_soon"
@@ -139,7 +171,7 @@ def composite_score(row: dict[str, Any]) -> float:
         # Soft penalty so future game lines remain visible when edge is strong.
         soon_penalty = min(12.0, (hours - NEAR_TERM_HOURS) * 0.04)
     stats_support = float(snap.get("stats_support") or 0)
-    today_boost = 4.0 if is_calendar_today(row) else 0.0
+    today_boost = 4.0 if is_today_slate(row) else 0.0
     insight_boost = 3.0 if insight else 0.0
     return (
         opp
@@ -156,7 +188,7 @@ def sort_for_display(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(
         rows,
         key=lambda r: (
-            0 if is_calendar_today(r) else (1 if is_near_term(r) else (2 if not is_futures_row(r) else 3)),
+            0 if is_today_slate(r) else (1 if is_near_term(r) else (2 if not is_futures_row(r) else 3)),
             -composite_score(r),
             hours_to_start(r) if hours_to_start(r) is not None else 9999,
         ),
@@ -214,9 +246,9 @@ def dedupe_one_side_per_market(rows: list[dict[str, Any]]) -> list[dict[str, Any
 
 
 def sort_for_parlay_pool(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    today = [r for r in rows if is_calendar_today(r)]
+    today = [r for r in rows if is_today_slate(r)]
     if len(today) >= 2:
-        near = [r for r in rows if is_near_term(r) and not is_calendar_today(r)]
+        near = [r for r in rows if is_near_term(r) and not is_today_slate(r)]
         return sort_for_display(today + near)
     near = [r for r in rows if is_near_term(r)]
     pool = near if len(near) >= 2 else [r for r in rows if is_within_horizon(r) and not is_futures_row(r)]
@@ -228,4 +260,4 @@ def filter_near_term(rows: list[dict[str, Any]], *, max_hours: float = NEAR_TERM
 
 
 def filter_calendar_today(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [r for r in rows if is_calendar_today(r)]
+    return [r for r in rows if is_today_slate(r)]

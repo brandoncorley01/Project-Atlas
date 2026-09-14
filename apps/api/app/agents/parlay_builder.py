@@ -8,7 +8,7 @@ from typing import Any, Callable
 from app.agents.parlay_categories import compute_parlay_time_meta
 from app.agents.sports_analyst import PREFERRED_BOOK_KEY, PREFERRED_BOOK_TITLE, primary_odds_from_signal
 from app.services.freshness import hours_until_event
-from app.services.sports_ranking import is_calendar_today, is_near_term, sort_for_parlay_pool
+from app.services.sports_ranking import is_near_term, is_today_slate, sort_for_parlay_pool
 
 STYLE_ORDER = ("conservative", "balanced", "aggressive")
 
@@ -201,7 +201,7 @@ def _assemble_parlay(
         )
 
     correlation_warning = detect_correlation(leg_details)
-    if time_category == "today" or all(is_calendar_today(p) for p in picks):
+    if time_category == "today" or all(is_today_slate(p) for p in picks):
         slate_hint = "all legs start today"
     elif all(is_near_term(p) for p in picks):
         slate_hint = "all legs start within 48h"
@@ -264,7 +264,7 @@ def _combo_signal_pool(
         near_excl = [
             s
             for s in eligible
-            if is_near_term(s) and not is_calendar_today(s)
+            if is_near_term(s) and not is_today_slate(s)
         ]
         if len(near_excl) >= 2:
             # Rank by composite score without re-inserting Today ahead of them.
@@ -318,7 +318,7 @@ def build_all_parlays(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return []
 
     pool = sort_for_parlay_pool(signals)
-    today_signals = [s for s in pool if is_calendar_today(s)]
+    today_signals = [s for s in pool if is_today_slate(s)]
     near_signals = [s for s in pool if is_near_term(s)]
     if len(today_signals) < 2 and len(near_signals) < 2:
         return []
@@ -342,7 +342,7 @@ def build_all_parlays(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
             today_eligible = list(today_signals)
         if len(today_eligible) >= leg_count:
             for combo in _generate_combos(today_eligible, leg_count):
-                if not all(is_calendar_today(p) for p in combo):
+                if not all(is_today_slate(p) for p in combo):
                     continue
                 metrics = _score_picks(combo, style)
                 if metrics:
@@ -350,7 +350,7 @@ def build_all_parlays(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
         # 24–48h tickets: use non-Today ≤48h legs exclusively so a dense Tonight
         # slate cannot consume the entire combo pool (then get skipped as all-Today).
-        near_excl = [s for s in near_signals if not is_calendar_today(s)]
+        near_excl = [s for s in near_signals if not is_today_slate(s)]
         near_eligible = [s for s in near_excl if _eligible_for_style(style, s)]
         if len(near_eligible) < max(leg_count, 4) and len(near_excl) >= leg_count:
             near_eligible = list(near_excl)
@@ -362,7 +362,7 @@ def build_all_parlays(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
             ):
                 if not all(is_near_term(p) for p in combo):
                     continue
-                if all(is_calendar_today(p) for p in combo):
+                if all(is_today_slate(p) for p in combo):
                     continue
                 metrics = _score_picks(combo, style)
                 if metrics:
@@ -378,12 +378,12 @@ def build_all_parlays(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if len(mix_eligible) >= leg_count:
                 # Reserve most combo slots for non-Today so mixes are not all-Today.
                 ranked_near = sorted(
-                    [s for s in mix_eligible if not is_calendar_today(s)],
+                    [s for s in mix_eligible if not is_today_slate(s)],
                     key=lambda r: float(r.get("opportunity_score") or 0),
                     reverse=True,
                 )
                 ranked_today = sorted(
-                    [s for s in mix_eligible if is_calendar_today(s)],
+                    [s for s in mix_eligible if is_today_slate(s)],
                     key=lambda r: float(r.get("opportunity_score") or 0),
                     reverse=True,
                 )
@@ -394,9 +394,9 @@ def build_all_parlays(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
                         continue
                     if not all(is_near_term(p) for p in combo):
                         continue
-                    if all(is_calendar_today(p) for p in combo):
+                    if all(is_today_slate(p) for p in combo):
                         continue
-                    if not any(not is_calendar_today(p) for p in combo):
+                    if not any(not is_today_slate(p) for p in combo):
                         continue
                     metrics = _score_picks(combo, style)
                     if metrics:

@@ -18,7 +18,6 @@ from app.services.freshness import filter_upcoming_events, hours_until_event, is
 from app.services.sports_ranking import (
     composite_score,
     dedupe_one_side_per_market,
-    is_calendar_today,
     is_near_term,
     is_today_slate,
     is_user_entry_row,
@@ -300,7 +299,7 @@ def _reinject_today_events(
 
 
 def _is_near_48h_non_today_row(row: dict[str, Any]) -> bool:
-    return is_near_term(row) and not is_calendar_today(row)
+    return is_near_term(row) and not is_today_slate(row)
 
 
 def _ensure_near_48h_event_coverage(

@@ -540,7 +540,7 @@ export function SportsSignalsView({
       if (todayStillEmpty && opened === "next24h" && next24N > 0) {
         setMessage(
           (apiMessage ? `${apiMessage} · ` : "") +
-            `Today's slate (through midnight ET) is empty — showing ${next24N} play${next24N === 1 ? "" : "s"} in Next 24h.`,
+            `Today's slate (through early morning ET) is empty — showing ${next24N} play${next24N === 1 ? "" : "s"} in Next 24h.`,
         );
       } else if (todayStillEmpty && opened === "soon" && soonN > 0) {
         setMessage(
@@ -932,7 +932,7 @@ export function SportsSignalsView({
           description={
             window === "today" && !activeCategory && filter === "all" && !activeSport
               ? filterByWindow(items, "next24h").length > 0
-                ? `Nothing on today's slate (through midnight ET). ${filterByWindow(items, "next24h").length} play(s) are in Next 24h — switch below or wait for auto-open, or Scan for tonight's live odds.`
+                ? `Nothing on today's slate (through early morning ET). ${filterByWindow(items, "next24h").length} play(s) are in Next 24h — switch below or wait for auto-open, or Scan for tonight's live odds.`
                 : filterByWindow(items, "soon").length > 0
                   ? `Nothing on today's slate. ${filterByWindow(items, "soon").length} play(s) are in Next 48h — switch below or wait for auto-open, or Scan sports odds.`
                   : "Nothing on today's slate. Tap Scan sports odds to pull tonight's FanDuel/DraftKings lines."

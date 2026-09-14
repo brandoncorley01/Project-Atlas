@@ -387,7 +387,7 @@ def _near_term_cache_events(
 
 
 def _event_is_calendar_today(event: dict[str, Any]) -> bool:
-    """True when commence_time is later today (US/Eastern).
+    """True when commence_time is later today (US/Eastern calendar day).
 
     Only real matchups count — championship outrights/winner keys must not inflate
     today_event_count while analyze/fallback cannot place Today board cards.
@@ -411,8 +411,20 @@ def calendar_today_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _event_is_today_slate(event: dict[str, Any]) -> bool:
-    """Eastern calendar day — Sports Today window (ends at midnight ET)."""
-    return _event_is_calendar_today(event)
+    """Eastern sports day rolling at 6am — Sports Today window (includes early-AM nightcaps)."""
+    from app.services.sports_ranking import sports_slate_date
+
+    hours = hours_until_event(event.get("commence_time"))
+    if hours is None or hours <= 0:
+        return False
+    if event.get("_is_outright"):
+        return False
+    sport_key = str(event.get("_sport_key") or event.get("sport_key") or "")
+    if sport_key and _is_outright_sport(sport_key):
+        return False
+    event_slate = sports_slate_date(event.get("commence_time"))
+    current_slate = sports_slate_date()
+    return event_slate is not None and current_slate is not None and event_slate == current_slate
 
 
 def _event_is_next_24h(event: dict[str, Any]) -> bool:
@@ -426,7 +438,7 @@ def _event_is_next_24h(event: dict[str, Any]) -> bool:
 
 
 def today_slate_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return calendar_today_events(events)
+    return [e for e in events if _event_is_today_slate(e)]
 
 
 def next_24h_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -434,7 +446,7 @@ def next_24h_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _event_is_near_48h_non_today(event: dict[str, Any]) -> bool:
-    """Upcoming within 48h but not Eastern calendar Today — feeds 24–48h parlays/board."""
+    """Upcoming within 48h but outside the Today sports-day slate — feeds 24–48h parlays/board."""
     hours = hours_until_event(event.get("commence_time"))
     if hours is None or hours <= 0 or hours > 48:
         return False
@@ -443,7 +455,7 @@ def _event_is_near_48h_non_today(event: dict[str, Any]) -> bool:
     sport_key = str(event.get("_sport_key") or event.get("sport_key") or "")
     if sport_key and _is_outright_sport(sport_key):
         return False
-    return not _event_is_calendar_today(event)
+    return not _event_is_today_slate(event)
 
 
 def near_48h_non_today_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -451,16 +463,16 @@ def near_48h_non_today_events(events: list[dict[str, Any]]) -> list[dict[str, An
 
 
 def cache_missing_today_slate(events: list[dict[str, Any]] | None = None) -> bool:
-    """True when cached odds have no Eastern-calendar-today games.
+    """True when cached odds have no Today sports-day games (6am ET roll).
 
-    A warm near-term cache of only tomorrow+ games used to make Repair skip live
-    Fetch — Today stayed empty on full MLB/WNBA nights.
+    A warm near-term cache of only tomorrow afternoon+ games used to make Repair
+    skip live Fetch — Today stayed empty on full MLB/WNBA nights.
     """
     if events is None:
         cache = _read_cache()
         events = list(cache.get("events") or []) if cache else []
     upcoming = filter_upcoming_events(list(events))
-    today = calendar_today_events(upcoming)
+    today = today_slate_events(upcoming)
     return len(today) == 0
 
 
