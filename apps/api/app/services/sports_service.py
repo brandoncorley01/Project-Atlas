@@ -1504,9 +1504,17 @@ class SportsRefreshService:
             "calibration": calibration,
             "ok": True,
             "today_picks_saved": sum(1 for r in setups if is_today_slate(r)) if setups else 0,
+            "near_48h_picks_saved": (
+                sum(1 for r in setups if _is_near_48h_non_today_row(r)) if setups else 0
+            ),
             "today_event_ids_covered": int(fetch_stats.get("today_event_ids_covered") or 0),
             "today_still_empty": (
                 sum(1 for r in setups if is_today_slate(r)) == 0 if setups is not None else True
+            ),
+            "near_48h_still_empty": (
+                sum(1 for r in setups if _is_near_48h_non_today_row(r)) == 0
+                if setups is not None
+                else True
             ),
             "message": self._result_message(
                 setups,
