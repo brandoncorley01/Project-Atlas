@@ -2,6 +2,7 @@
  * Credit safety: Rescore must send cache_only (0 Odds credits).
  * Scan uses premium_scan (server may live-seed missing Tonight leagues when needed).
  * Only Fetch (force_refresh) may spend directly from the client.
+ * When Today is empty, Scan must open Next 24h / 48h via pickWindowWithResults.
  * Run with: npx --yes tsx apps/web/src/lib/sports-scan-flags.test.ts
  */
 import assert from "node:assert/strict";
@@ -29,7 +30,7 @@ assert.match(
 );
 assert.match(
   source,
-  /globalThis\.confirm\(/,
+  /\.confirm\(/,
   "Fetch must confirm before spending credits",
 );
 assert.doesNotMatch(
@@ -49,13 +50,18 @@ assert.match(
 );
 assert.match(
   source,
-  /setWindow\("today"\)/,
-  "Scan must pin the Window to Today, not auto-widen to Next 48h",
+  /pickWindowWithResults/,
+  "Sports view must widen off empty Today via pickWindowWithResults",
+);
+assert.match(
+  source,
+  /applyWindowForBoard\("today"\)/,
+  "Scan/reload must applyWindowForBoard so empty Today opens Next 24h/48h",
 );
 assert.doesNotMatch(
   source,
-  /pickWindowWithResults/,
-  "Sports view must not auto-widen Today to Next 48h",
+  /setWindow\("today"\)/,
+  "Sports view must not hard-pin empty Today after Scan",
 );
 assert.match(
   source,
