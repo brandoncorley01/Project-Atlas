@@ -8,7 +8,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.services.sports_service import (
+    _ensure_near_48h_event_coverage,
     _ensure_today_event_coverage,
+    _reinject_near_48h_events,
+    _reinject_today_events,
     _select_diverse_setups,
     SportsRefreshService,
 )
@@ -472,3 +475,150 @@ async def test_refresh_sports_saves_today_when_cache_lacks_teams():
     assert result.get("ok") is True
     assert int(result.get("today_picks_saved") or 0) >= 6
     assert result.get("today_still_empty") is False
+
+def test_ensure_near_48h_event_coverage_fills_tomorrow_games():
+    from app.agents.sports_analyst import SportsBetSetup
+
+    existing = [_row(eid="tonight-1", hours=3)]
+    near_odds = [
+        {
+            "id": "tmr-a",
+            "home_team": "Chiefs",
+            "away_team": "Bills",
+            "commence_time": (datetime.now(UTC) + timedelta(hours=30)).isoformat().replace("+00:00", "Z"),
+            "_sport_key": "americanfootball_nfl",
+            "_sport_label": "NFL",
+        },
+        {
+            "id": "tmr-b",
+            "home_team": "Lakers",
+            "away_team": "Celtics",
+            "commence_time": (datetime.now(UTC) + timedelta(hours=32)).isoformat().replace("+00:00", "Z"),
+            "_sport_key": "basketball_nba",
+            "_sport_label": "NBA",
+        },
+    ]
+
+    def _setup_for(eid: str, hours: float, sport: str, key: str) -> SportsBetSetup:
+        return SportsBetSetup(
+            sport=sport,
+            event_name=f"Away @ Home {eid}",
+            event_start=(datetime.now(UTC) + timedelta(hours=hours)).isoformat().replace("+00:00", "Z"),
+            bet_type="moneyline",
+            selection="Home",
+            odds_american=-110,
+            odds_decimal=1.91,
+            expected_value=0.0,
+            line_movement={},
+            sharp_indicator=None,
+            confidence_score=50.0,
+            risk_score=40.0,
+            opportunity_score=28.0,
+            recommendation="ML",
+            explanation="x",
+            bull_case="x",
+            bear_case="x",
+            invalidation="x",
+            suggested_action="watch",
+            scoring_snapshot={"event_id": eid, "sport_key": key, "us_market_line": True},
+        )
+
+    def analyze_side(event, **kwargs):
+        eid = str(event.get("id"))
+        if eid == "tmr-a":
+            return [_setup_for("tmr-a", 30, "NFL", "americanfootball_nfl")]
+        return [_setup_for("tmr-b", 32, "NBA", "basketball_nba")]
+
+    def row_side(user_id, setup):
+        eid = str((setup.scoring_snapshot or {}).get("event_id"))
+        hours = 30 if eid == "tmr-a" else 32
+        sport = "NFL" if eid == "tmr-a" else "NBA"
+        key = "americanfootball_nfl" if eid == "tmr-a" else "basketball_nba"
+        return _row(eid=eid, sport=sport, sport_key=key, hours=hours)
+
+    with (
+        patch("app.services.sports_service.analyze_event", side_effect=analyze_side),
+        patch("app.services.sports_service.setup_to_row", side_effect=row_side),
+        patch("app.services.sports_service.lookup_match_stats", return_value=None),
+    ):
+        out = _ensure_near_48h_event_coverage(
+            existing,
+            near_odds,
+            user_id="user-1",
+            stats_index={},
+            calibration={},
+            min_cards=2,
+        )
+
+    from app.services.sports_ranking import is_calendar_today, is_near_term
+
+    near_excl = [r for r in out if is_near_term(r) and not is_calendar_today(r)]
+    eids = {str((r.get("scoring_snapshot") or {}).get("event_id") or "") for r in near_excl}
+    assert "tmr-a" in eids
+    assert "tmr-b" in eids
+
+
+def test_select_diverse_reserves_non_today_near_48h():
+    tonight = [_row(eid=f"mlb-{i}", hours=2 + i * 0.1, opp=45 - i) for i in range(25)]
+    tomorrow = []
+    for i in range(10):
+        start = (datetime.now(UTC) + timedelta(hours=28 + i)).isoformat().replace("+00:00", "Z")
+        tomorrow.append(
+            {
+                "id": f"tmr-{i}",
+                "sport": "NFL",
+                "event_name": f"A{i} @ B{i}",
+                "event_start": start,
+                "bet_type": "moneyline",
+                "selection": f"A{i}",
+                "opportunity_score": 35 - i * 0.1,
+                "confidence_score": 50,
+                "risk_score": 45,
+                "scoring_snapshot": {
+                    "sport_key": "americanfootball_nfl",
+                    "event_id": f"e-tmr-{i}",
+                    "edge_pct": 1,
+                    "us_market_line": True,
+                },
+                "line_movement": {"edge_pct": 1, "event_id": f"e-tmr-{i}"},
+            }
+        )
+    picked = _select_diverse_setups(tonight + tomorrow, limit=40)
+    from app.services.sports_ranking import is_calendar_today, is_near_term
+
+    near_excl = [r for r in picked if is_near_term(r) and not is_calendar_today(r)]
+    assert len(near_excl) >= 4, f"expected ≥4 non-Today ≤48h cards, got {len(near_excl)}"
+
+
+def test_reinject_near_48h_restores_dropped_tomorrow_cards():
+    tonight = [_row(eid=f"mlb-{i}", hours=2 + i * 0.1) for i in range(10)]
+    tomorrow_pool = []
+    for i in range(8):
+        start = (datetime.now(UTC) + timedelta(hours=28 + i)).isoformat().replace("+00:00", "Z")
+        tomorrow_pool.append(
+            {
+                "id": f"tmr-{i}",
+                "sport": "NFL",
+                "event_name": f"A{i} @ B{i}",
+                "event_start": start,
+                "bet_type": "moneyline",
+                "selection": f"A{i}",
+                "opportunity_score": 40 - i,
+                "confidence_score": 50,
+                "risk_score": 45,
+                "scoring_snapshot": {
+                    "sport_key": "americanfootball_nfl",
+                    "event_id": f"e-tmr-{i}",
+                    "edge_pct": 1,
+                    "us_market_line": True,
+                },
+                "line_movement": {"edge_pct": 1, "event_id": f"e-tmr-{i}"},
+            }
+        )
+    # Selected board is Today-heavy — only 1 tomorrow card survived diversity.
+    selected = tonight + tomorrow_pool[:1]
+    out = _reinject_near_48h_events(selected, tonight + tomorrow_pool, limit=40, min_cards=6)
+    from app.services.sports_ranking import is_calendar_today, is_near_term
+
+    near_excl = [r for r in out if is_near_term(r) and not is_calendar_today(r)]
+    assert len(near_excl) >= 6, f"expected reinjected near-48h cards, got {len(near_excl)}"

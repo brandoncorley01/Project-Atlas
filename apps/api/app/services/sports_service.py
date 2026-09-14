@@ -18,6 +18,7 @@ from app.services.freshness import filter_upcoming_events, hours_until_event, is
 from app.services.sports_ranking import (
     composite_score,
     dedupe_one_side_per_market,
+    is_calendar_today,
     is_near_term,
     is_today_slate,
     is_user_entry_row,
@@ -298,6 +299,153 @@ def _reinject_today_events(
     return sort_for_display(dedupe_one_side_per_market(merged))[:limit]
 
 
+def _is_near_48h_non_today_row(row: dict[str, Any]) -> bool:
+    return is_near_term(row) and not is_calendar_today(row)
+
+
+def _ensure_near_48h_event_coverage(
+    setups: list[dict[str, Any]],
+    near_odds: list[dict[str, Any]],
+    *,
+    user_id: str,
+    stats_index: dict[str, Any],
+    calibration: dict[str, Any],
+    min_cards: int = 8,
+) -> list[dict[str, Any]]:
+    """Guarantee non-Today ≤48h cards so Parlays 24–48h and Sports Next 48h stay populated."""
+    if not near_odds:
+        return setups
+
+    have = sum(1 for r in setups if _is_near_48h_non_today_row(r))
+    target = min(len(near_odds), max(min_cards, 4))
+    if have >= target:
+        return setups
+
+    covered = {
+        _setup_event_id(r)
+        for r in setups
+        if _is_near_48h_non_today_row(r) and _setup_event_id(r)
+    }
+    missing = [
+        e
+        for e in near_odds
+        if _odds_event_id(e) and _odds_event_id(e) not in covered
+    ]
+    if not missing:
+        return setups
+
+    soft_cal = dict(calibration)
+    soft_cal["slate_mode"] = True
+    soft_cal["sports_min_edge_pct"] = 0.0
+    soft_cal["sports_min_opportunity"] = 16.0
+    added: list[dict[str, Any]] = []
+    for event in missing:
+        if have + len(added) >= target:
+            break
+        try:
+            match_stats = lookup_match_stats(event, stats_index) if stats_index else None
+            scored = analyze_event(event, match_stats=match_stats, calibration=soft_cal)
+            if not scored:
+                fallback = fallback_slate_setup_from_event(event, calibration=soft_cal)
+                if fallback is None:
+                    continue
+                row = setup_to_row(user_id, fallback)
+                eid = _odds_event_id(event)
+                if eid:
+                    snap = row.setdefault("scoring_snapshot", {})
+                    lm = row.setdefault("line_movement", {})
+                    snap.setdefault("event_id", eid)
+                    lm.setdefault("event_id", eid)
+                added.append(row)
+                continue
+            scored.sort(
+                key=lambda s: (
+                    0 if str(s.bet_type or "") == "moneyline" else 1,
+                    -float(s.opportunity_score or 0),
+                )
+            )
+            row = setup_to_row(user_id, scored[0])
+            eid = _odds_event_id(event)
+            if eid:
+                snap = row.setdefault("scoring_snapshot", {})
+                lm = row.setdefault("line_movement", {})
+                snap.setdefault("event_id", eid)
+                lm.setdefault("event_id", eid)
+            added.append(row)
+        except Exception as exc:
+            logger.info("Sports near-48h event coverage skip: %s", exc)
+
+    if not added:
+        return setups
+
+    by_key: dict[str, dict[str, Any]] = {}
+    for row in setups + added:
+        key = market_family_key(row)
+        prev = by_key.get(key)
+        if prev is None or composite_score(row) > composite_score(prev):
+            by_key[key] = row
+    return list(by_key.values())
+
+
+def _reinject_near_48h_events(
+    selected: list[dict[str, Any]],
+    pool: list[dict[str, Any]],
+    *,
+    limit: int,
+    min_cards: int = 6,
+) -> list[dict[str, Any]]:
+    """Restore non-Today ≤48h cards after Today reinject / diversity truncation."""
+    if not pool or limit <= 0:
+        return selected
+
+    have = sum(1 for r in selected if _is_near_48h_non_today_row(r))
+    if have >= min_cards:
+        return selected
+
+    covered = {
+        _setup_event_id(r)
+        for r in selected
+        if _is_near_48h_non_today_row(r) and _setup_event_id(r)
+    }
+    missing_by_event: dict[str, dict[str, Any]] = {}
+    for row in sorted(pool, key=composite_score, reverse=True):
+        if not _is_near_48h_non_today_row(row):
+            continue
+        eid = _setup_event_id(row)
+        if not eid or eid in covered or eid in missing_by_event:
+            continue
+        missing_by_event[eid] = row
+
+    if not missing_by_event:
+        return selected
+
+    out = list(selected)
+    seen = {market_family_key(r) for r in out}
+    for row in missing_by_event.values():
+        if sum(1 for r in out if _is_near_48h_non_today_row(r)) >= min_cards:
+            break
+        key = market_family_key(row)
+        if key in seen:
+            continue
+        out.append(row)
+        seen.add(key)
+
+    today_rows = [r for r in out if is_today_slate(r)]
+    near_excl_rows = [r for r in out if _is_near_48h_non_today_row(r)]
+    near_excl_rows.sort(key=composite_score, reverse=True)
+    protected = {id(r) for r in today_rows}
+    protected.update(id(r) for r in near_excl_rows)
+    other_rows = [r for r in out if id(r) not in protected]
+    other_rows.sort(key=composite_score, reverse=True)
+    # Keep all Today, then near-48h excl, then fill remainder.
+    room_after_today = max(0, limit - len(today_rows))
+    near_keep = near_excl_rows[: max(min_cards, room_after_today)]
+    near_keep = near_keep[:room_after_today]
+    room = max(0, limit - len(today_rows) - len(near_keep))
+    merged = today_rows + near_keep + other_rows[:room]
+    return sort_for_display(dedupe_one_side_per_market(merged))[:limit]
+
+
 def _ensure_today_secondary_markets(
     setups: list[dict[str, Any]],
     today_odds: list[dict[str, Any]],
@@ -475,6 +623,22 @@ def _select_diverse_setups(setups: list[dict[str, Any]], *, limit: int) -> list[
                 break
             if _take(row):
                 near_have += 1
+
+    # Non-Today ≤48h floor — Today alone must not satisfy the near-term quota
+    # or Parlays "24–48h" / Sports Next 48h starve on dense Tonight boards.
+    near_excl_pool = sorted(
+        (r for r in pool if _is_near_48h_non_today_row(r)),
+        key=composite_score,
+        reverse=True,
+    )
+    if near_excl_pool and limit >= 8:
+        near_excl_floor = min(len(near_excl_pool), max(4, int(round(limit * 0.2))))
+        near_excl_have = sum(1 for r in selected if _is_near_48h_non_today_row(r))
+        for row in near_excl_pool:
+            if near_excl_have >= near_excl_floor or len(selected) >= limit:
+                break
+            if _take(row):
+                near_excl_have += 1
 
     by_sport: dict[str, list[dict[str, Any]]] = {}
     for row in pool:
@@ -813,7 +977,11 @@ class SportsRefreshService:
 
         # Guarantee Today's Eastern slate fills when odds cache has tonight's games.
         # Dense weekend/tomorrow edges used to crowd out zero-edge FD/DK market lines.
-        from app.providers.sports.odds_api import calendar_today_events, today_slate_events
+        from app.providers.sports.odds_api import (
+            calendar_today_events,
+            near_48h_non_today_events,
+            today_slate_events,
+        )
 
         today_odds = today_slate_events(events)
         if not today_odds:
@@ -900,6 +1068,24 @@ class SportsRefreshService:
             except Exception as exc:
                 logger.warning("Sports today secondary markets skipped (non-fatal): %s", exc)
 
+        # Non-Today ≤48h coverage — required for Parlays 24–48h after dense Tonight fills.
+        near_48h_odds = near_48h_non_today_events(events)
+        if near_48h_odds:
+            try:
+                setups = _ensure_near_48h_event_coverage(
+                    setups,
+                    near_48h_odds,
+                    user_id=self.user_id,
+                    stats_index=stats_index,
+                    calibration=calibration,
+                )
+                fetch_stats["near_48h_events"] = len(near_48h_odds)
+                fetch_stats["near_48h_setups"] = sum(
+                    1 for r in setups if _is_near_48h_non_today_row(r)
+                )
+            except Exception as exc:
+                logger.warning("Sports near-48h event coverage skipped (non-fatal): %s", exc)
+
         setups.sort(key=composite_score, reverse=True)
 
         # OpenAI slate ranking is optional polish — never block a dense cache scan.
@@ -932,6 +1118,19 @@ class SportsRefreshService:
                 setups = _reinject_today_events(setups, pre_diversity_setups, limit=limit)
             except Exception as exc:
                 logger.warning("Sports today reinject skipped: %s", exc)
+
+        if near_48h_odds:
+            try:
+                setups = _reinject_near_48h_events(
+                    setups,
+                    pre_diversity_setups,
+                    limit=limit,
+                )
+                fetch_stats["near_48h_after_reinject"] = sum(
+                    1 for r in setups if _is_near_48h_non_today_row(r)
+                )
+            except Exception as exc:
+                logger.warning("Sports near-48h reinject skipped: %s", exc)
 
         tag_pool_categories(setups)
 
@@ -1305,9 +1504,17 @@ class SportsRefreshService:
             "calibration": calibration,
             "ok": True,
             "today_picks_saved": sum(1 for r in setups if is_today_slate(r)) if setups else 0,
+            "near_48h_picks_saved": (
+                sum(1 for r in setups if _is_near_48h_non_today_row(r)) if setups else 0
+            ),
             "today_event_ids_covered": int(fetch_stats.get("today_event_ids_covered") or 0),
             "today_still_empty": (
                 sum(1 for r in setups if is_today_slate(r)) == 0 if setups is not None else True
+            ),
+            "near_48h_still_empty": (
+                sum(1 for r in setups if _is_near_48h_non_today_row(r)) == 0
+                if setups is not None
+                else True
             ),
             "message": self._result_message(
                 setups,

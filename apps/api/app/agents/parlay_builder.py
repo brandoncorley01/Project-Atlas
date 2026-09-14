@@ -248,11 +248,42 @@ def _leg_set_key(picks: tuple[dict[str, Any], ...]) -> frozenset[str]:
     return frozenset(str(p.get("id")) for p in picks)
 
 
+def _combo_signal_pool(
+    eligible: list[dict[str, Any]],
+    *,
+    exclusive_non_today_near: bool = False,
+) -> list[dict[str, Any]]:
+    """Build the combo search pool.
+
+    ``sort_for_parlay_pool`` ranks calendar-Today first. Taking only the top N
+    then skipping all-Today combos empties the 24–48h tab on dense Tonight slates.
+    When ``exclusive_non_today_near`` is set, reserve the combo budget for
+    non-Today ≤48h legs so that tab always has material when legs exist.
+    """
+    if exclusive_non_today_near:
+        near_excl = [
+            s
+            for s in eligible
+            if is_near_term(s) and not is_calendar_today(s)
+        ]
+        if len(near_excl) >= 2:
+            # Rank by composite score without re-inserting Today ahead of them.
+            return sorted(near_excl, key=lambda r: float(r.get("opportunity_score") or 0), reverse=True)[
+                :TOP_SIGNALS_FOR_COMBOS
+            ]
+    return sort_for_parlay_pool(eligible)[:TOP_SIGNALS_FOR_COMBOS]
+
+
 def _generate_combos(
     eligible: list[dict[str, Any]],
     leg_count: int,
+    *,
+    exclusive_non_today_near: bool = False,
 ) -> list[tuple[dict[str, Any], ...]]:
-    pool = sort_for_parlay_pool(eligible)[:TOP_SIGNALS_FOR_COMBOS]
+    pool = _combo_signal_pool(
+        eligible,
+        exclusive_non_today_near=exclusive_non_today_near,
+    )
     if len(pool) < leg_count:
         return []
 
@@ -306,6 +337,9 @@ def build_all_parlays(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
         # Same-day tickets first — only legs that kick off today (Eastern).
         today_eligible = [s for s in today_signals if _eligible_for_style(style, s)]
+        if len(today_eligible) < leg_count and len(today_signals) >= leg_count:
+            # Soft slate-fill scores often sit under style floors — still build Today.
+            today_eligible = list(today_signals)
         if len(today_eligible) >= leg_count:
             for combo in _generate_combos(today_eligible, leg_count):
                 if not all(is_calendar_today(p) for p in combo):
@@ -314,10 +348,18 @@ def build_all_parlays(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 if metrics:
                     buckets["today"].append((combo, metrics))
 
-        # 24–48h tickets that are not pure same-day (today already covered above).
-        near_eligible = [s for s in near_signals if _eligible_for_style(style, s)]
+        # 24–48h tickets: use non-Today ≤48h legs exclusively so a dense Tonight
+        # slate cannot consume the entire combo pool (then get skipped as all-Today).
+        near_excl = [s for s in near_signals if not is_calendar_today(s)]
+        near_eligible = [s for s in near_excl if _eligible_for_style(style, s)]
+        if len(near_eligible) < max(leg_count, 4) and len(near_excl) >= leg_count:
+            near_eligible = list(near_excl)
         if len(near_eligible) >= leg_count:
-            for combo in _generate_combos(near_eligible, leg_count):
+            for combo in _generate_combos(
+                near_eligible,
+                leg_count,
+                exclusive_non_today_near=True,
+            ):
                 if not all(is_near_term(p) for p in combo):
                     continue
                 if all(is_calendar_today(p) for p in combo):
@@ -325,6 +367,42 @@ def build_all_parlays(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 metrics = _score_picks(combo, style)
                 if metrics:
                     buckets["next_48h"].append((combo, metrics))
+
+        # Mixed Today + tomorrow tickets also belong in 24–48h when exclusive
+        # non-Today alone did not fill the style bucket (need ≥1 non-Today leg).
+        if len(buckets["next_48h"]) < 2 and len(near_excl) >= 1 and len(today_signals) >= 1:
+            mix_pool = list(near_excl) + list(today_signals)
+            mix_eligible = [s for s in mix_pool if _eligible_for_style(style, s)]
+            if len(mix_eligible) < leg_count:
+                mix_eligible = mix_pool
+            if len(mix_eligible) >= leg_count:
+                # Reserve most combo slots for non-Today so mixes are not all-Today.
+                ranked_near = sorted(
+                    [s for s in mix_eligible if not is_calendar_today(s)],
+                    key=lambda r: float(r.get("opportunity_score") or 0),
+                    reverse=True,
+                )
+                ranked_today = sorted(
+                    [s for s in mix_eligible if is_calendar_today(s)],
+                    key=lambda r: float(r.get("opportunity_score") or 0),
+                    reverse=True,
+                )
+                reserve = min(len(ranked_near), max(leg_count, TOP_SIGNALS_FOR_COMBOS // 2))
+                mix_combo_pool = (ranked_near[:reserve] + ranked_today)[:TOP_SIGNALS_FOR_COMBOS]
+                for combo in itertools.combinations(mix_combo_pool, leg_count):
+                    if not _combo_is_valid(combo):
+                        continue
+                    if not all(is_near_term(p) for p in combo):
+                        continue
+                    if all(is_calendar_today(p) for p in combo):
+                        continue
+                    if not any(not is_calendar_today(p) for p in combo):
+                        continue
+                    metrics = _score_picks(combo, style)
+                    if metrics:
+                        buckets["next_48h"].append((combo, metrics))
+                    if len(buckets["next_48h"]) >= MAX_COMBOS_TO_SCORE:
+                        break
 
         for time_category in TIME_CATEGORY_ORDER:
             bucket = buckets[time_category]

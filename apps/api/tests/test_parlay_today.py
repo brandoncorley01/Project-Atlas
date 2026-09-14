@@ -80,3 +80,77 @@ def test_parlay_meta_tags_next_48h_when_legs_span_days():
     meta = compute_parlay_time_meta(legs, signal_map)
     assert "next_48h" in meta["categories"]
     assert "today" not in meta["categories"]
+
+
+def _signal(
+    *,
+    sid: str,
+    hours: float,
+    sport: str,
+    event: str,
+    opp: float = 40.0,
+    risk: float = 45.0,
+) -> dict:
+    return {
+        "id": sid,
+        "sport": sport,
+        "event_name": event,
+        "event_start": _iso_hours_from_now_et(hours),
+        "bet_type": "moneyline",
+        "selection": "Home",
+        "odds_american": -110,
+        "odds_decimal": 1.91,
+        "opportunity_score": opp,
+        "confidence_score": 55.0,
+        "risk_score": risk,
+        "expected_value": 1.5,
+        "bull_case": "edge",
+        "explanation": "test",
+        "scoring_snapshot": {},
+        "line_movement": {},
+    }
+
+
+def test_build_all_parlays_next_48h_survives_dense_today_slate():
+    """Dense Tonight must not starve the 24–48h tab (top-16 Today-first bug)."""
+    from app.agents.parlay_builder import build_all_parlays
+
+    # 20 calendar-Today legs — formerly filled the entire combo pool.
+    today_legs = [
+        _signal(
+            sid=f"t-{i}",
+            hours=1.0 + i * 0.2,
+            sport="MLB",
+            event=f"Away{i} @ Home{i}",
+            opp=50 - i * 0.1,
+        )
+        for i in range(20)
+    ]
+    # Enough non-Today ≤48h legs for conservative (2) through aggressive (4).
+    sports = ["NFL", "NBA", "NHL", "MLS", "NCAAF", "WNBA"]
+    tomorrow_legs = [
+        _signal(
+            sid=f"n-{i}",
+            hours=26.0 + i,
+            sport=sports[i % len(sports)],
+            event=f"TmrAway{i} @ TmrHome{i}",
+            opp=42.0,
+            risk=48.0,
+        )
+        for i in range(6)
+    ]
+
+    built = build_all_parlays(today_legs + tomorrow_legs)
+    cats = {str(p.get("time_category") or "") for p in built}
+    next_48 = [p for p in built if p.get("time_category") == "next_48h"]
+    assert "today" in cats
+    assert "next_48h" in cats, f"expected next_48h parlays, got categories={cats} n={len(built)}"
+    assert len(next_48) >= 1
+    for parlay in next_48:
+        starts = [leg.get("event_start") for leg in parlay.get("legs") or []]
+        assert starts
+        # At least one leg must not be calendar Today.
+        from app.services.sports_ranking import is_calendar_today
+
+        leg_rows = [{"event_start": s, "bet_type": "moneyline", "scoring_snapshot": {}} for s in starts]
+        assert not all(is_calendar_today(r) for r in leg_rows)
