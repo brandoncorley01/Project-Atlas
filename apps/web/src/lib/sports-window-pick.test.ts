@@ -1,7 +1,7 @@
 /**
- * pickWindowWithResults widens Scan off empty Today — Sports UI must NOT call it.
- * Repair/Scan pin Today so a missing Tonight slate stays visible.
- * Run with: npx --yes tsx apps/web/src/lib/sports-window-pick.test.ts
+ * pickWindowWithResults widens Scan off empty Today — Sports UI must call it.
+ * Prefer Today when the Eastern slate has plays; otherwise Next 24h then Next 48h.
+ * Run with: npx --yes tsx --tsconfig apps/web/tsconfig.json apps/web/src/lib/sports-window-pick.test.ts
  */
 import assert from "node:assert/strict";
 import { isSportsCalendarToday, pickWindowWithResults, type SportsWindowKey } from "./sports-filters.ts";

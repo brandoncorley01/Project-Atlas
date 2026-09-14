@@ -20,6 +20,7 @@ import {
   filterByWindow,
   filterSports,
   isUserSportsPick,
+  pickWindowWithResults,
   sortSports,
   type SportsFilterKey,
   type SportsSortKey,
@@ -284,6 +285,14 @@ export function SportsSignalsView({
     writeSportsBoardCache(itemsRef.current, { window: next });
   }
 
+  /** Prefer Today when it has plays; otherwise open Next 24h / 48h so Scan never lands on an empty board. */
+  function applyWindowForBoard(preferred: SportsWindowKey = "today"): SportsWindowKey {
+    const next = pickWindowWithResults(itemsRef.current, preferred);
+    setWindow(next);
+    writeSportsBoardCache(itemsRef.current, { window: next });
+    return next;
+  }
+
   async function getToken() {
     if (usesBffProxy()) return undefined;
     const { createClient } = await import("@/lib/supabase/client");
@@ -297,10 +306,10 @@ export function SportsSignalsView({
     const soonN = filterByWindow(itemsRef.current, "soon").length;
     if (todayN > 0) return null;
     if (next24N > 0) {
-      return `${next24N} play${next24N === 1 ? "" : "s"} in Next 24h — tap Show Next 24h.`;
+      return `${next24N} play${next24N === 1 ? "" : "s"} in Next 24h — opened that window.`;
     }
     if (soonN > 0) {
-      return `${soonN} play${soonN === 1 ? "" : "s"} in Next 48h — tap Show Next 48h.`;
+      return `${soonN} play${soonN === 1 ? "" : "s"} in Next 48h — opened that window.`;
     }
     return null;
   }
@@ -308,8 +317,7 @@ export function SportsSignalsView({
   async function reloadBoardAfterEngineError(token?: string) {
     await loadItems(token, null, null, { replaceEmpty: false });
     await Promise.all([loadCategories(token), refreshOddsStatus()]);
-    setWindow("today");
-    writeSportsBoardCache(itemsRef.current, { window: "today" });
+    applyWindowForBoard("today");
   }
 
   useEffect(() => {
@@ -328,10 +336,23 @@ export function SportsSignalsView({
         // Recovery is best-effort — still refresh the board.
       }
       await loadItems(token, activeCategory, activeSport, { replaceEmpty: false });
+      // Cached Window=Today with only Next-24h plays used to show an empty board — open what exists.
+      applyWindowForBoard(readSportsBoardCache()?.window ?? "today");
       void refreshOddsStatus();
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Stay off empty Today whenever the board has near-term plays (covers soft remount / filter churn).
+  useEffect(() => {
+    if (window !== "today") return;
+    if (items.length === 0) return;
+    if (filterByWindow(items, "today").length > 0) return;
+    const next = pickWindowWithResults(items, "today");
+    if (next === "today") return;
+    setWindow(next);
+    writeSportsBoardCache(items, { window: next });
+  }, [items, window]);
 
   useEffect(() => {
     const fetched = oddsStatus?.cache_fetched_at;
@@ -465,18 +486,17 @@ export function SportsSignalsView({
         setActiveSport(null);
         await loadItems(token, null, null, { replaceEmpty: createdOnError > 0 });
         await Promise.all([loadCategories(token), refreshOddsStatus()]);
-        setWindow("today");
-        writeSportsBoardCache(itemsRef.current, { window: "today" });
+        const opened = applyWindowForBoard("today");
         const todayN = filterByWindow(itemsRef.current, "today").length;
         const next24N = filterByWindow(itemsRef.current, "next24h").length;
         const soonN = filterByWindow(itemsRef.current, "soon").length;
-        if (todayN === 0 && next24N > 0) {
+        if (todayN === 0 && opened === "next24h" && next24N > 0) {
           setMessage(
-            `${detail} · ${next24N} play${next24N === 1 ? "" : "s"} in Next 24h — tap Show Next 24h.`,
+            `${detail} · ${next24N} play${next24N === 1 ? "" : "s"} in Next 24h — showing that window.`,
           );
-        } else if (todayN === 0 && soonN > 0) {
+        } else if (todayN === 0 && opened === "soon" && soonN > 0) {
           setMessage(
-            `${detail} · ${soonN} play${soonN === 1 ? "" : "s"} in Next 48h — tap Show Next 48h.`,
+            `${detail} · ${soonN} play${soonN === 1 ? "" : "s"} in Next 48h — showing that window.`,
           );
         }
         rememberAction(mode);
@@ -511,24 +531,21 @@ export function SportsSignalsView({
         replaceEmpty: created > 0 || (mode !== "live" && itemsRef.current.length === 0),
       });
       await Promise.all([loadCategories(token), refreshOddsStatus()]);
-      // Stay on Today — auto-widening to Next 48h hid tonight's empty slate after Scan/Fetch.
-      setWindow("today");
-      writeSportsBoardCache(itemsRef.current, { window: "today" });
+      // Prefer Today when it has plays; otherwise open Next 24h / 48h (never land on empty Today).
+      const opened = applyWindowForBoard("today");
       const todayN = filterByWindow(itemsRef.current, "today").length;
       const next24N = filterByWindow(itemsRef.current, "next24h").length;
       const soonN = filterByWindow(itemsRef.current, "soon").length;
       const todayStillEmpty = Boolean(body.today_still_empty) || todayN === 0;
-      if (todayStillEmpty && next24N > 0) {
+      if (todayStillEmpty && opened === "next24h" && next24N > 0) {
         setMessage(
           (apiMessage ? `${apiMessage} · ` : "") +
-            `Today's slate (through midnight ET) is empty — ${next24N} play${next24N === 1 ? "" : "s"} in Next 24h. ` +
-            "Tap Show Next 24h below, or Scan sports odds for tonight's live lines.",
+            `Today's slate (through midnight ET) is empty — showing ${next24N} play${next24N === 1 ? "" : "s"} in Next 24h.`,
         );
-      } else if (todayStillEmpty && soonN > 0) {
+      } else if (todayStillEmpty && opened === "soon" && soonN > 0) {
         setMessage(
           (apiMessage ? `${apiMessage} · ` : "") +
-            `Today's slate is empty — ${soonN} play${soonN === 1 ? "" : "s"} in Next 48h. ` +
-            "Tap Show Next 48h below, or Scan sports odds.",
+            `Today's slate is empty — showing ${soonN} play${soonN === 1 ? "" : "s"} in Next 48h.`,
         );
       } else if (todayStillEmpty && created > 0) {
         setMessage(
@@ -595,8 +612,7 @@ export function SportsSignalsView({
               replaceEmpty: created > 0 || itemsRef.current.length === 0,
             });
             await Promise.all([loadCategories(token), refreshOddsStatus()]);
-            setWindow("today");
-            writeSportsBoardCache(itemsRef.current, { window: "today" });
+            applyWindowForBoard("today");
             router.refresh();
             globalThis.dispatchEvent(new Event("atlas:dashboard-refresh"));
             setLoading(null);
@@ -709,8 +725,7 @@ export function SportsSignalsView({
       insightFetchFallbackUsed.current = false;
       rememberAction("openai");
       // Keep the full board visible, but float Insight picks to the top so the run is obvious.
-      // Repair callers pin Today — don't yank the window out to All dates / 48h after Insight.
-      setWindow(opts?.preferWindow ?? "today");
+      // Prefer Today when it has plays; otherwise open the nearest window with results.
       setFilter("all");
       setSort("openai");
       setActiveSport(null);
@@ -720,6 +735,7 @@ export function SportsSignalsView({
         loadItems(token, null, null, { replaceEmpty: true }),
         refreshOddsStatus(),
       ]);
+      applyWindowForBoard(opts?.preferWindow ?? "today");
       router.refresh();
       globalThis.dispatchEvent(new Event("atlas:dashboard-refresh"));
     } catch (err) {
@@ -916,9 +932,9 @@ export function SportsSignalsView({
           description={
             window === "today" && !activeCategory && filter === "all" && !activeSport
               ? filterByWindow(items, "next24h").length > 0
-                ? `Nothing on today's slate (through midnight ET). ${filterByWindow(items, "next24h").length} play(s) are in Next 24h — open that window, or Scan for tonight's live odds.`
+                ? `Nothing on today's slate (through midnight ET). ${filterByWindow(items, "next24h").length} play(s) are in Next 24h — switch below or wait for auto-open, or Scan for tonight's live odds.`
                 : filterByWindow(items, "soon").length > 0
-                  ? `Nothing on today's slate. ${filterByWindow(items, "soon").length} play(s) are in Next 48h — open that window, or Scan sports odds.`
+                  ? `Nothing on today's slate. ${filterByWindow(items, "soon").length} play(s) are in Next 48h — switch below or wait for auto-open, or Scan sports odds.`
                   : "Nothing on today's slate. Tap Scan sports odds to pull tonight's FanDuel/DraftKings lines."
               : window === "next24h" && !activeCategory && filter === "all" && !activeSport
                 ? "No plays in the next 24 hours. Try Today (ET), Next 48h, or All dates."
