@@ -433,6 +433,23 @@ def next_24h_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [e for e in events if _event_is_next_24h(e)]
 
 
+def _event_is_near_48h_non_today(event: dict[str, Any]) -> bool:
+    """Upcoming within 48h but not Eastern calendar Today — feeds 24–48h parlays/board."""
+    hours = hours_until_event(event.get("commence_time"))
+    if hours is None or hours <= 0 or hours > 48:
+        return False
+    if event.get("_is_outright"):
+        return False
+    sport_key = str(event.get("_sport_key") or event.get("sport_key") or "")
+    if sport_key and _is_outright_sport(sport_key):
+        return False
+    return not _event_is_calendar_today(event)
+
+
+def near_48h_non_today_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [e for e in events if _event_is_near_48h_non_today(e)]
+
+
 def cache_missing_today_slate(events: list[dict[str, Any]] | None = None) -> bool:
     """True when cached odds have no Eastern-calendar-today games.
 
