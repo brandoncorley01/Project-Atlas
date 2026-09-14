@@ -95,3 +95,66 @@ async def test_live_fetch_backfills_empty_essential_slots():
     sport_keys = set(stats.get("sport_keys") or [])
     assert "soccer_epl" in sport_keys or "tennis_atp_us_open" in sport_keys
     assert any(e.get("id") in {"epl1", "atp1"} for e in events)
+
+
+@pytest.mark.asyncio
+async def test_targeted_empty_seed_backfills_same_family():
+    """Premium Scan targeting dead US Open must backfill active tennis from catalog."""
+    from datetime import UTC, datetime, timedelta
+
+    soon = (datetime.now(UTC) + timedelta(hours=6)).isoformat().replace("+00:00", "Z")
+
+    async def fake_fetch(client, key, title, sem, *, outright=False):
+        if key in {"tennis_atp_us_open", "tennis_wta_us_open"}:
+            return key, []
+        if key == "tennis_atp_china_open":
+            return key, [
+                {
+                    "id": "china1",
+                    "commence_time": soon,
+                    "home_team": "Player A",
+                    "away_team": "Player B",
+                    "_sport_key": key,
+                    "_sport_label": "ATP China Open",
+                }
+            ]
+        return key, []
+
+    client = AsyncMock()
+    client.requests_remaining = 100
+    client.requests_used = 10
+    client.quota_exhausted = False
+
+    all_sports = [
+        {"key": k, "title": k, "active": True}
+        for k in (
+            "tennis_atp_us_open",
+            "tennis_wta_us_open",
+            "tennis_atp_china_open",
+            "baseball_mlb",
+        )
+    ]
+
+    with (
+        patch.object(type(odds_api.config.settings), "odds_api_keys", new_callable=PropertyMock, return_value=["k1"]),
+        patch.object(odds_api.config.settings, "odds_spend_mode", "cache_only"),
+        patch.object(odds_api, "_read_cache", return_value=None),
+        patch.object(odds_api, "_write_cache"),
+        patch.object(
+            odds_api,
+            "_select_active_client",
+            new=AsyncMock(return_value=(client, all_sports, {"total_remaining": 200, "active_key_remaining": 200})),
+        ),
+        patch.object(odds_api, "_fetch_sport_odds", side_effect=fake_fetch),
+        patch.object(odds_api, "invalidate_key_probe_cache"),
+    ):
+        events, stats = await odds_api.fetch_all_sports_odds(
+            sport_keys=("tennis_atp_us_open", "tennis_wta_us_open"),
+            force_refresh=True,
+        )
+
+    assert "tennis_atp_china_open" in (stats.get("live_backfill_keys") or [])
+    assert any(e.get("id") == "china1" for e in events)
+    catalog = [str(x) for x in (stats.get("league_catalog") or [])]
+    assert any("china" in x.lower() or x == "tennis_atp_china_open" for x in catalog)
+    assert not any("us_open" in x.lower() or "us open" in x.lower() for x in catalog)
