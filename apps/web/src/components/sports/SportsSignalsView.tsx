@@ -285,9 +285,11 @@ export function SportsSignalsView({
     writeSportsBoardCache(itemsRef.current, { window: next });
   }
 
-  /** Prefer Today when it has plays; otherwise open Next 24h / 48h so Scan never lands on an empty board. */
+  /** Always prefer the requested window — Today now includes ≤24h tips so it stays populated. */
   function applyWindowForBoard(preferred: SportsWindowKey = "today"): SportsWindowKey {
-    const next = pickWindowWithResults(itemsRef.current, preferred);
+    // Pin Today after Scan/load. Auto-widening to Next 24h felt broken ("jumping") when
+    // Tonight's tips were only classified as next24h. Today window includes those tips now.
+    const next = preferred === "today" ? "today" : pickWindowWithResults(itemsRef.current, preferred);
     setWindow(next);
     writeSportsBoardCache(itemsRef.current, { window: next });
     return next;
@@ -302,14 +304,14 @@ export function SportsSignalsView({
 
   function todayWindowHint(): string | null {
     const todayN = filterByWindow(itemsRef.current, "today").length;
+    if (todayN > 0) return null;
     const next24N = filterByWindow(itemsRef.current, "next24h").length;
     const soonN = filterByWindow(itemsRef.current, "soon").length;
-    if (todayN > 0) return null;
     if (next24N > 0) {
-      return `${next24N} play${next24N === 1 ? "" : "s"} in Next 24h — opened that window.`;
+      return `${next24N} play${next24N === 1 ? "" : "s"} within 24h should appear under Today — tap Scan if the board is still empty.`;
     }
     if (soonN > 0) {
-      return `${soonN} play${soonN === 1 ? "" : "s"} in Next 48h — opened that window.`;
+      return `${soonN} play${soonN === 1 ? "" : "s"} in Next 48h — widen the Window if needed.`;
     }
     return null;
   }
@@ -336,23 +338,15 @@ export function SportsSignalsView({
         // Recovery is best-effort — still refresh the board.
       }
       await loadItems(token, activeCategory, activeSport, { replaceEmpty: false });
-      // Cached Window=Today with only Next-24h plays used to show an empty board — open what exists.
-      applyWindowForBoard(readSportsBoardCache()?.window ?? "today");
+      // Always land on Today — it includes ≤24h tips (no jump to Next 24h).
+      applyWindowForBoard("today");
       void refreshOddsStatus();
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Stay off empty Today whenever the board has near-term plays (covers soft remount / filter churn).
-  useEffect(() => {
-    if (window !== "today") return;
-    if (items.length === 0) return;
-    if (filterByWindow(items, "today").length > 0) return;
-    const next = pickWindowWithResults(items, "today");
-    if (next === "today") return;
-    setWindow(next);
-    writeSportsBoardCache(items, { window: next });
-  }, [items, window]);
+  // Do NOT auto-jump off Today — the Today window includes ≤24h tips so near-term
+  // plays stay visible without flipping the Window control to Next 24h.
 
   useEffect(() => {
     const fetched = oddsStatus?.cache_fetched_at;
@@ -486,17 +480,17 @@ export function SportsSignalsView({
         setActiveSport(null);
         await loadItems(token, null, null, { replaceEmpty: createdOnError > 0 });
         await Promise.all([loadCategories(token), refreshOddsStatus()]);
-        const opened = applyWindowForBoard("today");
+        applyWindowForBoard("today");
         const todayN = filterByWindow(itemsRef.current, "today").length;
         const next24N = filterByWindow(itemsRef.current, "next24h").length;
         const soonN = filterByWindow(itemsRef.current, "soon").length;
-        if (todayN === 0 && opened === "next24h" && next24N > 0) {
+        if (todayN === 0 && next24N > 0) {
           setMessage(
-            `${detail} · ${next24N} play${next24N === 1 ? "" : "s"} in Next 24h — showing that window.`,
+            `${detail} · ${next24N} play${next24N === 1 ? "" : "s"} within 24h should show under Today after a successful Scan.`,
           );
-        } else if (todayN === 0 && opened === "soon" && soonN > 0) {
+        } else if (todayN === 0 && soonN > 0) {
           setMessage(
-            `${detail} · ${soonN} play${soonN === 1 ? "" : "s"} in Next 48h — showing that window.`,
+            `${detail} · ${soonN} play${soonN === 1 ? "" : "s"} in Next 48h — widen the Window if needed.`,
           );
         }
         rememberAction(mode);
@@ -531,21 +525,21 @@ export function SportsSignalsView({
         replaceEmpty: created > 0 || (mode !== "live" && itemsRef.current.length === 0),
       });
       await Promise.all([loadCategories(token), refreshOddsStatus()]);
-      // Prefer Today when it has plays; otherwise open Next 24h / 48h (never land on empty Today).
-      const opened = applyWindowForBoard("today");
+      // Stay on Today — it includes ≤24h tips so near-term plays remain visible.
+      applyWindowForBoard("today");
       const todayN = filterByWindow(itemsRef.current, "today").length;
       const next24N = filterByWindow(itemsRef.current, "next24h").length;
       const soonN = filterByWindow(itemsRef.current, "soon").length;
       const todayStillEmpty = Boolean(body.today_still_empty) || todayN === 0;
-      if (todayStillEmpty && opened === "next24h" && next24N > 0) {
+      if (todayStillEmpty && next24N > 0) {
         setMessage(
           (apiMessage ? `${apiMessage} · ` : "") +
-            `Today's slate (through early morning ET) is empty — showing ${next24N} play${next24N === 1 ? "" : "s"} in Next 24h.`,
+            `Today should include ${next24N} play${next24N === 1 ? "" : "s"} within 24h — tap Scan once more if the board is still empty.`,
         );
-      } else if (todayStillEmpty && opened === "soon" && soonN > 0) {
+      } else if (todayStillEmpty && soonN > 0) {
         setMessage(
           (apiMessage ? `${apiMessage} · ` : "") +
-            `Today's slate is empty — showing ${soonN} play${soonN === 1 ? "" : "s"} in Next 48h.`,
+            `Today is thin — ${soonN} play${soonN === 1 ? "" : "s"} in Next 48h. Widen the Window if needed.`,
         );
       } else if (todayStillEmpty && created > 0) {
         setMessage(
@@ -931,11 +925,9 @@ export function SportsSignalsView({
           }
           description={
             window === "today" && !activeCategory && filter === "all" && !activeSport
-              ? filterByWindow(items, "next24h").length > 0
-                ? `Nothing on today's slate (through early morning ET). ${filterByWindow(items, "next24h").length} play(s) are in Next 24h — switch below or wait for auto-open, or Scan for tonight's live odds.`
-                : filterByWindow(items, "soon").length > 0
-                  ? `Nothing on today's slate. ${filterByWindow(items, "soon").length} play(s) are in Next 48h — switch below or wait for auto-open, or Scan sports odds.`
-                  : "Nothing on today's slate. Tap Scan sports odds to pull tonight's FanDuel/DraftKings lines."
+              ? filterByWindow(items, "soon").length > 0
+                ? `No plays on Today's board yet. ${filterByWindow(items, "soon").length} play(s) are in Next 48h — widen the Window or Scan sports odds.`
+                : "Nothing on Today's board. Tap Scan sports odds to pull tonight's FanDuel/DraftKings lines."
               : window === "next24h" && !activeCategory && filter === "all" && !activeSport
                 ? "No plays in the next 24 hours. Try Today (ET), Next 48h, or All dates."
               : window === "soon" && !activeCategory && filter === "all" && !activeSport
@@ -946,15 +938,6 @@ export function SportsSignalsView({
           }
           action={
             <div className="flex flex-wrap justify-center gap-2">
-              {window === "today" && filterByWindow(items, "next24h").length > 0 ? (
-                <button
-                  type="button"
-                  onClick={() => void handleWindowChange("next24h")}
-                  className="rounded-lg border border-orange-500/40 bg-orange-500/15 px-4 py-2 text-sm font-semibold text-orange-100"
-                >
-                  Show Next 24h
-                </button>
-              ) : null}
               {window === "today" && filterByWindow(items, "soon").length > 0 ? (
                 <button
                   type="button"

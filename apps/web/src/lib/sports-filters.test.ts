@@ -142,12 +142,10 @@ assert(
   filterByWindow([rolling20h], "next24h").some((r) => r.id === "20h"),
   "next24h includes games within 24 hours",
 );
-if (!isSportsCalendarToday(rolling20h)) {
-  assert(
-    !filterByWindow([rolling20h], "today").some((r) => r.id === "20h"),
-    "today excludes rolling-24h games that are not on today's ET calendar",
-  );
-}
+assert(
+  filterByWindow([rolling20h], "today").some((r) => r.id === "20h"),
+  "today includes rolling-24h tips so the board does not jump to Next 24h",
+);
 
 if (isSportsCalendarToday(todayRow)) {
   assert(

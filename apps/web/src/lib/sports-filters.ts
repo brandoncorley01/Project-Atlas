@@ -109,7 +109,7 @@ function isFutures(row: SportsSignal): boolean {
   return bet === "futures" || bet === "outright";
 }
 
-/** Today sports-day slate (rolls at 6am ET) — includes early-AM West Coast nightcaps. */
+/** Sports-day tip (6am ET roll) — used for Today chips / labels. */
 export function isSportsCalendarToday(row: SportsSignal): boolean {
   if (!row.event_start || isFutures(row)) return false;
   const hours = hoursUntilStart(row);
@@ -119,6 +119,15 @@ export function isSportsCalendarToday(row: SportsSignal): boolean {
   } catch {
     return false;
   }
+}
+
+/** Today board window — sports-day OR any tip within the next 24h (stops empty Today → Next 24h jumps). */
+export function isSportsTodayWindow(row: SportsSignal): boolean {
+  if (!row.event_start || isFutures(row)) return false;
+  const hours = hoursUntilStart(row);
+  if (hours == null || hours <= 0) return false;
+  if (hours <= ROLLING_24H) return true;
+  return isSportsCalendarToday(row);
 }
 
 /** Card timing chip — calendar Today vs rolling Next 24h must not be conflated. */
@@ -184,7 +193,7 @@ export function filterByWindow(items: SportsSignal[], window: SportsWindowKey): 
     return live.filter((i) => {
       if (undatedInsightOrUser(i)) return true;
       if (isFutures(i)) return false;
-      return isSportsCalendarToday(i);
+      return isSportsTodayWindow(i);
     });
   }
   if (window === "next24h") {
