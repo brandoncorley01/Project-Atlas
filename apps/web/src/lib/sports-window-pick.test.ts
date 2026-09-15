@@ -1,10 +1,10 @@
 /**
- * pickWindowWithResults widens Scan off empty Today — Sports UI must call it.
- * Prefer Today when the Eastern slate has plays; otherwise Next 24h then Next 48h.
+ * pickWindowWithResults still widens off empty preferred windows.
+ * Sports UI pins Today after Scan (Today includes ≤24h tips) — see sports-scan-flags.test.ts.
  * Run with: npx --yes tsx --tsconfig apps/web/tsconfig.json apps/web/src/lib/sports-window-pick.test.ts
  */
 import assert from "node:assert/strict";
-import { isSportsCalendarToday, pickWindowWithResults, type SportsWindowKey } from "./sports-filters.ts";
+import { pickWindowWithResults, type SportsWindowKey } from "./sports-filters.ts";
 import type { SportsSignal } from "../components/sports/SportsSignalCard.tsx";
 
 function row(hoursFromNow: number, id: string): SportsSignal {
@@ -24,7 +24,7 @@ const tomorrowOnly = [row(30, "tmr")];
 assert.equal(
   pickWindowWithResults(tomorrowOnly, "today" as SportsWindowKey),
   "soon",
-  "tomorrow picks must widen off empty Today",
+  "30h tips widen off empty Today to Next 48h",
 );
 
 const tonight = [row(3, "tonight")];
@@ -33,8 +33,8 @@ assert.equal(pickWindowWithResults(tonight, "today"), "today");
 const next24Only = [row(20, "twenty")];
 assert.equal(
   pickWindowWithResults(next24Only, "today"),
-  isSportsCalendarToday(next24Only[0] as SportsSignal) ? "today" : "next24h",
-  "near-term picks widen to next24h when Today calendar is empty",
+  "today",
+  "≤24h tips count as Today so the window does not jump",
 );
 
 const empty: SportsSignal[] = [];

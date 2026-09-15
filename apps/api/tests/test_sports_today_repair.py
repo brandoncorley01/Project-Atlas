@@ -65,10 +65,10 @@ def test_cache_missing_today_when_only_tomorrow_games():
     assert odds_api.cache_missing_today_slate(_tonight_mlb_cache()["events"]) is False
 
 
-def test_today_slate_is_calendar_et_not_rolling_24h():
-    """Today slate is sports-day (6am ET roll) — not every game in the next 24 hours."""
+def test_today_slate_includes_rolling_24h_and_sports_day():
+    """Today includes sports-day tips and any tip within 24h; far tomorrow stays out."""
     tonight = _tonight_mlb_cache()["events"]
-    tomorrow_only = _tomorrow_only_cache()["events"]
+    tomorrow_only = _tomorrow_only_cache()["events"]  # ~30h out
     assert len(odds_api.today_slate_events(tonight)) == 1
     assert len(odds_api.today_slate_events(tomorrow_only)) == 0
     rolling = [
@@ -82,53 +82,40 @@ def test_today_slate_is_calendar_et_not_rolling_24h():
         }
     ]
     assert len(odds_api.next_24h_events(rolling)) == 1
-    # Afternoon/evening tomorrow (20h out from evening) stays off Today sports-day.
-    from app.services.sports_ranking import is_today_slate, sports_slate_date
-    from zoneinfo import ZoneInfo
+    assert len(odds_api.today_slate_events(rolling)) == 1
 
-    et = ZoneInfo("America/New_York")
-    now = datetime.now(et)
-    # Explicit early-AM tip tomorrow must land on Today's sports-day slate.
-    early_am = (now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)).replace(
-        hour=1, minute=10
-    )
-    early_row = {
-        "id": "early",
-        "event_start": early_am.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+    from app.services.sports_ranking import is_today_slate
+
+    far = {
+        "id": "far",
+        "event_start": (datetime.now(UTC) + timedelta(hours=30)).isoformat().replace("+00:00", "Z"),
         "bet_type": "moneyline",
         "scoring_snapshot": {},
     }
-    if sports_slate_date() == sports_slate_date(early_am):
-        assert is_today_slate(early_row) is True
-    afternoon = early_am.replace(hour=15, minute=0)
-    afternoon_row = {
-        "id": "aft",
-        "event_start": afternoon.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+    assert is_today_slate(far) is False
+
+
+def test_rolling_20h_tip_is_today_slate():
+    """Tips within 24h belong on Today even when they tip tomorrow afternoon ET."""
+    from app.services.sports_ranking import is_today_slate, is_next_24h_slate
+
+    tip = (datetime.now(UTC) + timedelta(hours=20)).isoformat().replace("+00:00", "Z")
+    row = {
+        "id": "roll20",
+        "event_start": tip,
         "bet_type": "moneyline",
         "scoring_snapshot": {},
     }
-    assert is_today_slate(afternoon_row) is False
-
-
-def test_early_am_nightcap_is_today_slate_event():
-    from zoneinfo import ZoneInfo
-
-    et = ZoneInfo("America/New_York")
-    now = datetime.now(et)
-    if now.hour < 6:
-        pytest.skip("Already in early-AM sports-day window")
-    early = (now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)).replace(
-        hour=1, minute=5
-    )
     event = {
-        "id": "nightcap",
-        "commence_time": early.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+        "id": "roll20e",
+        "commence_time": tip,
         "_sport_key": "baseball_mlb",
         "_sport_label": "MLB",
-        "home_team": "Dodgers",
-        "away_team": "Giants",
+        "home_team": "A",
+        "away_team": "B",
     }
-    assert odds_api._event_is_calendar_today(event) is False
+    assert is_next_24h_slate(row) is True
+    assert is_today_slate(row) is True
     assert odds_api._event_is_today_slate(event) is True
     assert len(odds_api.today_slate_events([event])) == 1
 

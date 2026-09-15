@@ -74,12 +74,18 @@ def is_calendar_today(row: dict[str, Any], *, tz: ZoneInfo = ATLAS_SPORTS_TZ) ->
 
 
 def is_today_slate(row: dict[str, Any], *, tz: ZoneInfo = ATLAS_SPORTS_TZ) -> bool:
-    """Today's board window — Eastern sports day rolling at 6am (includes early-AM nightcaps)."""
+    """Today's board window — sports-day (6am ET roll) OR any tip within the next 24h.
+
+    Evening boards used to jump to Next 24h when only post-midnight / tomorrow-morning
+    games remained. Including the rolling 24h horizon keeps Tonight's action on Today.
+    """
     hours = hours_to_start(row)
     if hours is None or hours <= 0:
         return False
     if is_futures_row(row):
         return False
+    if hours <= SOON_HOURS:
+        return True
     event_slate = sports_slate_date(row.get("event_start"), tz=tz)
     current_slate = sports_slate_date(tz=tz)
     return event_slate is not None and current_slate is not None and event_slate == current_slate

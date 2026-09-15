@@ -411,7 +411,7 @@ def calendar_today_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _event_is_today_slate(event: dict[str, Any]) -> bool:
-    """Eastern sports day rolling at 6am — Sports Today window (includes early-AM nightcaps)."""
+    """Sports Today window — sports-day (6am ET) OR commence within the next 24h."""
     from app.services.sports_ranking import sports_slate_date
 
     hours = hours_until_event(event.get("commence_time"))
@@ -422,6 +422,8 @@ def _event_is_today_slate(event: dict[str, Any]) -> bool:
     sport_key = str(event.get("_sport_key") or event.get("sport_key") or "")
     if sport_key and _is_outright_sport(sport_key):
         return False
+    if hours <= 24:
+        return True
     event_slate = sports_slate_date(event.get("commence_time"))
     current_slate = sports_slate_date()
     return event_slate is not None and current_slate is not None and event_slate == current_slate

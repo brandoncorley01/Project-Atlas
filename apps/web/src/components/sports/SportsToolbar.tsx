@@ -57,7 +57,7 @@ function windowOptions(): { value: SportsWindowKey; label: string }[] {
 function windowHint(window: SportsWindowKey): string {
   switch (window) {
     case "today":
-      return `today's Eastern slate (${sportsTodayLabelET()}) through early morning ET`;
+      return `today's slate (${sportsTodayLabelET()}) plus tips in the next 24 hours`;
     case "next24h":
       return "next 24 hours";
     case "soon":
